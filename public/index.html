@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HYFCeph Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-bg"></div>
+    <main class="shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow">HYFCeph Access Portal</div>
+          <h1>侧位片自动定点与测量的注册入口</h1>
+          <p class="hero-text">
+            HYFCeph 用于侧位片自动定点、常用头影测量值提取，以及面型分析的远程调用。
+            用户完成注册后即可登录控制台，生成自己的 API Key，随后把 API Key 提供给技能端即可开始使用。
+          </p>
+          <div class="hero-cards">
+            <article class="feature-card accent-sky">
+              <h2>适用场景</h2>
+              <p>侧位片自动定点、头影测量、病例复核、临床教学和报告解读。</p>
+            </article>
+            <article class="feature-card accent-amber">
+              <h2>注册后获得</h2>
+              <p>个人 API Key、登录控制台、Key 生成与重置能力。</p>
+            </article>
+            <article class="feature-card accent-ink">
+              <h2>推荐流程</h2>
+              <p>注册账号，登录控制台，生成 API Key，然后在 HYFCeph 技能里提交使用。</p>
+            </article>
+          </div>
+        </div>
+
+        <aside class="auth-panel">
+          <div class="panel-header">
+            <div class="brand-mark">H</div>
+            <div>
+              <div class="panel-title">HYFCeph</div>
+              <div class="panel-subtitle">注册 / 登录 / API Key</div>
+            </div>
+          </div>
+
+          <div class="tab-bar">
+            <button class="tab active" data-tab="register" type="button">注册</button>
+            <button class="tab" data-tab="login" type="button">登录</button>
+            <button class="tab hidden" data-tab="dashboard" type="button">控制台</button>
+          </div>
+
+          <div id="flash" class="flash hidden"></div>
+
+          <section class="tab-panel active" data-panel="register">
+            <form id="register-form" class="stack-form">
+              <label>
+                <span>名字</span>
+                <input name="name" type="text" placeholder="请输入姓名" required />
+              </label>
+              <label>
+                <span>单位</span>
+                <input name="organization" type="text" placeholder="请输入医院 / 机构 / 单位" required />
+              </label>
+              <label>
+                <span>手机号</span>
+                <input name="phone" type="tel" placeholder="请输入手机号" required />
+              </label>
+              <label>
+                <span>密码</span>
+                <input name="password" type="password" placeholder="至少 6 位" required minlength="6" />
+              </label>
+              <button class="primary-button" type="submit">注册并进入控制台</button>
+            </form>
+          </section>
+
+          <section class="tab-panel" data-panel="login">
+            <form id="login-form" class="stack-form">
+              <label>
+                <span>账号或手机号</span>
+                <input name="identifier" type="text" placeholder="管理员可用账号，普通用户可用手机号" required />
+              </label>
+              <label>
+                <span>密码</span>
+                <input name="password" type="password" placeholder="请输入密码" required />
+              </label>
+              <button class="primary-button" type="submit">登录</button>
+            </form>
+          </section>
+
+          <section class="tab-panel" data-panel="dashboard">
+            <div class="dashboard-card">
+              <div class="dashboard-row">
+                <span class="label">名字</span>
+                <strong id="user-name">-</strong>
+              </div>
+              <div class="dashboard-row">
+                <span class="label">单位</span>
+                <strong id="user-organization">-</strong>
+              </div>
+              <div class="dashboard-row">
+                <span class="label">手机号</span>
+                <strong id="user-phone">-</strong>
+              </div>
+              <div class="dashboard-row">
+                <span class="label">角色</span>
+                <strong id="user-role">-</strong>
+              </div>
+            </div>
+
+            <div class="dashboard-card api-card">
+              <div class="api-header">
+                <div>
+                  <div class="label">API Key</div>
+                  <div class="api-tip">注册后在这里生成并复制你的专属 Key，默认有效期 3 个月。</div>
+                </div>
+                <button id="logout-button" class="ghost-button" type="button">退出登录</button>
+              </div>
+
+              <textarea id="api-key-output" readonly placeholder="还没有 API Key，点击下方按钮生成。"></textarea>
+
+              <div class="dashboard-row compact-row">
+                <span class="label">到期时间</span>
+                <strong id="api-key-expiry">-</strong>
+              </div>
+
+              <div class="api-actions">
+                <button id="generate-key-button" class="primary-button" type="button">生成 API Key</button>
+                <button id="copy-key-button" class="ghost-button" type="button">复制 API Key</button>
+              </div>
+
+              <p class="api-note">
+                提示：重新生成后，旧 Key 将失效。建议只在你确认需要轮换时再重新生成。
+              </p>
+            </div>
+
+            <section id="admin-panel" class="dashboard-card hidden">
+              <div class="admin-header">
+                <div>
+                  <div class="label">管理员面板</div>
+                  <div class="api-tip">管理所有已生成的 API Key，可调整过期时间或删除。</div>
+                </div>
+                <button id="refresh-admin-button" class="ghost-button" type="button">刷新列表</button>
+              </div>
+
+              <div class="admin-table-wrap">
+                <table class="admin-table">
+                  <thead>
+                    <tr>
+                      <th>用户</th>
+                      <th>单位 / 手机号</th>
+                      <th>API Key</th>
+                      <th>有效期</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="admin-users-body">
+                    <tr>
+                      <td colspan="5" class="empty-cell">暂无数据</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
