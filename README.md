@@ -29,8 +29,12 @@ http://127.0.0.1:3077
 - `HYFCEPH_BARK_KEY`
 - `HYFCEPH_BARK_BASE_URL`
 - `HYFCEPH_API_KEY_DAYS`
+- `HYFCEPH_SESSION_SECRET`
+- `HYFCEPH_STORE_BACKEND`
+- `HYFCEPH_STORE_BLOB_PATH`
 
 ## Notes
 
 - Local data is stored in `data/users.json`.
-- For production, persistent storage is required. Do not rely on ephemeral filesystem storage in serverless environments.
+- For Vercel, connect a private Blob store and set `HYFCEPH_STORE_BACKEND=blob`.
+- When using Vercel, authentication uses signed cookies instead of in-memory sessions.

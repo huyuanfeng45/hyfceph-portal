@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
@@ -14,15 +14,19 @@ const HOST = process.env.HYFCEPH_HOST || '127.0.0.1';
 const PORT = Number(process.env.HYFCEPH_PORT || '3077');
 const COOKIE_NAME = 'hyfceph_session';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
+const SESSION_SECRET = process.env.HYFCEPH_SESSION_SECRET || `hyfceph:${process.env.HYFCEPH_ADMIN_PASSWORD || '85301298'}:${process.env.HYFCEPH_BARK_KEY || 'bark'}`;
 const DEFAULT_API_KEY_DAYS = Number(process.env.HYFCEPH_API_KEY_DAYS || '90');
 const ADMIN_USERNAME = process.env.HYFCEPH_ADMIN_USERNAME || 'huyuanfeng45';
 const ADMIN_PASSWORD = process.env.HYFCEPH_ADMIN_PASSWORD || '85301298';
 const BARK_DEVICE_KEY = process.env.HYFCEPH_BARK_KEY || '7ffBf7F85e3WbFyKrJTEcH';
 const BARK_BASE_URL = (process.env.HYFCEPH_BARK_BASE_URL || 'https://api.day.app').replace(/\/+$/, '');
+const STORE_BACKEND = process.env.HYFCEPH_STORE_BACKEND || (process.env.BLOB_READ_WRITE_TOKEN ? 'blob' : 'file');
+const STORE_BLOB_PATH = process.env.HYFCEPH_STORE_BLOB_PATH || 'hyfceph/users.json';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
-const sessions = new Map();
+
+let blobSdkPromise = null;
 
 const MIME_TYPES = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -160,6 +164,75 @@ function normalizeUserRecord(user) {
   };
 }
 
+function base64UrlEncode(value) {
+  return Buffer.from(value, 'utf8').toString('base64url');
+}
+
+function base64UrlDecode(value) {
+  return Buffer.from(value, 'base64url').toString('utf8');
+}
+
+function signSessionPayload(encodedPayload) {
+  return createHmac('sha256', SESSION_SECRET).update(encodedPayload).digest('base64url');
+}
+
+function createSessionToken(userId) {
+  const encodedPayload = base64UrlEncode(JSON.stringify({
+    userId,
+    expiresAt: Date.now() + SESSION_TTL_MS,
+  }));
+  const signature = signSessionPayload(encodedPayload);
+  return `${encodedPayload}.${signature}`;
+}
+
+function parseSessionToken(token) {
+  const [encodedPayload, signature] = String(token || '').split('.');
+  if (!encodedPayload || !signature) {
+    return null;
+  }
+  const expectedSignature = signSessionPayload(encodedPayload);
+  const expectedBuffer = Buffer.from(expectedSignature);
+  const actualBuffer = Buffer.from(signature);
+  if (expectedBuffer.length !== actualBuffer.length || !timingSafeEqual(expectedBuffer, actualBuffer)) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(base64UrlDecode(encodedPayload));
+    if (!payload?.userId || typeof payload.expiresAt !== 'number' || payload.expiresAt <= Date.now()) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function buildSessionCookieValue(token, expired = false) {
+  const secureFlag = process.env.VERCEL || process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  const maxAge = expired ? 0 : Math.floor(SESSION_TTL_MS / 1000);
+  const value = expired ? '' : encodeURIComponent(token);
+  return `${COOKIE_NAME}=${value}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAge}${secureFlag}`;
+}
+
+function setSessionCookie(response, token) {
+  response.setHeader('Set-Cookie', buildSessionCookieValue(token, false));
+}
+
+function clearSessionCookie(response) {
+  response.setHeader('Set-Cookie', buildSessionCookieValue('', true));
+}
+
+function shouldUseBlobStore() {
+  return STORE_BACKEND === 'blob';
+}
+
+async function loadBlobSdk() {
+  if (!blobSdkPromise) {
+    blobSdkPromise = import('@vercel/blob');
+  }
+  return blobSdkPromise;
+}
+
 async function ensureDataFile() {
   await fs.mkdir(DATA_DIR, { recursive: true });
   try {
@@ -169,11 +242,66 @@ async function ensureDataFile() {
   }
 }
 
-async function writeStore(store) {
+async function readStoreFromFile() {
+  await ensureDataFile();
+  const raw = await fs.readFile(USERS_FILE, 'utf8');
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { users: [] };
+  }
+}
+
+async function writeStoreToFile(store) {
   await fs.mkdir(DATA_DIR, { recursive: true });
   const tempPath = `${USERS_FILE}.tmp`;
   await fs.writeFile(tempPath, JSON.stringify(store, null, 2));
   await fs.rename(tempPath, USERS_FILE);
+}
+
+async function readStoreFromBlob() {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    throw new Error('BLOB_READ_WRITE_TOKEN 未配置，无法使用 Blob 存储。');
+  }
+
+  const { get, BlobNotFoundError } = await loadBlobSdk();
+  try {
+    const result = await get(STORE_BLOB_PATH, {
+      access: 'private',
+      useCache: false,
+    });
+    if (!result || result.statusCode !== 200 || !result.stream) {
+      return { users: [] };
+    }
+    const raw = await new Response(result.stream).text();
+    return raw.trim() ? JSON.parse(raw) : { users: [] };
+  } catch (error) {
+    if (error instanceof BlobNotFoundError || error?.name === 'BlobNotFoundError') {
+      return { users: [] };
+    }
+    throw error;
+  }
+}
+
+async function writeStoreToBlob(store) {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    throw new Error('BLOB_READ_WRITE_TOKEN 未配置，无法写入 Blob 存储。');
+  }
+
+  const { put } = await loadBlobSdk();
+  await put(STORE_BLOB_PATH, JSON.stringify(store, null, 2), {
+    access: 'private',
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: 'application/json',
+  });
+}
+
+async function writeStore(store) {
+  if (shouldUseBlobStore()) {
+    return writeStoreToBlob(store);
+  }
+  return writeStoreToFile(store);
 }
 
 function ensureAdminUser(store) {
@@ -201,16 +329,10 @@ function ensureAdminUser(store) {
 }
 
 async function readStore() {
-  await ensureDataFile();
-  const raw = await fs.readFile(USERS_FILE, 'utf8');
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    parsed = { users: [] };
-  }
-  const { store, changed } = ensureAdminUser(parsed && typeof parsed === 'object' ? parsed : { users: [] });
-  if (changed || JSON.stringify(parsed) !== JSON.stringify(store)) {
+  const parsed = shouldUseBlobStore() ? await readStoreFromBlob() : await readStoreFromFile();
+  const normalized = parsed && typeof parsed === 'object' ? parsed : { users: [] };
+  const { store, changed } = ensureAdminUser(normalized);
+  if (changed || JSON.stringify(normalized) !== JSON.stringify(store)) {
     await writeStore(store);
   }
   return store;
@@ -232,50 +354,15 @@ async function readRequestJson(request) {
   }
 }
 
-function createSession(userId) {
-  const sessionId = randomBytes(24).toString('hex');
-  sessions.set(sessionId, {
-    userId,
-    expiresAt: Date.now() + SESSION_TTL_MS,
-  });
-  return sessionId;
-}
-
-function setSessionCookie(response, sessionId) {
-  response.setHeader('Set-Cookie', `${COOKIE_NAME}=${encodeURIComponent(sessionId)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
-}
-
-function clearSessionCookie(response) {
-  response.setHeader('Set-Cookie', `${COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`);
-}
-
-function cleanupExpiredSessions() {
-  const current = Date.now();
-  for (const [sessionId, session] of sessions.entries()) {
-    if (!session || session.expiresAt <= current) {
-      sessions.delete(sessionId);
-    }
-  }
-}
-
 async function getSessionUser(request) {
-  cleanupExpiredSessions();
   const cookies = parseCookies(request);
-  const sessionId = cookies[COOKIE_NAME];
-  if (!sessionId) {
-    return null;
-  }
-  const session = sessions.get(sessionId);
+  const sessionToken = cookies[COOKIE_NAME];
+  const session = parseSessionToken(sessionToken);
   if (!session) {
     return null;
   }
   const store = await readStore();
-  const user = store.users.find((item) => item.id === session.userId);
-  if (!user) {
-    sessions.delete(sessionId);
-    return null;
-  }
-  return user;
+  return store.users.find((item) => item.id === session.userId) || null;
 }
 
 async function requireAdmin(request, response) {
@@ -358,8 +445,8 @@ async function handleRegister(request, response) {
   store.users.push(user);
   await writeStore(store);
 
-  const sessionId = createSession(user.id);
-  setSessionCookie(response, sessionId);
+  const sessionToken = createSessionToken(user.id);
+  setSessionCookie(response, sessionToken);
   await sendBarkPush('HYFCeph 新注册', `名字：${name}\n单位：${organization}\n手机号：${phone}`);
 
   return sendJson(response, 201, {
@@ -387,19 +474,15 @@ async function handleLogin(request, response) {
   user.updatedAt = nowIso();
   await writeStore(store);
 
-  const sessionId = createSession(user.id);
-  setSessionCookie(response, sessionId);
+  const sessionToken = createSessionToken(user.id);
+  setSessionCookie(response, sessionToken);
   return sendJson(response, 200, {
     message: '登录成功。',
     user: publicUser(user),
   });
 }
 
-async function handleLogout(request, response) {
-  const cookies = parseCookies(request);
-  if (cookies[COOKIE_NAME]) {
-    sessions.delete(cookies[COOKIE_NAME]);
-  }
+async function handleLogout(_request, response) {
   clearSessionCookie(response);
   return sendJson(response, 200, { ok: true });
 }
@@ -590,7 +673,7 @@ async function serveStaticFile(requestPath, response) {
   }
 }
 
-const server = http.createServer(async (request, response) => {
+export async function handleNodeRequest(request, response) {
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || `${HOST}:${PORT}`}`);
 
@@ -599,6 +682,7 @@ const server = http.createServer(async (request, response) => {
         ok: true,
         service: 'HYFCeph Portal',
         barkConfigured: Boolean(BARK_DEVICE_KEY),
+        storeBackend: STORE_BACKEND,
       });
     }
     if (request.method === 'POST' && url.pathname === '/api/register') {
@@ -642,9 +726,23 @@ const server = http.createServer(async (request, response) => {
     const message = error instanceof Error ? error.message : String(error);
     return sendJson(response, 500, { error: message || '服务器异常。' });
   }
-});
+}
 
-await readStore();
-server.listen(PORT, HOST, () => {
-  console.log(`HYFCeph portal running at http://${HOST}:${PORT}`);
-});
+export default handleNodeRequest;
+
+export async function startServer() {
+  await readStore();
+  const server = http.createServer(handleNodeRequest);
+  await new Promise((resolve) => {
+    server.listen(PORT, HOST, () => {
+      console.log(`HYFCeph portal running at http://${HOST}:${PORT}`);
+      resolve();
+    });
+  });
+  return server;
+}
+
+const isDirectRun = Boolean(process.argv[1] && path.resolve(process.argv[1]) === __filename);
+if (isDirectRun) {
+  await startServer();
+}
