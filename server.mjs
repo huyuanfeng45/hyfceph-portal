@@ -16,6 +16,7 @@ const COOKIE_NAME = 'hyfceph_session';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const SESSION_SECRET = process.env.HYFCEPH_SESSION_SECRET || `hyfceph:${process.env.HYFCEPH_ADMIN_PASSWORD || '85301298'}:${process.env.HYFCEPH_BARK_KEY || 'bark'}`;
 const DEFAULT_API_KEY_DAYS = Number(process.env.HYFCEPH_API_KEY_DAYS || '90');
+const DEFAULT_BRIDGE_TTL_MINUTES = Number(process.env.HYFCEPH_BRIDGE_TTL_MINUTES || '30');
 const ADMIN_USERNAME = process.env.HYFCEPH_ADMIN_USERNAME || 'huyuanfeng45';
 const ADMIN_PASSWORD = process.env.HYFCEPH_ADMIN_PASSWORD || '85301298';
 const BARK_DEVICE_KEY = process.env.HYFCEPH_BARK_KEY || '7ffBf7F85e3WbFyKrJTEcH';
@@ -47,6 +48,12 @@ function nowIso() {
 function addDaysIso(days) {
   const value = new Date();
   value.setDate(value.getDate() + days);
+  return value.toISOString();
+}
+
+function addMinutesIso(minutes) {
+  const value = new Date();
+  value.setMinutes(value.getMinutes() + minutes);
   return value.toISOString();
 }
 
@@ -130,6 +137,13 @@ function isApiKeyActive(user) {
   return new Date(user.apiKeyExpiresAt).getTime() > Date.now();
 }
 
+function isBridgeStateActive(bridgeState) {
+  if (!bridgeState?.expiresAt) {
+    return false;
+  }
+  return new Date(bridgeState.expiresAt).getTime() > Date.now();
+}
+
 function publicUser(user) {
   return {
     id: user.id,
@@ -161,6 +175,47 @@ function normalizeUserRecord(user) {
     createdAt: isIsoDate(user?.createdAt) ? new Date(user.createdAt).toISOString() : nowIso(),
     updatedAt: isIsoDate(user?.updatedAt) ? new Date(user.updatedAt).toISOString() : nowIso(),
     lastLoginAt: isIsoDate(user?.lastLoginAt) ? new Date(user.lastLoginAt).toISOString() : null,
+    currentCaseBridge: normalizeBridgeState(user?.currentCaseBridge),
+  };
+}
+
+function normalizeBridgeState(bridgeState) {
+  if (!bridgeState || typeof bridgeState !== 'object') {
+    return null;
+  }
+
+  const syncedAt = isIsoDate(bridgeState.syncedAt) ? new Date(bridgeState.syncedAt).toISOString() : nowIso();
+  const expiresAt = isIsoDate(bridgeState.expiresAt)
+    ? new Date(bridgeState.expiresAt).toISOString()
+    : addMinutesIso(DEFAULT_BRIDGE_TTL_MINUTES);
+
+  return {
+    source: typeof bridgeState.source === 'string' && bridgeState.source.trim()
+      ? bridgeState.source.trim()
+      : 'portal-bridge',
+    syncedAt,
+    expiresAt,
+    href: typeof bridgeState.href === 'string' && bridgeState.href.trim() ? bridgeState.href.trim() : null,
+    title: typeof bridgeState.title === 'string' && bridgeState.title.trim() ? bridgeState.title.trim() : null,
+    pageUrl: typeof bridgeState.pageUrl === 'string' && bridgeState.pageUrl.trim() ? bridgeState.pageUrl.trim() : null,
+    shareUrl: typeof bridgeState.shareUrl === 'string' && bridgeState.shareUrl.trim() ? bridgeState.shareUrl.trim() : null,
+    token: typeof bridgeState.token === 'string' ? bridgeState.token.trim() : '',
+    ptId: Number.isFinite(Number(bridgeState.ptId)) ? Number(bridgeState.ptId) : null,
+    ptVersion: Number.isFinite(Number(bridgeState.ptVersion ?? bridgeState.version))
+      ? Number(bridgeState.ptVersion ?? bridgeState.version)
+      : null,
+    accountType: typeof bridgeState.accountType === 'string' && bridgeState.accountType.trim()
+      ? bridgeState.accountType.trim()
+      : null,
+    lang: typeof bridgeState.lang === 'string' && bridgeState.lang.trim()
+      ? bridgeState.lang.trim()
+      : null,
+    userName: typeof bridgeState.userName === 'string' && bridgeState.userName.trim()
+      ? bridgeState.userName.trim()
+      : null,
+    userAgent: typeof bridgeState.userAgent === 'string' && bridgeState.userAgent.trim()
+      ? bridgeState.userAgent.trim()
+      : null,
   };
 }
 
@@ -392,6 +447,10 @@ function findUserByIdentifier(store, identifier) {
   });
 }
 
+function findUserByApiKey(store, apiKey) {
+  return store.users.find((item) => item.apiKey === apiKey) || null;
+}
+
 async function sendBarkPush(title, body) {
   if (!BARK_DEVICE_KEY) {
     return;
@@ -527,7 +586,7 @@ async function handleValidateApiKey(request, response) {
   }
 
   const store = await readStore();
-  const user = store.users.find((item) => item.apiKey === apiKey);
+  const user = findUserByApiKey(store, apiKey);
   if (!user) {
     return sendJson(response, 401, { valid: false, error: 'API Key 无效。' });
   }
@@ -551,6 +610,80 @@ async function handleValidateApiKey(request, response) {
   });
 }
 
+async function handleBridgeCurrentCaseGet(request, response) {
+  const apiKey = String(request.headers['x-api-key'] || '').trim();
+  if (!apiKey) {
+    return sendJson(response, 400, { error: '缺少 API Key。' });
+  }
+
+  const store = await readStore();
+  const user = findUserByApiKey(store, apiKey);
+  if (!user || !isApiKeyActive(user)) {
+    return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
+  }
+
+  if (!isBridgeStateActive(user.currentCaseBridge)) {
+    if (user.currentCaseBridge) {
+      user.currentCaseBridge = null;
+      user.updatedAt = nowIso();
+      await writeStore(store);
+    }
+    return sendJson(response, 404, {
+      ok: false,
+      error: '当前病例桥接数据不存在或已过期，请先在浏览器中打开病例页面完成同步。',
+    });
+  }
+
+  return sendJson(response, 200, {
+    ok: true,
+    currentCase: user.currentCaseBridge,
+  });
+}
+
+async function handleBridgeCurrentCasePost(request, response) {
+  const payload = await readRequestJson(request);
+  const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
+  if (!apiKey) {
+    return sendJson(response, 400, { error: '缺少 API Key。' });
+  }
+
+  const store = await readStore();
+  const user = findUserByApiKey(store, apiKey);
+  if (!user || !isApiKeyActive(user)) {
+    return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
+  }
+
+  const currentCase = normalizeBridgeState({
+    ...payload,
+    source: payload?.source || 'portal-bridge',
+    syncedAt: nowIso(),
+    expiresAt: addMinutesIso(DEFAULT_BRIDGE_TTL_MINUTES),
+  });
+
+  if (!currentCase?.shareUrl && !currentCase?.token && !currentCase?.ptId) {
+    return sendJson(response, 400, {
+      error: '桥接数据不完整，至少需要 shareUrl、token 或 ptId 中的一项。',
+    });
+  }
+
+  user.currentCaseBridge = currentCase;
+  user.updatedAt = nowIso();
+  await writeStore(store);
+
+  return sendJson(response, 200, {
+    ok: true,
+    currentCase: {
+      syncedAt: currentCase.syncedAt,
+      expiresAt: currentCase.expiresAt,
+      href: currentCase.href,
+      ptId: currentCase.ptId,
+      ptVersion: currentCase.ptVersion,
+      hasShareUrl: Boolean(currentCase.shareUrl),
+      hasToken: Boolean(currentCase.token),
+    },
+  });
+}
+
 async function handleSkillEvent(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || '').trim();
@@ -566,7 +699,7 @@ async function handleSkillEvent(request, response) {
   }
 
   const store = await readStore();
-  const user = store.users.find((item) => item.apiKey === apiKey);
+  const user = findUserByApiKey(store, apiKey);
   if (!user || !isApiKeyActive(user)) {
     return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
   }
@@ -702,6 +835,12 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'POST' && url.pathname === '/api/validate-key') {
       return await handleValidateApiKey(request, response);
+    }
+    if (request.method === 'GET' && url.pathname === '/api/bridge/current-case') {
+      return await handleBridgeCurrentCaseGet(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/bridge/current-case') {
+      return await handleBridgeCurrentCasePost(request, response);
     }
     if (request.method === 'POST' && url.pathname === '/api/skill-events') {
       return await handleSkillEvent(request, response);
