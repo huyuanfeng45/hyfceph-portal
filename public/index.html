@@ -138,24 +138,24 @@
             <div class="dashboard-card measure-card">
               <div class="api-header">
                 <div>
-                  <div class="label">服务端测量</div>
-                  <div class="api-tip">纯服务端代跑。把分享链接贴到这里即可直接测量；成功后也会自动刷新“当前服务端病例”。</div>
+                  <div class="label">当前病例同步</div>
+                  <div class="api-tip">推荐方式：安装浏览器同步插件，填入 API Key，然后在病例页打开一次。之后这里就能直接测量当前同步病例。</div>
                 </div>
               </div>
 
-              <label>
-                <span>分享链接</span>
-                <textarea id="measure-share-url-input" placeholder="把病例分享链接贴到这里"></textarea>
-              </label>
-
-              <div class="api-actions">
-                <button id="measure-share-url-button" class="primary-button" type="button">用分享链接测量</button>
-                <button id="measure-current-case-button" class="ghost-button" type="button">测当前服务端病例</button>
+              <div class="dashboard-row">
+                <span class="label">同步状态</span>
+                <strong id="bridge-status">未同步</strong>
               </div>
 
-              <p class="api-note">
-                如果已经用分享链接成功测过一次，后面可以直接点“测当前服务端病例”，不再重复粘贴。
-              </p>
+              <p id="bridge-detail" class="api-note">安装同步插件后，在病例页打开一次即可自动同步。</p>
+
+              <div class="api-actions">
+                <a class="primary-button link-button" href="/hyfceph-bridge.user.js" target="_blank" rel="noreferrer">安装同步插件</a>
+                <button id="measure-current-case-button" class="ghost-button" type="button">测当前同步病例</button>
+              </div>
+
+              <p class="api-note">插件安装后，只需要在浏览器脚本菜单里填一次 API Key，后面会自动静默同步。</p>
 
               <section id="measure-result" class="measure-result hidden">
                 <div class="dashboard-row">

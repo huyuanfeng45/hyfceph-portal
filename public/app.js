@@ -13,14 +13,14 @@ const generateKeyButton = document.querySelector('#generate-key-button');
 const copyKeyButton = document.querySelector('#copy-key-button');
 const apiKeyOutput = document.querySelector('#api-key-output');
 const apiKeyExpiry = document.querySelector('#api-key-expiry');
-const measureShareUrlInput = document.querySelector('#measure-share-url-input');
-const measureShareUrlButton = document.querySelector('#measure-share-url-button');
 const measureCurrentCaseButton = document.querySelector('#measure-current-case-button');
 const measureResult = document.querySelector('#measure-result');
 const measureRiskLabel = document.querySelector('#measure-risk-label');
 const measureInsight = document.querySelector('#measure-insight');
 const measureImage = document.querySelector('#measure-image');
 const measureMetrics = document.querySelector('#measure-metrics');
+const bridgeStatus = document.querySelector('#bridge-status');
+const bridgeDetail = document.querySelector('#bridge-detail');
 const refreshAdminButton = document.querySelector('#refresh-admin-button');
 const adminPanel = document.querySelector('#admin-panel');
 const adminUsersBody = document.querySelector('#admin-users-body');
@@ -91,6 +91,22 @@ function resetMeasureResult() {
   measureImage.classList.add('hidden');
   measureImage.removeAttribute('src');
   measureMetrics.innerHTML = '';
+}
+
+function renderBridgeStatus(currentCase) {
+  if (!currentCase) {
+    bridgeStatus.textContent = '未同步';
+    bridgeDetail.textContent = '安装同步插件后，在病例页打开一次即可自动同步。';
+    return;
+  }
+
+  bridgeStatus.textContent = '已同步';
+  const details = [
+    currentCase.ptId ? `病例 ${currentCase.ptId}` : '已捕获病例上下文',
+    currentCase.ptVersion ? `版本 ${currentCase.ptVersion}` : '',
+    currentCase.syncedAt ? `同步于 ${formatDateTime(currentCase.syncedAt)}` : '',
+  ].filter(Boolean);
+  bridgeDetail.textContent = details.join('，');
 }
 
 function renderMeasureResult(result) {
@@ -239,14 +255,35 @@ async function loadAdminUsers() {
   renderAdminUsers(state.adminUsers);
 }
 
+async function loadBridgeStatus() {
+  if (!state.user?.apiKey) {
+    renderBridgeStatus(null);
+    return;
+  }
+
+  try {
+    const payload = await requestJson('/api/bridge/current-case', {
+      method: 'GET',
+      headers: {
+        'x-api-key': state.user.apiKey,
+      },
+    });
+    renderBridgeStatus(payload.currentCase || null);
+  } catch {
+    renderBridgeStatus(null);
+  }
+}
+
 async function syncAuthUi() {
   const dashboardTab = document.querySelector('[data-tab="dashboard"]');
   dashboardTab.classList.toggle('hidden', !state.user);
   if (state.user) {
     updateDashboard(state.user);
     setActiveTab('dashboard');
+    await loadBridgeStatus();
     await loadAdminUsers();
   } else {
+    renderBridgeStatus(null);
     adminPanel.classList.add('hidden');
     adminUsersBody.innerHTML = '<tr><td colspan="5" class="empty-cell">暂无数据</td></tr>';
     setActiveTab('register');
@@ -333,6 +370,7 @@ generateKeyButton.addEventListener('click', async () => {
     });
     state.user = result.user;
     updateDashboard(state.user);
+    await loadBridgeStatus();
     if (state.user.role === 'admin') {
       await loadAdminUsers();
     }
@@ -366,39 +404,6 @@ refreshAdminButton.addEventListener('click', async () => {
   }
 });
 
-measureShareUrlButton.addEventListener('click', async () => {
-  clearFlash();
-  const apiKey = state.user?.apiKey || '';
-  const shareUrl = measureShareUrlInput.value.trim();
-  if (!apiKey) {
-    showFlash('请先生成 API Key。', 'error');
-    return;
-  }
-  if (!shareUrl) {
-    showFlash('请先粘贴分享链接。', 'error');
-    return;
-  }
-
-  try {
-    measureShareUrlButton.disabled = true;
-    measureCurrentCaseButton.disabled = true;
-    const payload = await requestJson('/api/measure/share-url', {
-      method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
-      },
-      body: JSON.stringify({ shareUrl }),
-    });
-    renderMeasureResult(payload.result);
-    showFlash('服务端测量完成。');
-  } catch (error) {
-    showFlash(error.message, 'error');
-  } finally {
-    measureShareUrlButton.disabled = false;
-    measureCurrentCaseButton.disabled = false;
-  }
-});
-
 measureCurrentCaseButton.addEventListener('click', async () => {
   clearFlash();
   const apiKey = state.user?.apiKey || '';
@@ -408,7 +413,6 @@ measureCurrentCaseButton.addEventListener('click', async () => {
   }
 
   try {
-    measureShareUrlButton.disabled = true;
     measureCurrentCaseButton.disabled = true;
     const payload = await requestJson('/api/measure/current-case', {
       method: 'POST',
@@ -418,11 +422,11 @@ measureCurrentCaseButton.addEventListener('click', async () => {
       body: JSON.stringify({}),
     });
     renderMeasureResult(payload.result);
-    showFlash('已按当前服务端病例完成测量。');
+    await loadBridgeStatus();
+    showFlash('已按当前同步病例完成测量。');
   } catch (error) {
     showFlash(error.message, 'error');
   } finally {
-    measureShareUrlButton.disabled = false;
     measureCurrentCaseButton.disabled = false;
   }
 });

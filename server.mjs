@@ -543,12 +543,14 @@ async function buildMeasurementResponseArtifacts({ output, annotatedSvgPath, ann
 
 async function runServerSideMeasurement({
   shareUrl,
+  bridgeState,
 }) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hyfceph-portal-'));
   const outputPath = path.join(tempDir, 'result.json');
   const annotatedSvgPath = path.join(tempDir, 'annotated.svg');
   const annotatedPngPath = path.join(tempDir, 'annotated.png');
   const downloadedImagePath = path.join(tempDir, 'input');
+  const bridgeFilePath = path.join(tempDir, 'bridge-state.json');
   const args = [
     SERVICE_RUNNER,
     '--skip-portal-validation',
@@ -565,8 +567,11 @@ async function runServerSideMeasurement({
 
   if (shareUrl) {
     args.push('--share-url', shareUrl);
+  } else if (bridgeState) {
+    await fs.writeFile(bridgeFilePath, JSON.stringify(bridgeState, null, 2), 'utf8');
+    args.push('--current-case', '--bridge-file', bridgeFilePath);
   } else {
-    throw new Error('缺少 shareUrl。');
+    throw new Error('缺少可用病例上下文。');
   }
 
   try {
@@ -889,16 +894,19 @@ async function handleMeasureCurrentCase(request, response) {
   }
 
   if (!isBridgeStateActive(user.currentCaseBridge)) {
-    return sendJson(response, 404, { error: '当前服务端病例不存在或已过期，请先提交一条新的分享链接。' });
+    return sendJson(response, 404, { error: '当前病例还没有同步，请先安装浏览器同步插件并打开病例页面一次。' });
   }
 
-  const shareUrl = user.currentCaseBridge?.shareUrl || user.currentCaseBridge?.href || '';
-  if (!shareUrl || !isLikelyShareUrl(shareUrl)) {
-    return sendJson(response, 404, { error: '当前服务端病例不存在或已过期，请先提交一条新的分享链接。' });
+  const bridgeState = normalizeBridgeState(user.currentCaseBridge);
+  if (!bridgeState?.shareUrl && !bridgeState?.token && !bridgeState?.ptId) {
+    return sendJson(response, 404, { error: '当前病例同步数据不完整，请重新打开病例页面完成同步。' });
   }
 
   try {
-    const result = await runServerSideMeasurement({ shareUrl });
+    const result = await runServerSideMeasurement({
+      shareUrl: bridgeState?.shareUrl && isLikelyShareUrl(bridgeState.shareUrl) ? bridgeState.shareUrl : '',
+      bridgeState,
+    });
     await sendBarkPush('HYFCeph 服务端测量', `用户：${user.name}\n单位：${user.organization || '-'}\n来源：current-case`);
     return sendJson(response, 200, {
       ok: true,
