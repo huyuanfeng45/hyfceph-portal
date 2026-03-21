@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
+import { execFile } from 'node:child_process';
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs/promises';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -26,8 +29,12 @@ const STORE_BLOB_PATH = process.env.HYFCEPH_STORE_BLOB_PATH || 'hyfceph/users.js
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const SERVICE_RUNNER = path.join(__dirname, 'scripts', 'hyfceph-remote-runner.mjs');
+const MAX_MEASURE_BUFFER_BYTES = 24 * 1024 * 1024;
 
 let blobSdkPromise = null;
+let resvgPromise = null;
+const execFileAsync = promisify(execFile);
 
 const MIME_TYPES = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -67,6 +74,14 @@ function normalizeUsername(value) {
 
 function normalizeIdentifier(value) {
   return String(value || '').trim();
+}
+
+function coerceOptionalNumber(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 function validatePhone(value) {
@@ -200,10 +215,8 @@ function normalizeBridgeState(bridgeState) {
     pageUrl: typeof bridgeState.pageUrl === 'string' && bridgeState.pageUrl.trim() ? bridgeState.pageUrl.trim() : null,
     shareUrl: typeof bridgeState.shareUrl === 'string' && bridgeState.shareUrl.trim() ? bridgeState.shareUrl.trim() : null,
     token: typeof bridgeState.token === 'string' ? bridgeState.token.trim() : '',
-    ptId: Number.isFinite(Number(bridgeState.ptId)) ? Number(bridgeState.ptId) : null,
-    ptVersion: Number.isFinite(Number(bridgeState.ptVersion ?? bridgeState.version))
-      ? Number(bridgeState.ptVersion ?? bridgeState.version)
-      : null,
+    ptId: coerceOptionalNumber(bridgeState.ptId),
+    ptVersion: coerceOptionalNumber(bridgeState.ptVersion ?? bridgeState.version),
     accountType: typeof bridgeState.accountType === 'string' && bridgeState.accountType.trim()
       ? bridgeState.accountType.trim()
       : null,
@@ -451,6 +464,136 @@ function findUserByApiKey(store, apiKey) {
   return store.users.find((item) => item.apiKey === apiKey) || null;
 }
 
+function getRequestOrigin(request) {
+  const forwardedProto = String(request.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const proto = forwardedProto || (process.env.VERCEL || process.env.NODE_ENV === 'production' ? 'https' : 'http');
+  const forwardedHost = String(request.headers['x-forwarded-host'] || '').split(',')[0].trim();
+  const host = forwardedHost || request.headers.host || `${HOST}:${PORT}`;
+  return `${proto}://${host}/`;
+}
+
+function isLikelyShareUrl(value) {
+  return typeof value === 'string'
+    && /\/latera\/\?a=/.test(value)
+    && /#\/case-process/.test(value);
+}
+
+async function requireActiveApiKeyUser(apiKey) {
+  const store = await readStore();
+  const user = findUserByApiKey(store, apiKey);
+  if (!user || !isApiKeyActive(user)) {
+    return { store, user: null };
+  }
+  return { store, user };
+}
+
+async function loadResvg() {
+  if (!resvgPromise) {
+    resvgPromise = import('@resvg/resvg-js');
+  }
+  return resvgPromise;
+}
+
+async function readFileIfExists(filePath, encoding = null) {
+  try {
+    return await fs.readFile(filePath, encoding || undefined);
+  } catch {
+    return null;
+  }
+}
+
+async function convertSvgTextToPngBuffer(svgText) {
+  const { Resvg } = await loadResvg();
+  const resvg = new Resvg(svgText, {
+    fitTo: {
+      mode: 'original',
+    },
+  });
+  return Buffer.from(resvg.render().asPng());
+}
+
+async function buildMeasurementResponseArtifacts({ output, annotatedSvgPath, annotatedPngPath }) {
+  const svgText = annotatedSvgPath ? await readFileIfExists(annotatedSvgPath, 'utf8') : null;
+  let pngBuffer = annotatedPngPath ? await readFileIfExists(annotatedPngPath) : null;
+
+  if (!pngBuffer && svgText) {
+    try {
+      pngBuffer = await convertSvgTextToPngBuffer(svgText);
+    } catch {
+      pngBuffer = null;
+    }
+  }
+
+  return {
+    analysis: output.analysis || null,
+    analysisError: output.analysisError || null,
+    annotationError: pngBuffer ? null : (output.annotationError || null),
+    summary: output.summary || null,
+    metrics: output.analysis?.metrics || [],
+    taskId: output.taskId || null,
+    resultUrl: output.resultUrl || null,
+    artifacts: {
+      annotatedPngBase64: pngBuffer ? pngBuffer.toString('base64') : null,
+      annotatedPngMimeType: pngBuffer ? 'image/png' : null,
+      annotatedSvgBase64: svgText ? Buffer.from(svgText, 'utf8').toString('base64') : null,
+      annotatedSvgMimeType: svgText ? 'image/svg+xml' : null,
+    },
+  };
+}
+
+async function runServerSideMeasurement({
+  shareUrl,
+}) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hyfceph-portal-'));
+  const outputPath = path.join(tempDir, 'result.json');
+  const annotatedSvgPath = path.join(tempDir, 'annotated.svg');
+  const annotatedPngPath = path.join(tempDir, 'annotated.png');
+  const downloadedImagePath = path.join(tempDir, 'input');
+  const args = [
+    SERVICE_RUNNER,
+    '--skip-portal-validation',
+    '--no-session-cache',
+    '--output',
+    outputPath,
+    '--annotated-output',
+    annotatedSvgPath,
+    '--annotated-png-output',
+    annotatedPngPath,
+    '--downloaded-image-output',
+    downloadedImagePath,
+  ];
+
+  if (shareUrl) {
+    args.push('--share-url', shareUrl);
+  } else {
+    throw new Error('缺少 shareUrl。');
+  }
+
+  try {
+    await execFileAsync(process.execPath, args, {
+      cwd: __dirname,
+      env: {
+        ...process.env,
+      },
+      maxBuffer: MAX_MEASURE_BUFFER_BYTES,
+    });
+    const rawOutput = await fs.readFile(outputPath, 'utf8');
+    const output = JSON.parse(rawOutput);
+    return await buildMeasurementResponseArtifacts({
+      output,
+      annotatedSvgPath: output.annotatedSvgPath || annotatedSvgPath,
+      annotatedPngPath: output.annotatedPngPath || annotatedPngPath,
+    });
+  } catch (error) {
+    const stderr = String(error?.stderr || '').trim();
+    const stdout = String(error?.stdout || '').trim();
+    const reason = stderr || stdout || (error instanceof Error ? error.message : String(error));
+    throw new Error(reason || '服务端测量失败。');
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function sendBarkPush(title, body) {
   if (!BARK_DEVICE_KEY) {
     return;
@@ -684,6 +827,90 @@ async function handleBridgeCurrentCasePost(request, response) {
   });
 }
 
+async function handleMeasureShareUrl(request, response) {
+  const payload = await readRequestJson(request);
+  const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
+  const shareUrl = String(payload.shareUrl || '').trim();
+
+  if (!apiKey) {
+    return sendJson(response, 400, { error: '缺少 API Key。' });
+  }
+  if (!shareUrl) {
+    return sendJson(response, 400, { error: '缺少分享链接。' });
+  }
+  if (!isLikelyShareUrl(shareUrl)) {
+    return sendJson(response, 400, { error: '分享链接格式不正确。' });
+  }
+
+  const { store, user } = await requireActiveApiKeyUser(apiKey);
+  if (!user) {
+    return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
+  }
+
+  try {
+    const result = await runServerSideMeasurement({
+      shareUrl,
+    });
+
+    await sendBarkPush('HYFCeph 服务端测量', `用户：${user.name}\n单位：${user.organization || '-'}\n来源：share-url`);
+
+    user.currentCaseBridge = normalizeBridgeState({
+      source: 'portal-service',
+      shareUrl,
+      href: shareUrl,
+      pageUrl: 'https://pd.aiyayi.com/latera/',
+      syncedAt: nowIso(),
+      expiresAt: addMinutesIso(DEFAULT_BRIDGE_TTL_MINUTES),
+    });
+    user.updatedAt = nowIso();
+    await writeStore(store);
+
+    return sendJson(response, 200, {
+      ok: true,
+      mode: 'share-url',
+      result,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return sendJson(response, 502, { error: message || '服务端测量失败。' });
+  }
+}
+
+async function handleMeasureCurrentCase(request, response) {
+  const payload = await readRequestJson(request);
+  const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
+  if (!apiKey) {
+    return sendJson(response, 400, { error: '缺少 API Key。' });
+  }
+
+  const { user } = await requireActiveApiKeyUser(apiKey);
+  if (!user) {
+    return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
+  }
+
+  if (!isBridgeStateActive(user.currentCaseBridge)) {
+    return sendJson(response, 404, { error: '当前服务端病例不存在或已过期，请先提交一条新的分享链接。' });
+  }
+
+  const shareUrl = user.currentCaseBridge?.shareUrl || user.currentCaseBridge?.href || '';
+  if (!shareUrl || !isLikelyShareUrl(shareUrl)) {
+    return sendJson(response, 404, { error: '当前服务端病例不存在或已过期，请先提交一条新的分享链接。' });
+  }
+
+  try {
+    const result = await runServerSideMeasurement({ shareUrl });
+    await sendBarkPush('HYFCeph 服务端测量', `用户：${user.name}\n单位：${user.organization || '-'}\n来源：current-case`);
+    return sendJson(response, 200, {
+      ok: true,
+      mode: 'current-case',
+      result,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return sendJson(response, 502, { error: message || '服务端测量失败。' });
+  }
+}
+
 async function handleSkillEvent(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || '').trim();
@@ -841,6 +1068,12 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'POST' && url.pathname === '/api/bridge/current-case') {
       return await handleBridgeCurrentCasePost(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/measure/share-url') {
+      return await handleMeasureShareUrl(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/measure/current-case') {
+      return await handleMeasureCurrentCase(request, response);
     }
     if (request.method === 'POST' && url.pathname === '/api/skill-events') {
       return await handleSkillEvent(request, response);

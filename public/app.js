@@ -13,6 +13,14 @@ const generateKeyButton = document.querySelector('#generate-key-button');
 const copyKeyButton = document.querySelector('#copy-key-button');
 const apiKeyOutput = document.querySelector('#api-key-output');
 const apiKeyExpiry = document.querySelector('#api-key-expiry');
+const measureShareUrlInput = document.querySelector('#measure-share-url-input');
+const measureShareUrlButton = document.querySelector('#measure-share-url-button');
+const measureCurrentCaseButton = document.querySelector('#measure-current-case-button');
+const measureResult = document.querySelector('#measure-result');
+const measureRiskLabel = document.querySelector('#measure-risk-label');
+const measureInsight = document.querySelector('#measure-insight');
+const measureImage = document.querySelector('#measure-image');
+const measureMetrics = document.querySelector('#measure-metrics');
 const refreshAdminButton = document.querySelector('#refresh-admin-button');
 const adminPanel = document.querySelector('#admin-panel');
 const adminUsersBody = document.querySelector('#admin-users-body');
@@ -74,6 +82,53 @@ function updateDashboard(user) {
     : '还没有 API Key，点击下方按钮生成。';
   apiKeyExpiry.textContent = user?.apiKeyExpiresAt ? formatDateTime(user.apiKeyExpiresAt) : '-';
   generateKeyButton.textContent = user?.apiKey ? '重新生成 API Key' : '生成 API Key';
+}
+
+function resetMeasureResult() {
+  measureResult.classList.add('hidden');
+  measureRiskLabel.textContent = '-';
+  measureInsight.textContent = '-';
+  measureImage.classList.add('hidden');
+  measureImage.removeAttribute('src');
+  measureMetrics.innerHTML = '';
+}
+
+function renderMeasureResult(result) {
+  const analysis = result?.analysis || {};
+  const metrics = result?.metrics || analysis.metrics || [];
+  const artifacts = result?.artifacts || {};
+  const riskLabel = analysis.riskLabel || result?.summary?.riskLabel || '未生成结论';
+  const insight = analysis.insight || '本次服务端测量已完成。';
+  const pngSrc = artifacts.annotatedPngBase64
+    ? `data:${artifacts.annotatedPngMimeType || 'image/png'};base64,${artifacts.annotatedPngBase64}`
+    : '';
+  const svgSrc = artifacts.annotatedSvgBase64
+    ? `data:${artifacts.annotatedSvgMimeType || 'image/svg+xml'};base64,${artifacts.annotatedSvgBase64}`
+    : '';
+
+  measureRiskLabel.textContent = riskLabel;
+  measureInsight.textContent = insight;
+  if (pngSrc || svgSrc) {
+    measureImage.src = pngSrc || svgSrc;
+    measureImage.classList.remove('hidden');
+  } else {
+    measureImage.classList.add('hidden');
+    measureImage.removeAttribute('src');
+  }
+
+  if (metrics.length) {
+    measureMetrics.innerHTML = metrics.map((metric) => `
+      <article class="metric-chip metric-${metric.tone || 'default'}">
+        <div class="metric-code">${metric.code}</div>
+        <div class="metric-value">${metric.valueText}</div>
+        <div class="metric-label">${metric.label}</div>
+      </article>
+    `).join('');
+  } else {
+    measureMetrics.innerHTML = '<div class="empty-cell">本次未返回可展示的测量值。</div>';
+  }
+
+  measureResult.classList.remove('hidden');
 }
 
 async function requestJson(url, options = {}) {
@@ -205,6 +260,7 @@ async function loadCurrentUser() {
   } catch {
     state.user = null;
   }
+  resetMeasureResult();
   await syncAuthUi();
 }
 
@@ -307,6 +363,67 @@ refreshAdminButton.addEventListener('click', async () => {
     showFlash('列表已刷新。');
   } catch (error) {
     showFlash(error.message, 'error');
+  }
+});
+
+measureShareUrlButton.addEventListener('click', async () => {
+  clearFlash();
+  const apiKey = state.user?.apiKey || '';
+  const shareUrl = measureShareUrlInput.value.trim();
+  if (!apiKey) {
+    showFlash('请先生成 API Key。', 'error');
+    return;
+  }
+  if (!shareUrl) {
+    showFlash('请先粘贴分享链接。', 'error');
+    return;
+  }
+
+  try {
+    measureShareUrlButton.disabled = true;
+    measureCurrentCaseButton.disabled = true;
+    const payload = await requestJson('/api/measure/share-url', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+      },
+      body: JSON.stringify({ shareUrl }),
+    });
+    renderMeasureResult(payload.result);
+    showFlash('服务端测量完成。');
+  } catch (error) {
+    showFlash(error.message, 'error');
+  } finally {
+    measureShareUrlButton.disabled = false;
+    measureCurrentCaseButton.disabled = false;
+  }
+});
+
+measureCurrentCaseButton.addEventListener('click', async () => {
+  clearFlash();
+  const apiKey = state.user?.apiKey || '';
+  if (!apiKey) {
+    showFlash('请先生成 API Key。', 'error');
+    return;
+  }
+
+  try {
+    measureShareUrlButton.disabled = true;
+    measureCurrentCaseButton.disabled = true;
+    const payload = await requestJson('/api/measure/current-case', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+      },
+      body: JSON.stringify({}),
+    });
+    renderMeasureResult(payload.result);
+    showFlash('已按当前服务端病例完成测量。');
+  } catch (error) {
+    showFlash(error.message, 'error');
+  } finally {
+    measureShareUrlButton.disabled = false;
+    measureCurrentCaseButton.disabled = false;
   }
 });
 

@@ -1,0 +1,1688 @@
+#!/usr/bin/env node
+
+import { execFileSync } from 'node:child_process';
+import { createDecipheriv, createHash, getCiphers } from 'node:crypto';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import process from 'node:process';
+import { parseArgs } from 'node:util';
+
+const DEFAULT_PAGE_URL = 'https://pd.aiyayi.com/latera/';
+const DEFAULT_PORTAL_BASE_URL = 'https://hyfceph.52ortho.com/';
+const DEFAULT_CLIENT_ID = 'e5cd7e4891bf95d1d19206ce24a7b32e';
+const DEFAULT_X_APP_KEY = '3b939dfeb3c6d41c5de9298c6afc2db1';
+const DEFAULT_ALGORITHM_NAME = 'ceph_keypoints';
+const GA_HOST_MAP = new Set(['pd-ga.waveatp.com', 'pdmgr-ga.waveatp.com']);
+const SHARE_DES_KEY = 'askldjqwozx';
+const SHARE_DES_KEY_BYTES = Buffer.from(SHARE_DES_KEY.slice(0, 8), 'utf8');
+const LANDMARK_ALIAS_MAP = new Map([
+  ['s', 'S'],
+  ['n', 'N'],
+  ['a', 'A'],
+  ['b', 'B'],
+  ['go', 'Go'],
+  ['gn', 'Gn'],
+  ['me', 'Me'],
+  ['po', 'Po'],
+  ['or', 'Or'],
+  ['u1', 'U1T'],
+  ['u1t', 'U1T'],
+  ['u1a', 'U1R'],
+  ['u1r', 'U1R'],
+  ['l1', 'L1T'],
+  ['l1t', 'L1T'],
+  ['l1a', 'L1R'],
+  ['l1r', 'L1R'],
+]);
+const METRIC_DEFINITIONS = {
+  SNA: {
+    label: '上颌相对于前颅底的前后位置',
+    reference: '参考: 82° ± 2°',
+    normalMin: 80,
+    normalMax: 84,
+    requiredKeys: ['S', 'N', 'A'],
+  },
+  SNB: {
+    label: '下颌相对于前颅底的前后位置',
+    reference: '参考: 79° ± 2°',
+    normalMin: 77,
+    normalMax: 81,
+    requiredKeys: ['S', 'N', 'B'],
+  },
+  ANB: {
+    label: '上下颌骨前后关系',
+    reference: '参考: 2.7° ± 2°',
+    normalMin: 0.7,
+    normalMax: 4.7,
+    requiredKeys: ['S', 'N', 'A', 'B'],
+  },
+  'GoGn-SN': {
+    label: '下颌平面对前颅底平面的倾角',
+    reference: '参考: 32° ± 4°',
+    normalMin: 28,
+    normalMax: 36,
+    requiredKeys: ['Go', 'Gn', 'S', 'N'],
+  },
+  FMA: {
+    label: '下颌平面对 FH 平面的角度',
+    reference: '参考: 25° ± 4°',
+    normalMin: 21,
+    normalMax: 29,
+    requiredKeys: ['Po', 'Or', 'Go', 'Me'],
+  },
+  'U1-SN': {
+    label: '上中切牙相对于前颅底平面的倾角',
+    reference: '参考: 102° ± 2°',
+    normalMin: 100,
+    normalMax: 104,
+    requiredKeys: ['U1R', 'U1T', 'S', 'N'],
+  },
+  IMPA: {
+    label: '下中切牙相对于下颌平面的倾角',
+    reference: '参考: 90° ± 5°',
+    normalMin: 85,
+    normalMax: 95,
+    requiredKeys: ['L1R', 'L1T', 'Go', 'Me'],
+  },
+};
+const METRIC_ORDER = ['SNA', 'SNB', 'ANB', 'GoGn-SN', 'FMA', 'U1-SN', 'IMPA'];
+const PRIMARY_LANDMARK_KEYS = new Set(
+  Object.values(METRIC_DEFINITIONS).flatMap((definition) => definition.requiredKeys),
+);
+
+function printHelp() {
+  console.log(`Usage:
+  node scripts/latera-ceph-cli.mjs --image /abs/path/to/lateral.png [options]
+  node scripts/latera-ceph-cli.mjs --share-url 'https://pd.aiyayi.com/latera/?a=...' [options]
+  node scripts/latera-ceph-cli.mjs --current-case [options]
+
+Auth:
+  --token <xiaoliutoken>         Reuse an existing xiaoliutoken
+  --share-url <url>              Decode Latera share URL and reuse its token/ptId/version
+  --username <name>              Doctor username for automatic login
+  --password <password>          Doctor password for automatic login
+  --mgr                          Use auth/login instead of doctor/doc/login
+
+Options:
+  --output <file>                Output JSON path
+  --annotated-output <file>      Output SVG overlay path
+  --annotated-png-output <file>  Output PNG overlay path
+  --api-key <key>                HYFCeph API Key
+  --portal-base-url <url>        HYFCeph portal URL, default: ${DEFAULT_PORTAL_BASE_URL}
+  --skip-portal-validation       Skip portal API-key validation and portal event callbacks
+  --downloaded-image-output <file> Save the image fetched from --share-url here
+  --session-file <file>          Cache validated xiaoliutoken here
+  --bridge-file <file>           Legacy local bridge fallback state file
+  --page-url <url>               Latera page URL, default: ${DEFAULT_PAGE_URL}
+  --api-base <url>               Override REST API base
+  --client-id <id>               Override client id
+  --x-app-key <key>              Override X-APP-KEY
+  --algorithm-name <name>        Default: ${DEFAULT_ALGORITHM_NAME}
+  --poll-ms <ms>                 Poll interval, default: 1000
+  --timeout-seconds <sec>        Poll timeout, default: 180
+  --force-refresh-algorithm-token  Force refresh algorithm token
+  --current-case                 Use the latest browser-synced case from HYFCeph cloud bridge
+  --no-session-cache             Do not read or write the local token cache
+  --no-annotated-svg             Skip annotated SVG generation
+  --dry-run                      Resolve config and auth only, skip upload/task
+
+Env fallbacks:
+  HYFCEPH_API_KEY
+  HYFCEPH_PORTAL_BASE_URL
+  LATERA_TOKEN / XIAOLIU_TOKEN
+  LATERA_USERNAME / LATERA_PASSWORD
+`);
+}
+
+function ensureTrailingSlash(value) {
+  return value.endsWith('/') ? value : `${value}/`;
+}
+
+function defaultOutputPath(imagePath) {
+  const parsed = path.parse(imagePath);
+  return path.join(parsed.dir, `${parsed.name}.ceph_keypoints.json`);
+}
+
+function defaultAnnotatedSvgPath(imagePath) {
+  const parsed = path.parse(imagePath);
+  return path.join(parsed.dir, `${parsed.name}.ceph_keypoints.annotated.svg`);
+}
+
+function defaultAnnotatedPngPath(imagePath) {
+  const parsed = path.parse(imagePath);
+  return path.join(parsed.dir, `${parsed.name}.ceph_keypoints.annotated.png`);
+}
+
+function defaultSessionFile() {
+  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+  return path.join(codexHome, 'state', 'latera-ceph-remote-session.json');
+}
+
+function defaultBridgeFile() {
+  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+  return path.join(codexHome, 'state', 'latera-ceph-remote-current-case.json');
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function clamp(value, low, high) {
+  return Math.min(Math.max(value, low), high);
+}
+
+function round1(value) {
+  return Math.round(Number(value) * 10) / 10;
+}
+
+function md5Hex(value) {
+  return createHash('md5').update(value).digest('hex');
+}
+
+function formatBearer(token) {
+  if (!token) return '';
+  return token.startsWith('Bearer ') ? token : `Bearer ${token}`;
+}
+
+function inferMimeType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case '.png':
+      return 'image/png';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.webp':
+      return 'image/webp';
+    case '.bmp':
+      return 'image/bmp';
+    case '.tif':
+    case '.tiff':
+      return 'image/tiff';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+function extensionFromMimeType(mimeType) {
+  switch (String(mimeType || '').split(';')[0].trim().toLowerCase()) {
+    case 'image/png':
+      return '.png';
+    case 'image/jpeg':
+      return '.jpg';
+    case 'image/webp':
+      return '.webp';
+    case 'image/bmp':
+      return '.bmp';
+    case 'image/tiff':
+      return '.tif';
+    default:
+      return '';
+  }
+}
+
+function extensionFromUrl(value) {
+  try {
+    const ext = path.extname(new URL(value).pathname).toLowerCase();
+    return ext || '';
+  } catch {
+    return '';
+  }
+}
+
+function runOpenSslShareDecrypt(normalizedValue) {
+  const commandSets = [
+    ['enc', '-provider', 'default', '-provider', 'legacy', '-des-ecb', '-d', '-a', '-A', '-nosalt', '-K', SHARE_DES_KEY_BYTES.toString('hex')],
+    ['enc', '-des-ecb', '-d', '-a', '-A', '-nosalt', '-K', SHARE_DES_KEY_BYTES.toString('hex')],
+  ];
+  let lastError = null;
+  for (const args of commandSets) {
+    try {
+      return execFileSync('openssl', args, {
+        encoding: 'utf8',
+        input: normalizedValue,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('OpenSSL decryption failed');
+}
+
+function decryptLateraShareParam(value) {
+  const normalizedValue = String(value || '').trim().replace(/ /g, '+');
+  if (!normalizedValue) {
+    throw new Error('Latera share URL is missing a valid a= parameter');
+  }
+
+  try {
+    if (getCiphers().includes('des-ecb')) {
+      const decipher = createDecipheriv('des-ecb', SHARE_DES_KEY_BYTES, null);
+      decipher.setAutoPadding(true);
+      return Buffer.concat([
+        decipher.update(normalizedValue, 'base64'),
+        decipher.final(),
+      ]).toString('utf8').trim();
+    }
+  } catch {
+    // Fall through to the OpenSSL CLI fallback.
+  }
+
+  try {
+    return runOpenSslShareDecrypt(normalizedValue);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Unable to decrypt Latera share URL. Install openssl or provide --token directly. ${reason}`);
+  }
+}
+
+function parseLateraShareUrl(value) {
+  const shareUrl = new URL(value);
+  const encryptedPayload = shareUrl.searchParams.get('a');
+  if (!encryptedPayload) {
+    throw new Error('Latera share URL is missing the a= parameter');
+  }
+
+  const decryptedText = decryptLateraShareParam(encryptedPayload);
+  let payload;
+  try {
+    payload = JSON.parse(decryptedText);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Latera share payload is not valid JSON: ${reason}`);
+  }
+
+  return {
+    shareUrl: shareUrl.toString(),
+    pageUrl: ensureTrailingSlash(new URL('./', shareUrl).toString()),
+    payload,
+    token: typeof payload?.token === 'string' ? payload.token.trim() : '',
+    ptId: coerceNumber(payload?.ptId),
+    ptVersion: coerceNumber(payload?.ptVersion ?? payload?.version),
+    accountType: typeof payload?.accountType === 'string' ? payload.accountType : null,
+    lang: typeof payload?.lang === 'string' ? payload.lang : null,
+  };
+}
+
+function defaultDownloadedImagePath({ ptId, ptVersion, imageUrl }) {
+  const ext = extensionFromUrl(imageUrl) || '.jpg';
+  return path.resolve(`latera-pt${ptId}-v${ptVersion}${ext}`);
+}
+
+async function readSessionCache(sessionFile) {
+  try {
+    const raw = await fs.readFile(sessionFile, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.token !== 'string' || !parsed.token.trim()) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function writeSessionCache(sessionFile, session) {
+  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+  await fs.writeFile(sessionFile, JSON.stringify(session, null, 2));
+}
+
+async function readBridgeState(bridgeFile) {
+  try {
+    const raw = await fs.readFile(bridgeFile, 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildBridgeContext(bridgeState) {
+  if (!bridgeState || typeof bridgeState !== 'object') return null;
+
+  let parsedShareContext = null;
+  const shareUrl = typeof bridgeState.shareUrl === 'string' ? bridgeState.shareUrl.trim() : '';
+  if (shareUrl) {
+    try {
+      parsedShareContext = parseLateraShareUrl(shareUrl);
+    } catch {
+      parsedShareContext = null;
+    }
+  }
+
+  const ptId = parsedShareContext?.ptId ?? coerceNumber(bridgeState.ptId);
+  const ptVersion = parsedShareContext?.ptVersion
+    ?? coerceNumber(bridgeState.ptVersion ?? bridgeState.version);
+  const token = parsedShareContext?.token
+    || ((typeof bridgeState.token === 'string' && bridgeState.token.trim())
+      ? bridgeState.token.trim()
+      : '');
+
+  return {
+    source: typeof bridgeState.source === 'string' && bridgeState.source
+      ? bridgeState.source
+      : 'browser-bridge',
+    pageUrl: typeof bridgeState.pageUrl === 'string' && bridgeState.pageUrl
+      ? bridgeState.pageUrl
+      : parsedShareContext?.pageUrl || null,
+    shareUrl,
+    href: typeof bridgeState.href === 'string' ? bridgeState.href : null,
+    title: typeof bridgeState.title === 'string' ? bridgeState.title : null,
+    token,
+    ptId,
+    ptVersion,
+    accountType: parsedShareContext?.accountType
+      || (typeof bridgeState.accountType === 'string' ? bridgeState.accountType : null),
+    lang: parsedShareContext?.lang
+      || (typeof bridgeState.lang === 'string' ? bridgeState.lang : null),
+    syncedAt: typeof bridgeState.syncedAt === 'string' ? bridgeState.syncedAt : null,
+    shareContext: parsedShareContext,
+  };
+}
+
+function isRecentBridgeContext(bridgeContext, maxAgeMinutes = 45) {
+  if (!bridgeContext?.syncedAt) {
+    return false;
+  }
+  const syncedAt = new Date(bridgeContext.syncedAt).getTime();
+  if (!Number.isFinite(syncedAt)) {
+    return false;
+  }
+  return Date.now() - syncedAt <= maxAgeMinutes * 60 * 1000;
+}
+
+async function readJsonResponse(response) {
+  const text = await response.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`Expected JSON but got: ${text.slice(0, 300)}`);
+  }
+  return data;
+}
+
+async function requestJson(url, {
+  method = 'GET',
+  headers = {},
+  query,
+  body,
+  expectStatus = 200,
+} = {}) {
+  const requestUrl = new URL(url);
+  if (query) {
+    for (const [key, value] of Object.entries(query)) {
+      if (value === undefined || value === null) continue;
+      requestUrl.searchParams.set(key, String(value));
+    }
+  }
+
+  const finalHeaders = { ...headers };
+  let payload = body;
+  if (body && !(body instanceof FormData) && !(body instanceof Blob) && typeof body !== 'string') {
+    payload = JSON.stringify(body);
+    finalHeaders['Content-Type'] ??= 'application/json';
+  }
+
+  const response = await fetch(requestUrl, {
+    method,
+    headers: finalHeaders,
+    body: method === 'GET' || method === 'HEAD' ? undefined : payload,
+  });
+
+  if (expectStatus && response.status !== expectStatus) {
+    const fallbackText = await response.text();
+    throw new Error(`HTTP ${response.status} ${response.statusText}: ${fallbackText.slice(0, 500)}`);
+  }
+
+  return readJsonResponse(response);
+}
+
+async function requestRaw(url, {
+  method = 'GET',
+  headers = {},
+  body,
+} = {}) {
+  const response = await fetch(url, {
+    method,
+    headers,
+    body: method === 'GET' || method === 'HEAD' ? undefined : body,
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`HTTP ${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
+  }
+  return response;
+}
+
+async function validatePortalApiKey({ portalBaseUrl, apiKey }) {
+  const result = await requestJson(new URL('api/validate-key', portalBaseUrl).toString(), {
+    method: 'POST',
+    body: { apiKey },
+  });
+  if (!result?.valid) {
+    throw new Error(result?.error || 'HYFCeph API Key 校验失败');
+  }
+  return result;
+}
+
+async function fetchPortalBridgeCurrentCase({ portalBaseUrl, apiKey }) {
+  const response = await fetch(new URL('api/bridge/current-case', portalBaseUrl), {
+    method: 'GET',
+    headers: {
+      'x-api-key': apiKey,
+    },
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`HYFCeph cloud bridge lookup failed: HTTP ${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
+  }
+
+  return readJsonResponse(response);
+}
+
+async function notifyPortalSkillEvent({
+  portalBaseUrl,
+  apiKey,
+  eventType,
+  imageName,
+  imageSource,
+}) {
+  try {
+    await requestJson(new URL('api/skill-events', portalBaseUrl).toString(), {
+      method: 'POST',
+      body: {
+        apiKey,
+        eventType,
+        imageName,
+        imageSource,
+      },
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn(`Skill event notification failed: ${reason}`);
+  }
+}
+
+function unwrapApiResult(result, label) {
+  if (result?.code === 200 || result?.code === 0) {
+    return result;
+  }
+  if (result?.status === 'SUCCESS' || result?.status === 'PENDING') {
+    return result;
+  }
+  const message = result?.msg || result?.message || JSON.stringify(result);
+  throw new Error(`${label} failed: ${message}`);
+}
+
+function extractTokenFromLogin(result) {
+  const candidates = [
+    result?.data?.access_token,
+    result?.data?.token,
+    result?.data?.accessToken,
+    result?.access_token,
+    result?.token,
+    result?.accessToken,
+  ];
+  const token = candidates.find(Boolean);
+  if (!token) {
+    throw new Error(`Could not find login token in response: ${JSON.stringify(result).slice(0, 500)}`);
+  }
+  return token;
+}
+
+function buildApiBase(pageUrl, overrideBase) {
+  if (overrideBase) return ensureTrailingSlash(new URL(overrideBase).toString());
+  return ensureTrailingSlash(new URL('api/', pageUrl).toString());
+}
+
+function buildCallbackUrl(pageUrl) {
+  return new URL('/api/design/algorithm/receiveResult', pageUrl).toString();
+}
+
+async function fetchAppSettings(pageUrl) {
+  const settingsUrl = new URL('custom/appSetting.js?v=0.0.1', pageUrl).toString();
+  try {
+    const response = await requestRaw(settingsUrl);
+    const script = await response.text();
+    const clientId = script.match(/window\.clientId\s*=\s*'([^']+)'/)?.[1] || DEFAULT_CLIENT_ID;
+    const xAppKey = script.match(/window\.xAppKey\s*=\s*'([^']+)'/)?.[1] || DEFAULT_X_APP_KEY;
+    return { clientId, xAppKey, source: settingsUrl };
+  } catch {
+    return {
+      clientId: DEFAULT_CLIENT_ID,
+      xAppKey: DEFAULT_X_APP_KEY,
+      source: 'fallback-constants',
+    };
+  }
+}
+
+function buildAppHeaders({ clientId, xAppKey, token }) {
+  const headers = {
+    'X-APP-KEY': xAppKey,
+    Clientid: clientId,
+    'Cross-Origin-Embedder-Policy': 'require-corp',
+    'Cross-Origin-Opener-Policy': 'same-origin',
+  };
+  if (token) {
+    headers.xiaoliutoken = formatBearer(token);
+  }
+  return headers;
+}
+
+async function loginDoctor({ apiBase, clientId, xAppKey, username, password, mgr }) {
+  const loginPath = mgr ? 'auth/login' : 'doctor/doc/login';
+  const payload = mgr ? {
+    clientId,
+    grantType: 'password',
+    username,
+    password,
+  } : {
+    clientId,
+    grantType: 'password',
+    userName: username,
+    pwd: md5Hex(password),
+  };
+
+  const result = await requestJson(new URL(loginPath, apiBase).toString(), {
+    method: 'POST',
+    headers: buildAppHeaders({ clientId, xAppKey }),
+    body: payload,
+  });
+
+  return extractTokenFromLogin(unwrapApiResult(result, 'login'));
+}
+
+async function getAlgorithmAccess({ apiBase, clientId, xAppKey, xiaoliutoken, force }) {
+  const result = await requestJson(new URL('design/algorithm/getAccessToken', apiBase).toString(), {
+    headers: buildAppHeaders({ clientId, xAppKey, token: xiaoliutoken }),
+    query: { force: force ? 'true' : 'false' },
+  });
+
+  const payload = unwrapApiResult(result, 'getAccessToken').data || result.data || result;
+  if (!payload?.accessToken || !payload?.baseUrl) {
+    throw new Error(`Unexpected algorithm token response: ${JSON.stringify(result).slice(0, 500)}`);
+  }
+
+  const algorithmBase = GA_HOST_MAP.has(new URL(payload.baseUrl).host)
+    ? 'https://aiapi-ga.waveatp.com'
+    : payload.baseUrl;
+
+  return {
+    algorithmToken: payload.accessToken,
+    algorithmBase: ensureTrailingSlash(algorithmBase),
+  };
+}
+
+function buildAlgorithmHeaders(algorithmToken) {
+  return {
+    Authorization: algorithmToken,
+    'Content-Security-Policy': 'upgrade-insecure-requests',
+  };
+}
+
+async function fetchSharedLateralImageUrl({
+  apiBase,
+  clientId,
+  xAppKey,
+  xiaoliutoken,
+  ptId,
+  ptVersion,
+}) {
+  const result = await requestJson(new URL('doctor/pic/lateral', apiBase).toString(), {
+    headers: buildAppHeaders({ clientId, xAppKey, token: xiaoliutoken }),
+    query: {
+      ptId,
+      ptVersion,
+    },
+  });
+
+  const payload = unwrapApiResult(result, 'lateral image').data ?? result.data ?? result;
+  if (typeof payload !== 'string' || !/^https?:\/\//.test(payload)) {
+    throw new Error(`Unexpected lateral image response: ${JSON.stringify(result).slice(0, 500)}`);
+  }
+  return payload;
+}
+
+async function downloadRemoteImage(url, outputPath) {
+  const response = await requestRaw(url);
+  const mimeType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() || '';
+  let resolvedPath = path.resolve(outputPath);
+  if (!path.extname(resolvedPath)) {
+    resolvedPath += extensionFromMimeType(mimeType) || '.jpg';
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
+  await fs.writeFile(resolvedPath, Buffer.from(arrayBuffer));
+
+  return {
+    resolvedPath,
+    mimeType: mimeType || inferMimeType(resolvedPath),
+  };
+}
+
+async function fetchUploadSignature({ algorithmBase, algorithmToken, algorithmName }) {
+  const result = await requestJson(new URL('file_signature/direct_upload/', algorithmBase).toString(), {
+    headers: buildAlgorithmHeaders(algorithmToken),
+    query: { name: algorithmName },
+  });
+
+  const payload = unwrapApiResult(result, 'direct upload signature').data || result.data;
+  if (!payload?.token || !payload?.task_id) {
+    throw new Error(`Unexpected upload signature response: ${JSON.stringify(result).slice(0, 500)}`);
+  }
+
+  return payload;
+}
+
+async function uploadImageToOss({ uploadSignature, fileBlob, fileName, algorithmToken }) {
+  const uploadPath = `${uploadSignature.token.upload_dir}${fileName}`;
+  const form = new FormData();
+  form.append('key', uploadPath);
+  form.append('policy', uploadSignature.token.policy);
+  form.append('signature', uploadSignature.token.signature);
+  form.append('OSSAccessKeyId', uploadSignature.token.accessid);
+  form.append('file', fileBlob, fileName);
+
+  await requestRaw(uploadSignature.token.host, {
+    method: 'POST',
+    headers: { Authorization: algorithmToken },
+    body: form,
+  });
+
+  return {
+    taskId: uploadSignature.task_id,
+    uploadPath,
+  };
+}
+
+async function createTask({ algorithmBase, algorithmToken, algorithmName, taskId, callbackUrl, imageFilePath }) {
+  const result = await requestJson(new URL('tasks/', algorithmBase).toString(), {
+    method: 'POST',
+    headers: buildAlgorithmHeaders(algorithmToken),
+    body: {
+      name: algorithmName,
+      task_id: taskId,
+      callback_url: callbackUrl,
+      args: {
+        image_file: imageFilePath,
+        formatResult: false,
+      },
+      priority: 0,
+    },
+  });
+
+  return unwrapApiResult(result, 'task creation');
+}
+
+async function pollTaskResult({ algorithmBase, algorithmToken, taskId, pollMs, timeoutSeconds }) {
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  const url = new URL(`tasks/${taskId}/result/`, algorithmBase).toString();
+
+  while (Date.now() < deadline) {
+    const result = await requestJson(url, {
+      headers: buildAlgorithmHeaders(algorithmToken),
+    });
+
+    const status = result?.data?.status;
+    if (status === 'SUCCESS') {
+      return result.data.result;
+    }
+    if (status === 'FAILURE') {
+      throw new Error(`Algorithm task failed: ${JSON.stringify(result).slice(0, 500)}`);
+    }
+
+    await sleep(pollMs);
+  }
+
+  throw new Error(`Timed out waiting for algorithm result after ${timeoutSeconds}s`);
+}
+
+async function resolveResultPayload(resultIndex) {
+  const firstUrl = Object.values(resultIndex || {}).find(
+    (value) => typeof value === 'string' && /^https?:\/\//.test(value),
+  );
+  if (!firstUrl) {
+    return null;
+  }
+
+  const response = await requestRaw(firstUrl);
+  return {
+    url: firstUrl,
+    payload: await readJsonResponse(response),
+  };
+}
+
+function summarizePayload(payload) {
+  if (!payload) return {};
+  const data = payload?.data || payload || {};
+  return {
+    headPoints: Array.isArray(data.head) ? data.head.length : 0,
+    rulerPoints: Array.isArray(data?.ruler?.kps) ? data.ruler.kps.length : 0,
+    spineSections: Array.isArray(data.spine) ? data.spine.length : 0,
+    hasRuler: Boolean(data.ruler),
+  };
+}
+
+function coerceNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function normalizeLandmarkToken(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function canonicalLandmarkName(rawName) {
+  const normalized = normalizeLandmarkToken(rawName);
+  return LANDMARK_ALIAS_MAP.get(normalized) || String(rawName || '').trim() || null;
+}
+
+function extractLateraPoint(item, source) {
+  if (!item || typeof item !== 'object') return null;
+  const rawLandmark = item.landmark || item.name || item.realLandmark;
+  const position = Array.isArray(item.position) ? item.position : [];
+  const x = coerceNumber(item.x ?? position[0]);
+  const y = coerceNumber(item.y ?? position[1]);
+  const landmark = rawLandmark ? String(rawLandmark).trim() : '';
+  const key = canonicalLandmarkName(landmark);
+  if (!landmark || !key || x === null || y === null) {
+    return null;
+  }
+
+  const confidence = coerceNumber(item.confidence);
+  return {
+    landmark,
+    key,
+    source,
+    x: round1(x),
+    y: round1(y),
+    confidence,
+  };
+}
+
+function collectLateraLandmarks(payload) {
+  const data = payload?.data || payload || {};
+  const rawPoints = [];
+
+  if (Array.isArray(data.head)) {
+    rawPoints.push(...data.head.map((item) => [item, 'head']));
+  }
+  if (Array.isArray(data?.ruler?.kps)) {
+    rawPoints.push(...data.ruler.kps.map((item) => [item, 'ruler']));
+  }
+  if (Array.isArray(data.spine)) {
+    rawPoints.push(...data.spine.flatMap((section) => (Array.isArray(section?.kps) ? section.kps : []).map((item) => [item, 'spine'])));
+  }
+
+  return rawPoints
+    .map(([item, source]) => extractLateraPoint(item, source))
+    .filter(Boolean);
+}
+
+function upsertPoint(pointMap, point) {
+  const current = pointMap.get(point.key);
+  if (!current || (current.source !== 'head' && point.source === 'head')) {
+    pointMap.set(point.key, point);
+  }
+}
+
+function getPoint(pointMap, key) {
+  const point = pointMap.get(key);
+  if (!point) {
+    throw new Error(`Missing ceph landmark: ${key}`);
+  }
+  return point;
+}
+
+function angleAt(pointA, pointB, pointC) {
+  const vector1 = { x: pointA.x - pointB.x, y: pointA.y - pointB.y };
+  const vector2 = { x: pointC.x - pointB.x, y: pointC.y - pointB.y };
+  const length1 = Math.hypot(vector1.x, vector1.y);
+  const length2 = Math.hypot(vector2.x, vector2.y);
+  if (!length1 || !length2) {
+    throw new Error('Zero-length vector while calculating ceph angle');
+  }
+  const dot = vector1.x * vector2.x + vector1.y * vector2.y;
+  const cosine = clamp(dot / (length1 * length2), -1, 1);
+  return (Math.acos(cosine) * 180) / Math.PI;
+}
+
+function acuteAngleBetweenLines(pointA, pointB, pointC, pointD) {
+  const vector1 = { x: pointB.x - pointA.x, y: pointB.y - pointA.y };
+  const vector2 = { x: pointD.x - pointC.x, y: pointD.y - pointC.y };
+  const length1 = Math.hypot(vector1.x, vector1.y);
+  const length2 = Math.hypot(vector2.x, vector2.y);
+  if (!length1 || !length2) {
+    throw new Error('Zero-length vector while calculating ceph line angle');
+  }
+  const dot = vector1.x * vector2.x + vector1.y * vector2.y;
+  const cosine = clamp(Math.abs(dot) / (length1 * length2), -1, 1);
+  return (Math.acos(cosine) * 180) / Math.PI;
+}
+
+function buildMetric(code, value) {
+  const config = METRIC_DEFINITIONS[code];
+  const rounded = round1(value);
+  let tone = 'success';
+  if (rounded < config.normalMin || rounded > config.normalMax) {
+    const overflow = rounded < config.normalMin
+      ? config.normalMin - rounded
+      : rounded - config.normalMax;
+    tone = overflow >= 3 ? 'danger' : 'warn';
+  }
+  return {
+    code,
+    label: config.label,
+    value: rounded,
+    valueText: `${rounded}°`,
+    reference: config.reference,
+    tone,
+  };
+}
+
+function buildMetrics(pointMap) {
+  const metrics = [];
+  const metricMap = {};
+  const unsupported = [];
+
+  for (const code of METRIC_ORDER) {
+    const requiredKeys = METRIC_DEFINITIONS[code].requiredKeys;
+    const missingKeys = requiredKeys.filter((key) => !pointMap.has(key));
+    if (missingKeys.length) {
+      unsupported.push({ code, reason: `缺少 ${missingKeys.join('、')}` });
+      continue;
+    }
+
+    let metric;
+    if (code === 'SNA') {
+      metric = buildMetric(code, angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'N'), getPoint(pointMap, 'A')));
+    } else if (code === 'SNB') {
+      metric = buildMetric(code, angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'N'), getPoint(pointMap, 'B')));
+    } else if (code === 'ANB') {
+      metric = buildMetric(
+        code,
+        angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'N'), getPoint(pointMap, 'A'))
+          - angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'N'), getPoint(pointMap, 'B')),
+      );
+    } else if (code === 'GoGn-SN') {
+      metric = buildMetric(code, acuteAngleBetweenLines(
+        getPoint(pointMap, 'Go'),
+        getPoint(pointMap, 'Gn'),
+        getPoint(pointMap, 'S'),
+        getPoint(pointMap, 'N'),
+      ));
+    } else if (code === 'FMA') {
+      metric = buildMetric(code, acuteAngleBetweenLines(
+        getPoint(pointMap, 'Po'),
+        getPoint(pointMap, 'Or'),
+        getPoint(pointMap, 'Go'),
+        getPoint(pointMap, 'Me'),
+      ));
+    } else if (code === 'U1-SN') {
+      metric = buildMetric(code, 180 - acuteAngleBetweenLines(
+        getPoint(pointMap, 'U1R'),
+        getPoint(pointMap, 'U1T'),
+        getPoint(pointMap, 'S'),
+        getPoint(pointMap, 'N'),
+      ));
+    } else {
+      metric = buildMetric(code, acuteAngleBetweenLines(
+        getPoint(pointMap, 'L1R'),
+        getPoint(pointMap, 'L1T'),
+        getPoint(pointMap, 'Go'),
+        getPoint(pointMap, 'Me'),
+      ));
+    }
+
+    metrics.push(metric);
+    metricMap[code] = metric;
+  }
+
+  return { metrics, metricMap, unsupported };
+}
+
+function buildRecognition(landmarks) {
+  const confidences = landmarks
+    .map((item) => item.confidence)
+    .filter((value) => typeof value === 'number' && Number.isFinite(value));
+  const confidence = confidences.length
+    ? round1((confidences.reduce((sum, value) => sum + value, 0) / confidences.length) * 100)
+    : null;
+
+  return {
+    identified: landmarks.length,
+    total: landmarks.length,
+    confidence,
+    statusText: confidence === null
+      ? '自动点定完成，未返回置信度'
+      : confidence >= 90
+        ? '自动点定完成'
+        : '自动点定完成，建议重点复核',
+  };
+}
+
+function buildRiskLabel(metricMap) {
+  const anb = metricMap.ANB;
+  if (anb) {
+    if (anb.value >= 4.8) return '骨性 II 类倾向';
+    if (anb.value <= 0.5) return '骨性 III 类倾向';
+  }
+  if ((metricMap['GoGn-SN'] && metricMap['GoGn-SN'].value >= 36) || (metricMap.FMA && metricMap.FMA.value >= 29)) {
+    return '高角倾向';
+  }
+  if (metricMap['U1-SN'] && metricMap['U1-SN'].value >= 105) {
+    return '上前牙唇倾';
+  }
+  if (anb || metricMap.FMA || metricMap['GoGn-SN']) {
+    return '骨面型基本协调';
+  }
+  return '需结合人工复核判断';
+}
+
+function buildInsight(metricMap, recognition, unsupportedMetrics) {
+  const messages = [];
+  const anb = metricMap.ANB;
+  if (anb) {
+    if (anb.value >= 4.8) {
+      messages.push('ANB 偏大，提示上颌前突或下颌后缩趋势。');
+    } else if (anb.value <= 0.5) {
+      messages.push('ANB 偏小，需警惕 III 类骨性关系。');
+    } else {
+      messages.push('颌间前后关系接近常用参考范围。');
+    }
+  } else {
+    messages.push('当前点位集不足以完整计算颌间前后关系，需结合人工定点补齐。');
+  }
+
+  const u1sn = metricMap['U1-SN'];
+  if (u1sn && u1sn.value >= 105) {
+    messages.push('上前牙唇倾较明显，建议关注切牙代偿。');
+  }
+
+  const gognsn = metricMap['GoGn-SN'];
+  const fma = metricMap.FMA;
+  if ((gognsn && gognsn.value >= 36) || (fma && fma.value >= 29)) {
+    messages.push('垂直向角度偏大，建议重点复核高角风险。');
+  } else if ((gognsn && gognsn.value <= 28) || (fma && fma.value <= 21)) {
+    messages.push('垂直向角度偏低，需结合低角面型一起判断。');
+  }
+
+  if (recognition.confidence === null) {
+    messages.push('本次结果未返回点位置信度，建议人工复核关键点。');
+  } else if (recognition.confidence < 90) {
+    messages.push('点位平均置信度偏低，建议人工重点复核关键点。');
+  } else {
+    messages.push('本轮自动点定结果适合直接进入人工复核与指标解读。');
+  }
+
+  if (unsupportedMetrics.length) {
+    messages.push(`当前结果暂不支持 ${unsupportedMetrics.map((item) => item.code).join('、')} 等依赖缺失点位的指标。`);
+  }
+
+  return messages.join('');
+}
+
+function buildLateraAnalysis(payload) {
+  const normalizedLandmarks = collectLateraLandmarks(payload);
+  if (!normalizedLandmarks.length) {
+    return null;
+  }
+
+  const pointMap = new Map();
+  for (const point of normalizedLandmarks) {
+    upsertPoint(pointMap, point);
+  }
+
+  const uniqueLandmarks = Array.from(pointMap.values()).sort((left, right) => left.key.localeCompare(right.key));
+  const { metrics, metricMap, unsupported } = buildMetrics(pointMap);
+  const recognition = buildRecognition(uniqueLandmarks);
+
+  return {
+    landmarks: uniqueLandmarks,
+    recognition,
+    riskLabel: buildRiskLabel(metricMap),
+    insight: buildInsight(metricMap, recognition, unsupported),
+    metrics,
+    unsupportedMetricCodes: unsupported.map((item) => item.code),
+    supportedMetricCodes: metrics.map((item) => item.code),
+  };
+}
+
+function summarizeAnalysis(analysis) {
+  if (!analysis) {
+    return {};
+  }
+  return {
+    supportedMetrics: analysis.supportedMetricCodes,
+    unsupportedMetrics: analysis.unsupportedMetricCodes,
+    metricValues: Object.fromEntries(analysis.metrics.map((metric) => [metric.code, metric.value])),
+    riskLabel: analysis.riskLabel,
+  };
+}
+
+function escapeXml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
+
+function inferImageDimensions(fileBuffer, mimeType) {
+  if (!Buffer.isBuffer(fileBuffer)) {
+    return null;
+  }
+
+  if (mimeType === 'image/png' && fileBuffer.length >= 24) {
+    return {
+      width: fileBuffer.readUInt32BE(16),
+      height: fileBuffer.readUInt32BE(20),
+    };
+  }
+
+  if ((mimeType === 'image/jpeg' || mimeType === 'image/jpg') && fileBuffer.length >= 4) {
+    let offset = 2;
+    while (offset < fileBuffer.length) {
+      if (fileBuffer[offset] !== 0xff) {
+        offset += 1;
+        continue;
+      }
+      const marker = fileBuffer[offset + 1];
+      offset += 2;
+      if (marker === 0xd8 || marker === 0xd9) {
+        continue;
+      }
+      if (offset + 2 > fileBuffer.length) {
+        break;
+      }
+      const segmentLength = fileBuffer.readUInt16BE(offset);
+      if (segmentLength < 2 || offset + segmentLength > fileBuffer.length) {
+        break;
+      }
+      const isSofMarker = marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker);
+      if (isSofMarker && offset + 7 <= fileBuffer.length) {
+        return {
+          height: fileBuffer.readUInt16BE(offset + 3),
+          width: fileBuffer.readUInt16BE(offset + 5),
+        };
+      }
+      offset += segmentLength;
+    }
+  }
+
+  if (mimeType === 'image/gif' && fileBuffer.length >= 10) {
+    return {
+      width: fileBuffer.readUInt16LE(6),
+      height: fileBuffer.readUInt16LE(8),
+    };
+  }
+
+  if (mimeType === 'image/bmp' && fileBuffer.length >= 26) {
+    return {
+      width: Math.abs(fileBuffer.readInt32LE(18)),
+      height: Math.abs(fileBuffer.readInt32LE(22)),
+    };
+  }
+
+  if (mimeType === 'image/webp' && fileBuffer.length >= 30 && fileBuffer.toString('ascii', 0, 4) === 'RIFF' && fileBuffer.toString('ascii', 8, 12) === 'WEBP') {
+    const chunkType = fileBuffer.toString('ascii', 12, 16);
+    if (chunkType === 'VP8X' && fileBuffer.length >= 30) {
+      const width = 1 + fileBuffer.readUIntLE(24, 3);
+      const height = 1 + fileBuffer.readUIntLE(27, 3);
+      return { width, height };
+    }
+  }
+
+  return null;
+}
+
+function fallbackDimensionsFromLandmarks(landmarks) {
+  if (!landmarks.length) {
+    return { width: 1200, height: 900 };
+  }
+  const maxX = Math.max(...landmarks.map((item) => item.x));
+  const maxY = Math.max(...landmarks.map((item) => item.y));
+  return {
+    width: Math.max(1200, Math.ceil(maxX + 120)),
+    height: Math.max(900, Math.ceil(maxY + 120)),
+  };
+}
+
+function buildAnnotatedSvg({
+  imageDataUrl,
+  width,
+  height,
+  landmarks,
+  analysis,
+  analysisError,
+}) {
+  const panelWidth = 320;
+  const svgWidth = width + panelWidth;
+  const svgHeight = height;
+  const pointRadius = clamp(Math.round(Math.min(width, height) / 220), 3, 6);
+  const labelFontSize = clamp(Math.round(Math.min(width, height) / 70), 11, 16);
+  const labelAll = landmarks.length <= 25;
+  const riskLabel = analysis?.riskLabel || '未生成测量结论';
+  const metrics = analysis?.metrics || [];
+  const confidenceText = analysis?.recognition?.confidence == null
+    ? 'N/A'
+    : `${analysis.recognition.confidence}%`;
+  const panelLines = [
+    `HYF Ceph`,
+    `Risk: ${riskLabel}`,
+    `Points: ${landmarks.length}`,
+    `Confidence: ${confidenceText}`,
+    '',
+    ...metrics.map((metric) => `${metric.code}: ${metric.valueText}`),
+  ];
+
+  if (analysisError) {
+    panelLines.push('', `Metric error: ${analysisError}`);
+  } else if (analysis?.unsupportedMetricCodes?.length) {
+    panelLines.push('', `Unsupported: ${analysis.unsupportedMetricCodes.join(', ')}`);
+  }
+
+  const pointElements = landmarks.map((point) => {
+    const isPrimary = PRIMARY_LANDMARK_KEYS.has(point.key);
+    const shouldLabel = labelAll || isPrimary;
+    const color = isPrimary ? '#f97316' : '#38bdf8';
+    const stroke = isPrimary ? '#7c2d12' : '#0f172a';
+    const dx = isPrimary ? 10 : 6;
+    const dy = isPrimary ? -10 : -6;
+
+    return [
+      `<circle cx="${point.x}" cy="${point.y}" r="${isPrimary ? pointRadius + 1 : pointRadius}" fill="${color}" stroke="${stroke}" stroke-width="1.5" />`,
+      shouldLabel
+        ? `<text x="${point.x + dx}" y="${point.y + dy}" font-family="Menlo, Consolas, monospace" font-size="${labelFontSize}" fill="#ffffff" stroke="#111827" stroke-width="3" paint-order="stroke" dominant-baseline="middle">${escapeXml(point.key)}</text>`
+        : '',
+    ].join('');
+  }).join('');
+
+  const panelText = panelLines
+    .map((line, index) => {
+      const safeLine = escapeXml(line);
+      const y = 42 + index * 24;
+      const fontWeight = index === 0 ? '700' : '500';
+      return `<text x="${width + 20}" y="${y}" font-family="Menlo, Consolas, monospace" font-size="16" font-weight="${fontWeight}" fill="#e5e7eb">${safeLine}</text>`;
+    })
+    .join('');
+
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}" viewBox="0 0 ${svgWidth} ${svgHeight}">`,
+    `<rect width="${svgWidth}" height="${svgHeight}" fill="#0f172a" />`,
+    `<image href="${imageDataUrl}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none" />`,
+    `<rect x="${width}" y="0" width="${panelWidth}" height="${height}" fill="#111827" opacity="0.92" />`,
+    `<g>${pointElements}</g>`,
+    `<g>${panelText}</g>`,
+    `</svg>`,
+  ].join('');
+}
+
+async function writeAnnotatedSvg({
+  imagePath,
+  imageBuffer,
+  imageMimeType,
+  landmarks,
+  analysis,
+  analysisError,
+  outputPath,
+}) {
+  const inferredDimensions = inferImageDimensions(imageBuffer, imageMimeType);
+  const { width, height } = inferredDimensions || fallbackDimensionsFromLandmarks(landmarks);
+  const imageDataUrl = `data:${imageMimeType};base64,${Buffer.from(imageBuffer).toString('base64')}`;
+  const svg = buildAnnotatedSvg({
+    imageDataUrl,
+    width,
+    height,
+    landmarks,
+    analysis,
+    analysisError,
+  });
+
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await fs.writeFile(outputPath, svg, 'utf8');
+  return path.resolve(outputPath);
+}
+
+async function convertSvgToPng(svgPath, pngPath) {
+  await fs.mkdir(path.dirname(pngPath), { recursive: true });
+  const attempts = [
+    ['sips', ['-s', 'format', 'png', svgPath, '--out', pngPath]],
+    ['magick', [svgPath, pngPath]],
+    ['rsvg-convert', ['-o', pngPath, svgPath]],
+  ];
+  const failures = [];
+
+  for (const [command, args] of attempts) {
+    try {
+      execFileSync(command, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return path.resolve(pngPath);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      failures.push(`${command}: ${reason}`);
+    }
+  }
+
+  throw new Error(`PNG conversion failed: ${failures.join(' | ')}`);
+}
+
+async function writeOutput(outputPath, data) {
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await fs.writeFile(outputPath, JSON.stringify(data, null, 2));
+}
+
+async function main() {
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
+    options: {
+      image: { type: 'string' },
+      output: { type: 'string' },
+      token: { type: 'string' },
+      'share-url': { type: 'string' },
+      'current-case': { type: 'boolean', default: false },
+      username: { type: 'string' },
+      password: { type: 'string' },
+      mgr: { type: 'boolean', default: false },
+      'downloaded-image-output': { type: 'string' },
+      'session-file': { type: 'string' },
+      'bridge-file': { type: 'string' },
+      'page-url': { type: 'string' },
+      'api-base': { type: 'string' },
+      'client-id': { type: 'string' },
+      'x-app-key': { type: 'string' },
+      'algorithm-name': { type: 'string', default: DEFAULT_ALGORITHM_NAME },
+      'poll-ms': { type: 'string', default: '1000' },
+      'timeout-seconds': { type: 'string', default: '180' },
+      'force-refresh-algorithm-token': { type: 'boolean', default: false },
+      'no-session-cache': { type: 'boolean', default: false },
+      'annotated-output': { type: 'string' },
+      'annotated-png-output': { type: 'string' },
+      'api-key': { type: 'string' },
+      'portal-base-url': { type: 'string' },
+      'skip-portal-validation': { type: 'boolean', default: false },
+      'no-annotated-svg': { type: 'boolean', default: false },
+      'dry-run': { type: 'boolean', default: false },
+      help: { type: 'boolean', short: 'h', default: false },
+    },
+  });
+
+  if (values.help) {
+    printHelp();
+    return;
+  }
+
+  const requestedImagePath = values.image || positionals[0] || '';
+  const explicitShareContext = values['share-url']
+    ? parseLateraShareUrl(values['share-url'])
+    : null;
+  const bridgeFile = path.resolve(values['bridge-file'] || defaultBridgeFile());
+  const localBridgeState = await readBridgeState(bridgeFile);
+  const rawLocalBridgeContext = buildBridgeContext(localBridgeState);
+  const localBridgeContext = isRecentBridgeContext(rawLocalBridgeContext) ? rawLocalBridgeContext : null;
+  const wantsCurrentCase = values['current-case'] || (!requestedImagePath && !explicitShareContext);
+  const portalBaseUrl = ensureTrailingSlash(values['portal-base-url'] || process.env.HYFCEPH_PORTAL_BASE_URL || DEFAULT_PORTAL_BASE_URL);
+  const skipPortalValidation = values['skip-portal-validation'];
+  const hyfApiKey = String(values['api-key'] || process.env.HYFCEPH_API_KEY || '').trim();
+  if (!skipPortalValidation && !hyfApiKey) {
+    throw new Error('Missing HYFCeph API Key. Please register first and provide --api-key or HYFCEPH_API_KEY.');
+  }
+  const portalValidation = skipPortalValidation
+    ? null
+    : await validatePortalApiKey({
+      portalBaseUrl,
+      apiKey: hyfApiKey,
+    });
+  const portalBridgePayload = wantsCurrentCase
+    && !skipPortalValidation
+    ? await fetchPortalBridgeCurrentCase({
+      portalBaseUrl,
+      apiKey: hyfApiKey,
+    })
+    : null;
+  const portalBridgeContext = buildBridgeContext(portalBridgePayload?.currentCase || null);
+  const caseContext = explicitShareContext || (wantsCurrentCase ? (portalBridgeContext || localBridgeContext) : null);
+
+  if (!requestedImagePath && !caseContext) {
+    printHelp();
+    throw new Error('No image or current-case context was found. Open the case page once so the browser can sync it, or provide a local image.');
+  }
+
+  const pageUrl = new URL(values['page-url'] || caseContext?.pageUrl || portalBridgeContext?.pageUrl || localBridgeContext?.pageUrl || DEFAULT_PAGE_URL).toString();
+  const apiBase = buildApiBase(pageUrl, values['api-base']);
+  const callbackUrl = buildCallbackUrl(pageUrl);
+  const appSettings = await fetchAppSettings(pageUrl);
+  const clientId = values['client-id'] || appSettings.clientId;
+  const xAppKey = values['x-app-key'] || appSettings.xAppKey;
+  const sessionCacheEnabled = !values['no-session-cache'];
+  const sessionFile = path.resolve(values['session-file'] || defaultSessionFile());
+  const cachedSession = sessionCacheEnabled ? await readSessionCache(sessionFile) : null;
+  const cachedToken = cachedSession?.token || '';
+
+  const envToken = process.env.LATERA_TOKEN || process.env.XIAOLIU_TOKEN || '';
+  let xiaoliutoken = values.token || envToken || caseContext?.token || portalBridgeContext?.token || localBridgeContext?.token || cachedToken || '';
+  const username = values.username || process.env.LATERA_USERNAME || '';
+  const password = values.password || process.env.LATERA_PASSWORD || '';
+  let authSource = values.token
+    ? 'cli-token'
+    : envToken
+      ? 'env-token'
+      : caseContext?.source && caseContext?.token
+        ? caseContext.source
+        : explicitShareContext?.token
+        ? 'share-url'
+        : portalBridgeContext?.token
+          ? portalBridgeContext.source || 'portal-bridge'
+        : localBridgeContext?.token
+          ? localBridgeContext.source || 'browser-bridge'
+        : cachedToken
+          ? 'session-cache'
+          : 'login';
+
+  if (!xiaoliutoken) {
+    if (!username || !password) {
+      throw new Error('No active session was found. Refresh the current browser case so it can sync to HYFCeph, or provide manual auth parameters.');
+    }
+    xiaoliutoken = await loginDoctor({
+      apiBase,
+      clientId,
+      xAppKey,
+      username,
+      password,
+      mgr: values.mgr,
+    });
+    authSource = 'login';
+  }
+
+  let algorithmToken;
+  let algorithmBase;
+  let algorithmAccessError = null;
+  const shareFallbackToken = caseContext?.shareContext?.token
+    && caseContext?.shareContext?.token !== xiaoliutoken
+    ? caseContext.shareContext.token
+    : '';
+
+  try {
+    ({ algorithmToken, algorithmBase } = await getAlgorithmAccess({
+      apiBase,
+      clientId,
+      xAppKey,
+      xiaoliutoken,
+      force: values['force-refresh-algorithm-token'],
+    }));
+  } catch (error) {
+    algorithmAccessError = error;
+  }
+
+  if ((!algorithmToken || !algorithmBase) && shareFallbackToken) {
+    try {
+      ({ algorithmToken, algorithmBase } = await getAlgorithmAccess({
+        apiBase,
+        clientId,
+        xAppKey,
+        xiaoliutoken: shareFallbackToken,
+        force: values['force-refresh-algorithm-token'],
+      }));
+      xiaoliutoken = shareFallbackToken;
+      authSource = 'share-url-fallback';
+      algorithmAccessError = null;
+    } catch (error) {
+      algorithmAccessError = error;
+    }
+  }
+
+  if (!algorithmToken || !algorithmBase) {
+    const reason = algorithmAccessError instanceof Error ? algorithmAccessError.message : String(algorithmAccessError);
+    if (authSource === 'session-cache') {
+      throw new Error(`Stored session expired. Refresh the current browser case once and retry. ${reason}`);
+    }
+    if (['portal-bridge', 'browser-bridge', 'tampermonkey'].includes(String(caseContext?.source || ''))) {
+      throw new Error(`Current browser session in bridge expired. Reopen the case page so it syncs again, or send a fresh share link. ${reason}`);
+    }
+    throw algorithmAccessError;
+  }
+
+  if (sessionCacheEnabled && xiaoliutoken) {
+    await writeSessionCache(sessionFile, {
+      token: xiaoliutoken,
+      pageUrl,
+      updatedAt: new Date().toISOString(),
+      authSource,
+      shareCase: caseContext ? {
+        ptId: caseContext.ptId,
+        ptVersion: caseContext.ptVersion,
+        accountType: caseContext.accountType,
+        lang: caseContext.lang,
+      } : undefined,
+    });
+  }
+
+  let resolvedImagePath = requestedImagePath ? path.resolve(requestedImagePath) : '';
+  let imageSource = requestedImagePath ? 'local' : 'none';
+  let downloadedFromShare = false;
+
+  if (!values['dry-run']) {
+    if (resolvedImagePath) {
+      await fs.access(resolvedImagePath);
+    } else {
+      if (!caseContext?.ptId || !caseContext?.ptVersion) {
+        throw new Error('The current case context is incomplete, so the lateral image could not be fetched automatically.');
+      }
+
+      const lateralImageUrl = await fetchSharedLateralImageUrl({
+        apiBase,
+        clientId,
+        xAppKey,
+        xiaoliutoken,
+        ptId: caseContext.ptId,
+        ptVersion: caseContext.ptVersion,
+      });
+      const downloadedImagePath = values['downloaded-image-output']
+        || defaultDownloadedImagePath({
+          ptId: caseContext.ptId,
+          ptVersion: caseContext.ptVersion,
+          imageUrl: lateralImageUrl,
+        });
+      const downloadResult = await downloadRemoteImage(lateralImageUrl, downloadedImagePath);
+      resolvedImagePath = downloadResult.resolvedPath;
+      imageSource = caseContext?.source || 'share-url';
+      downloadedFromShare = true;
+    }
+  }
+
+  const configSnapshot = {
+    pageUrl,
+    apiBase,
+    algorithmBase,
+    algorithmName: values['algorithm-name'],
+    callbackUrl,
+    portalBaseUrl,
+    clientId,
+    xAppKeySource: appSettings.source,
+    hyfApiKeyOwner: portalValidation?.owner || null,
+    authSource,
+    imageSource,
+    downloadedFromShare,
+    sessionCacheEnabled,
+    sessionCacheHit: authSource === 'session-cache',
+    sessionFile: sessionCacheEnabled ? sessionFile : null,
+    bridgeFile,
+    bridgeStateHit: Boolean(localBridgeContext),
+    bridgeCase: localBridgeContext ? {
+      ptId: localBridgeContext.ptId,
+      ptVersion: localBridgeContext.ptVersion,
+      accountType: localBridgeContext.accountType,
+      lang: localBridgeContext.lang,
+      syncedAt: localBridgeContext.syncedAt,
+      hasBridgeToken: Boolean(localBridgeContext.token),
+      hasShareUrl: Boolean(localBridgeContext.shareUrl),
+    } : null,
+    portalBridgeHit: Boolean(portalBridgeContext),
+    portalBridgeCase: portalBridgeContext ? {
+      ptId: portalBridgeContext.ptId,
+      ptVersion: portalBridgeContext.ptVersion,
+      accountType: portalBridgeContext.accountType,
+      lang: portalBridgeContext.lang,
+      syncedAt: portalBridgeContext.syncedAt,
+      hasBridgeToken: Boolean(portalBridgeContext.token),
+      hasShareUrl: Boolean(portalBridgeContext.shareUrl),
+    } : null,
+    shareCase: explicitShareContext ? {
+      ptId: explicitShareContext.ptId,
+      ptVersion: explicitShareContext.ptVersion,
+      accountType: explicitShareContext.accountType,
+      lang: explicitShareContext.lang,
+      hasShareToken: Boolean(explicitShareContext.token),
+    } : null,
+    hasUserToken: Boolean(xiaoliutoken),
+    hasAlgorithmToken: Boolean(algorithmToken),
+  };
+
+  if (values['dry-run']) {
+    console.log(JSON.stringify(configSnapshot, null, 2));
+    return;
+  }
+
+  const imageMimeType = inferMimeType(resolvedImagePath);
+  const fileBuffer = await fs.readFile(resolvedImagePath);
+  const fileName = path.basename(resolvedImagePath);
+  const fileBlob = new Blob([fileBuffer], { type: imageMimeType });
+
+  if (!skipPortalValidation && hyfApiKey) {
+    await notifyPortalSkillEvent({
+      portalBaseUrl,
+      apiKey: hyfApiKey,
+      eventType: 'image_submission',
+      imageName: fileName,
+      imageSource,
+    });
+  }
+
+  const uploadSignature = await fetchUploadSignature({
+    algorithmBase,
+    algorithmToken,
+    algorithmName: values['algorithm-name'],
+  });
+
+  const { taskId, uploadPath } = await uploadImageToOss({
+    uploadSignature,
+    fileBlob,
+    fileName,
+    algorithmToken,
+  });
+
+  const createTaskResult = await createTask({
+    algorithmBase,
+    algorithmToken,
+    algorithmName: values['algorithm-name'],
+    taskId,
+    callbackUrl,
+    imageFilePath: uploadPath,
+  });
+
+  let resultIndex;
+  if (createTaskResult?.data?.status === 'SUCCESS' && createTaskResult?.data?.result) {
+    resultIndex = createTaskResult.data.result;
+  } else {
+    resultIndex = await pollTaskResult({
+      algorithmBase,
+      algorithmToken,
+      taskId,
+      pollMs: Number(values['poll-ms']),
+      timeoutSeconds: Number(values['timeout-seconds']),
+    });
+  }
+
+  const resolvedResult = await resolveResultPayload(resultIndex);
+  let analysis = null;
+  let analysisError = null;
+  try {
+    analysis = buildLateraAnalysis(resolvedResult?.payload);
+  } catch (error) {
+    analysisError = error instanceof Error ? error.message : String(error);
+  }
+  let annotatedSvgPath = null;
+  let annotatedPngPath = null;
+  let annotationError = null;
+  const landmarks = analysis?.landmarks || collectLateraLandmarks(resolvedResult?.payload);
+  if (!values['no-annotated-svg'] && landmarks.length) {
+    try {
+      annotatedSvgPath = await writeAnnotatedSvg({
+        imagePath: resolvedImagePath,
+        imageBuffer: fileBuffer,
+        imageMimeType,
+        landmarks,
+        analysis,
+        analysisError,
+        outputPath: path.resolve(values['annotated-output'] || defaultAnnotatedSvgPath(resolvedImagePath)),
+      });
+      annotatedPngPath = await convertSvgToPng(
+        annotatedSvgPath,
+        path.resolve(values['annotated-png-output'] || defaultAnnotatedPngPath(resolvedImagePath)),
+      );
+    } catch (error) {
+      annotationError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  const outputPath = path.resolve(values.output || defaultOutputPath(resolvedImagePath));
+  const output = {
+    imagePath: resolvedImagePath,
+    outputCreatedAt: new Date().toISOString(),
+    config: configSnapshot,
+    task: {
+      taskId,
+      uploadPath,
+      callbackUrl,
+    },
+    resultIndex,
+    resultUrl: resolvedResult?.url || null,
+    resultPayload: resolvedResult?.payload || null,
+    analysisError,
+    annotationError,
+    annotatedSvgPath,
+    annotatedPngPath,
+    landmarks,
+    analysis: analysis ? {
+      recognition: analysis.recognition,
+      riskLabel: analysis.riskLabel,
+      insight: analysis.insight,
+      metrics: analysis.metrics,
+      unsupportedMetricCodes: analysis.unsupportedMetricCodes,
+      supportedMetricCodes: analysis.supportedMetricCodes,
+    } : null,
+    summary: {
+      ...summarizePayload(resolvedResult?.payload),
+      ...summarizeAnalysis(analysis),
+    },
+  };
+
+  await writeOutput(outputPath, output);
+
+  console.log(JSON.stringify({
+    outputPath,
+    annotatedSvgPath,
+    annotatedPngPath,
+    taskId,
+    resultUrl: output.resultUrl,
+    analysisError,
+    annotationError,
+    summary: output.summary,
+    metrics: output.analysis?.metrics || [],
+  }, null, 2));
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});
