@@ -48,6 +48,7 @@
           <div class="tab-bar">
             <button class="tab active" data-tab="register" type="button">注册</button>
             <button class="tab" data-tab="login" type="button">登录</button>
+            <button class="tab hidden" data-tab="dashboard" type="button">控制台</button>
           </div>
 
           <div id="flash" class="flash hidden"></div>
@@ -88,45 +89,8 @@
             </form>
           </section>
 
-        </aside>
-      </section>
-
-      <section id="portal-app" class="portal-app hidden">
-        <header class="portal-header">
-          <div class="portal-brand">
-            <div class="brand-mark">H</div>
-            <div>
-              <div class="panel-title">HYFCeph Workspace</div>
-              <div class="panel-subtitle">在线测量 · 个人记录 · 临床复核</div>
-            </div>
-          </div>
-
-          <div class="portal-header-actions">
-            <div class="portal-user-chip">
-              <strong id="workspace-user-name">-</strong>
-              <span id="workspace-user-role">-</span>
-            </div>
-            <button id="logout-button" class="ghost-button" type="button">退出登录</button>
-          </div>
-        </header>
-
-        <div class="workspace-tabs">
-          <button class="workspace-tab active" data-view="overview" type="button">控制台</button>
-          <button class="workspace-tab" data-view="workspace" type="button">在线测量</button>
-          <button class="workspace-tab hidden" data-view="admin" type="button">管理台</button>
-        </div>
-
-        <div id="portal-flash" class="flash hidden"></div>
-
-        <section class="workspace-view active" data-view-panel="overview">
-          <div class="overview-grid">
-            <article class="workspace-card">
-              <div class="workspace-section-head">
-                <div>
-                  <div class="workspace-kicker">账号信息</div>
-                  <h2>用户资料</h2>
-                </div>
-              </div>
+          <section class="tab-panel" data-panel="dashboard">
+            <div class="dashboard-card">
               <div class="dashboard-row">
                 <span class="label">名字</span>
                 <strong id="user-name">-</strong>
@@ -143,21 +107,16 @@
                 <span class="label">角色</span>
                 <strong id="user-role">-</strong>
               </div>
-              <div class="dashboard-row">
-                <span class="label">累计测量</span>
-                <strong id="user-measurement-count">0</strong>
-              </div>
-            </article>
+            </div>
 
-            <article class="workspace-card api-card">
-              <div class="workspace-section-head">
+            <div class="dashboard-card api-card">
+              <div class="api-header">
                 <div>
-                  <div class="workspace-kicker">开发接入</div>
-                  <h2>API Key</h2>
+                  <div class="label">API Key</div>
+                  <div class="api-tip">注册后在这里生成并复制你的专属 Key，默认有效期 3 个月。</div>
                 </div>
+                <button id="logout-button" class="ghost-button" type="button">退出登录</button>
               </div>
-
-              <p class="api-note">注册后在这里生成并复制你的专属 Key，默认有效期 3 个月。普通用户控制台只显示这部分和用户资料，在线测量请切到工作台。</p>
 
               <textarea id="api-key-output" readonly placeholder="还没有 API Key，点击下方按钮生成。"></textarea>
 
@@ -174,97 +133,41 @@
               <p class="api-note">
                 提示：重新生成后，旧 Key 将失效。建议只在你确认需要轮换时再重新生成。
               </p>
-            </article>
-          </div>
-        </section>
+            </div>
 
-        <section class="workspace-view hidden" data-view-panel="workspace">
-          <div class="measure-workspace">
-            <aside class="measure-history-pane">
-              <article class="workspace-card history-card">
-                <div class="workspace-section-head">
-                  <div>
-                    <div class="workspace-kicker">病例记录</div>
-                    <h2>我的测量</h2>
-                  </div>
-                  <strong id="measurement-count-badge" class="history-badge">0</strong>
+            <div id="measure-panel" class="dashboard-card measure-card hidden">
+              <div class="api-header">
+                <div>
+                  <div class="label">图片测量</div>
+                  <div class="api-tip">直接上传侧位片即可。服务端会复用管理员浏览器保持在线的远程会话完成定点和测量，公开用户无需安装任何插件。</div>
                 </div>
-                <p class="api-note">每次在线测量都会自动归档到你的账号，下次登录仍可继续查看。</p>
-                <div id="measurement-history-list" class="history-list"></div>
-                <div id="measurement-history-empty" class="empty-history">还没有测量记录。上传第一张侧位片开始。</div>
-              </article>
-            </aside>
+              </div>
 
-            <section class="measure-main-pane">
-              <article class="workspace-card upload-card">
-                <div class="workspace-section-head">
-                  <div>
-                    <div class="workspace-kicker">工作区</div>
-                    <h2>上传并测量</h2>
-                  </div>
+              <label>
+                <span>侧位片文件</span>
+                <input id="measure-image-input" type="file" accept="image/png,image/jpeg,image/jpg,image/webp,image/bmp,image/tiff,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff" />
+              </label>
+
+              <div class="api-actions">
+                <button id="measure-image-button" class="primary-button" type="button">上传图片并测量</button>
+              </div>
+              <p class="api-note">如果服务暂时不可用，通常表示管理员浏览器中的远程会话需要刷新。</p>
+
+              <section id="measure-result" class="measure-result hidden">
+                <div class="dashboard-row">
+                  <span class="label">分析结论</span>
+                  <strong id="measure-risk-label">-</strong>
                 </div>
-
-                <label id="measure-dropzone" class="measure-dropzone">
-                  <input id="measure-image-input" type="file" accept="image/png,image/jpeg,image/jpg,image/webp,image/bmp,image/tiff,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff" />
-                  <span class="dropzone-title">将侧位片拖到这里，或点击选择文件</span>
-                  <span class="dropzone-subtitle">支持 PNG、JPG、WEBP、BMP、TIFF。服务端会调用远程定点并自动归档到你的账户。</span>
-                </label>
-
-                <div class="api-actions">
-                  <button id="measure-image-button" class="primary-button" type="button">开始测量</button>
-                </div>
-              </article>
-
-              <article class="workspace-card viewer-card">
-                <div class="workspace-section-head">
-                  <div>
-                    <div class="workspace-kicker">影像预览</div>
-                    <h2 id="active-measurement-title">尚未开始测量</h2>
-                  </div>
-                  <div id="active-measurement-subtitle" class="viewer-subtitle">上传一张侧位片后，这里会显示标注图和本次测量时间。</div>
-                </div>
-
-                <div id="viewer-empty-state" class="viewer-empty-state">
-                  <div class="viewer-empty-mark">CEPH</div>
-                  <p>上传一张侧位片，生成标注图、头影测量值和结论摘要。</p>
-                </div>
-
+                <p id="measure-insight" class="measure-insight">-</p>
                 <img id="measure-image" class="measure-image hidden" alt="HYFCeph 标注图" />
-              </article>
-            </section>
-
-            <aside class="measure-inspector-pane">
-              <article class="workspace-card result-card">
-                <div class="workspace-section-head">
-                  <div>
-                    <div class="workspace-kicker">诊断摘要</div>
-                    <h2>本次结论</h2>
-                  </div>
-                </div>
-                <div class="result-pill" id="measure-risk-label">尚未分析</div>
-                <p id="measure-insight" class="measure-insight">完成测量后，这里会给出简明的骨性与牙性判断摘要。</p>
-              </article>
-
-              <article class="workspace-card result-card">
-                <div class="workspace-section-head">
-                  <div>
-                    <div class="workspace-kicker">头影指标</div>
-                    <h2>关键测量值</h2>
-                  </div>
-                </div>
                 <div id="measure-metrics" class="metric-grid"></div>
-              </article>
-            </aside>
-          </div>
-        </section>
+              </section>
+            </div>
 
-        <section class="workspace-view hidden" data-view-panel="admin">
-          <div class="admin-grid">
-            <section id="operator-sync-panel" class="workspace-card">
+            <section id="operator-sync-panel" class="dashboard-card hidden">
               <div class="admin-header">
                 <div>
-                  <div class="workspace-kicker">扩展同步</div>
-                  <h2>浏览器同步状态</h2>
+                  <div class="label">浏览器同步状态</div>
                   <div class="api-tip">仅管理员需要使用。请在你自己的 Chrome 中安装 HYFCeph Bridge 扩展，并填入当前管理员 API Key。</div>
                 </div>
                 <button id="refresh-operator-sync-button" class="ghost-button" type="button">刷新状态</button>
@@ -283,11 +186,10 @@
               </div>
             </section>
 
-            <section id="admin-panel" class="workspace-card">
+            <section id="admin-panel" class="dashboard-card hidden">
               <div class="admin-header">
                 <div>
-                  <div class="workspace-kicker">用户管理</div>
-                  <h2>管理员面板</h2>
+                  <div class="label">管理员面板</div>
                   <div class="api-tip">管理所有已生成的 API Key，可调整过期时间或删除。</div>
                 </div>
                 <button id="refresh-admin-button" class="ghost-button" type="button">刷新列表</button>
@@ -312,8 +214,8 @@
                 </table>
               </div>
             </section>
-          </div>
-        </section>
+          </section>
+        </aside>
       </section>
     </main>
 

@@ -1,19 +1,11 @@
 const state = {
   user: null,
   adminUsers: [],
-  measurements: [],
-  activeMeasurementId: null,
-  activeView: 'overview',
 };
 
-const marketingShell = document.querySelector('.hero');
-const portalApp = document.querySelector('#portal-app');
-const authFlash = document.querySelector('#flash');
-const portalFlash = document.querySelector('#portal-flash');
-const authTabs = Array.from(document.querySelectorAll('.tab'));
-const authPanels = Array.from(document.querySelectorAll('.tab-panel'));
-const workspaceTabs = Array.from(document.querySelectorAll('.workspace-tab'));
-const workspaceViews = Array.from(document.querySelectorAll('.workspace-view'));
+const flash = document.querySelector('#flash');
+const tabs = Array.from(document.querySelectorAll('.tab'));
+const panels = Array.from(document.querySelectorAll('.tab-panel'));
 const registerForm = document.querySelector('#register-form');
 const loginForm = document.querySelector('#login-form');
 const logoutButton = document.querySelector('#logout-button');
@@ -23,71 +15,42 @@ const apiKeyOutput = document.querySelector('#api-key-output');
 const apiKeyExpiry = document.querySelector('#api-key-expiry');
 const measureImageInput = document.querySelector('#measure-image-input');
 const measureImageButton = document.querySelector('#measure-image-button');
-const measureDropzone = document.querySelector('#measure-dropzone');
-const viewerEmptyState = document.querySelector('#viewer-empty-state');
-const activeMeasurementTitle = document.querySelector('#active-measurement-title');
-const activeMeasurementSubtitle = document.querySelector('#active-measurement-subtitle');
+const measurePanel = document.querySelector('#measure-panel');
+const measureResult = document.querySelector('#measure-result');
 const measureRiskLabel = document.querySelector('#measure-risk-label');
 const measureInsight = document.querySelector('#measure-insight');
 const measureImage = document.querySelector('#measure-image');
 const measureMetrics = document.querySelector('#measure-metrics');
-const measurementHistoryList = document.querySelector('#measurement-history-list');
-const measurementHistoryEmpty = document.querySelector('#measurement-history-empty');
-const measurementCountBadge = document.querySelector('#measurement-count-badge');
-const workspaceUserName = document.querySelector('#workspace-user-name');
-const workspaceUserRole = document.querySelector('#workspace-user-role');
-const userName = document.querySelector('#user-name');
-const userOrganization = document.querySelector('#user-organization');
-const userPhone = document.querySelector('#user-phone');
-const userRole = document.querySelector('#user-role');
-const userMeasurementCount = document.querySelector('#user-measurement-count');
+const operatorSyncPanel = document.querySelector('#operator-sync-panel');
 const operatorSyncStatus = document.querySelector('#operator-sync-status');
 const operatorSyncDetail = document.querySelector('#operator-sync-detail');
 const refreshOperatorSyncButton = document.querySelector('#refresh-operator-sync-button');
 const clearOperatorSyncButton = document.querySelector('#clear-operator-sync-button');
 const refreshAdminButton = document.querySelector('#refresh-admin-button');
+const adminPanel = document.querySelector('#admin-panel');
 const adminUsersBody = document.querySelector('#admin-users-body');
 
-function getActiveFlash() {
-  return state.user ? portalFlash : authFlash;
-}
-
-function showFlash(message, type = 'success', target = getActiveFlash()) {
-  target.textContent = message;
-  target.classList.remove('hidden', 'error');
+function showFlash(message, type = 'success') {
+  flash.textContent = message;
+  flash.classList.remove('hidden', 'error');
   if (type === 'error') {
-    target.classList.add('error');
-  } else {
-    target.classList.remove('error');
+    flash.classList.add('error');
   }
 }
 
-function clearFlash(target = getActiveFlash()) {
-  target.textContent = '';
-  target.classList.add('hidden');
-  target.classList.remove('error');
+function clearFlash() {
+  flash.textContent = '';
+  flash.classList.add('hidden');
+  flash.classList.remove('error');
 }
 
-function setAuthTab(tabName) {
-  authTabs.forEach((tab) => {
+function setActiveTab(tabName) {
+  tabs.forEach((tab) => {
     tab.classList.toggle('active', tab.dataset.tab === tabName);
   });
-  authPanels.forEach((panel) => {
+  panels.forEach((panel) => {
     panel.classList.toggle('active', panel.dataset.panel === tabName);
     panel.classList.toggle('hidden', panel.dataset.panel !== tabName);
-  });
-}
-
-function setWorkspaceView(viewName) {
-  const isAdmin = state.user?.role === 'admin';
-  const safeView = viewName === 'admin' && !isAdmin ? 'overview' : viewName;
-  state.activeView = safeView;
-  workspaceTabs.forEach((tab) => {
-    tab.classList.toggle('active', tab.dataset.view === safeView);
-  });
-  workspaceViews.forEach((panel) => {
-    panel.classList.toggle('active', panel.dataset.viewPanel === safeView);
-    panel.classList.toggle('hidden', panel.dataset.viewPanel !== safeView);
   });
 }
 
@@ -113,102 +76,34 @@ function toDatetimeLocal(value) {
   return local.toISOString().slice(0, 16);
 }
 
-function buildMetricMarkup(metrics) {
-  if (!metrics.length) {
-    return '<div class="empty-cell">本次未返回可展示的测量值。</div>';
-  }
-  return metrics.map((metric) => `
-    <article class="metric-chip metric-${metric.tone || 'default'}">
-      <div class="metric-code">${metric.code}</div>
-      <div class="metric-value">${metric.valueText}</div>
-      <div class="metric-label">${metric.label}</div>
-    </article>
-  `).join('');
-}
-
 function updateDashboard(user) {
-  const roleText = user?.role === 'admin' ? '管理员' : '普通用户';
-  userName.textContent = user?.name || '-';
-  userOrganization.textContent = user?.organization || '-';
-  userPhone.textContent = user?.phone || user?.username || '-';
-  userRole.textContent = roleText;
-  userMeasurementCount.textContent = String(user?.measurementCount || 0);
-  workspaceUserName.textContent = user?.name || '-';
-  workspaceUserRole.textContent = roleText;
-
+  document.querySelector('#user-name').textContent = user?.name || '-';
+  document.querySelector('#user-organization').textContent = user?.organization || '-';
+  document.querySelector('#user-phone').textContent = user?.phone || user?.username || '-';
+  document.querySelector('#user-role').textContent = user?.role === 'admin' ? '管理员' : '普通用户';
   apiKeyOutput.value = user?.apiKey || '';
-  apiKeyOutput.placeholder = user?.apiKey ? '' : '还没有 API Key，点击下方按钮生成。';
+  apiKeyOutput.placeholder = user?.apiKey
+    ? ''
+    : '还没有 API Key，点击下方按钮生成。';
   apiKeyExpiry.textContent = user?.apiKeyExpiresAt ? formatDateTime(user.apiKeyExpiresAt) : '-';
   generateKeyButton.textContent = user?.apiKey ? '重新生成 API Key' : '生成 API Key';
 }
 
-function resetMeasurementViewer() {
-  state.activeMeasurementId = null;
-  activeMeasurementTitle.textContent = '尚未开始测量';
-  activeMeasurementSubtitle.textContent = '上传一张侧位片后，这里会显示标注图和本次测量时间。';
-  measureRiskLabel.textContent = '尚未分析';
-  measureInsight.textContent = '完成测量后，这里会给出简明的骨性与牙性判断摘要。';
-  measureMetrics.innerHTML = buildMetricMarkup([]);
+function resetMeasureResult() {
+  measureResult.classList.add('hidden');
+  measureRiskLabel.textContent = '-';
+  measureInsight.textContent = '-';
   measureImage.classList.add('hidden');
   measureImage.removeAttribute('src');
-  viewerEmptyState.classList.remove('hidden');
+  measureMetrics.innerHTML = '';
 }
 
-function renderMeasurementHistory() {
-  const measurements = Array.isArray(state.measurements) ? state.measurements : [];
-  measurementCountBadge.textContent = String(measurements.length);
-  userMeasurementCount.textContent = String(measurements.length);
-
-  if (!measurements.length) {
-    measurementHistoryList.innerHTML = '';
-    measurementHistoryEmpty.classList.remove('hidden');
-    if (!state.activeMeasurementId) {
-      resetMeasurementViewer();
-    }
-    return;
-  }
-
-  measurementHistoryEmpty.classList.add('hidden');
-  measurementHistoryList.innerHTML = measurements.map((measurement) => {
-    const values = Object.entries(measurement.metricValues || {})
-      .slice(0, 3)
-      .map(([key, value]) => `${key} ${value}`)
-      .join(' · ');
-    return `
-      <button class="history-item ${measurement.id === state.activeMeasurementId ? 'active' : ''}" type="button" data-measurement-id="${measurement.id}">
-        <div class="history-item-top">
-          <strong>${measurement.imageName}</strong>
-          <span>${formatDateTime(measurement.createdAt)}</span>
-        </div>
-        <div class="history-item-body">
-          <span>${measurement.riskLabel || '未生成结论'}</span>
-          <small>${values || (measurement.insightPreview || '点击查看详情')}</small>
-        </div>
-      </button>
-    `;
-  }).join('');
-
-  measurementHistoryList.querySelectorAll('.history-item').forEach((button) => {
-    button.addEventListener('click', async () => {
-      const measurementId = button.dataset.measurementId;
-      if (!measurementId) return;
-      clearFlash(portalFlash);
-      try {
-        await loadMeasurementDetail(measurementId);
-      } catch (error) {
-        showFlash(error.message, 'error', portalFlash);
-      }
-    });
-  });
-}
-
-function renderMeasurementDetail(measurement, result) {
-  state.activeMeasurementId = measurement?.id || null;
-  renderMeasurementHistory();
-
+function renderMeasureResult(result) {
   const analysis = result?.analysis || {};
   const metrics = result?.metrics || analysis.metrics || [];
   const artifacts = result?.artifacts || {};
+  const riskLabel = analysis.riskLabel || result?.summary?.riskLabel || '未生成结论';
+  const insight = analysis.insight || '本次服务端测量已完成。';
   const pngSrc = artifacts.annotatedPngBase64
     ? `data:${artifacts.annotatedPngMimeType || 'image/png'};base64,${artifacts.annotatedPngBase64}`
     : '';
@@ -216,25 +111,29 @@ function renderMeasurementDetail(measurement, result) {
     ? `data:${artifacts.annotatedSvgMimeType || 'image/svg+xml'};base64,${artifacts.annotatedSvgBase64}`
     : '';
 
-  activeMeasurementTitle.textContent = measurement?.imageName || '当前测量';
-  activeMeasurementSubtitle.textContent = [
-    measurement?.createdAt ? `测量于 ${formatDateTime(measurement.createdAt)}` : '',
-    measurement?.riskLabel || analysis?.riskLabel || '',
-  ].filter(Boolean).join(' · ') || '已完成分析';
-
-  measureRiskLabel.textContent = analysis.riskLabel || measurement?.riskLabel || '未生成结论';
-  measureInsight.textContent = analysis.insight || measurement?.insightPreview || '本次服务端测量已完成。';
-  measureMetrics.innerHTML = buildMetricMarkup(metrics);
-
+  measureRiskLabel.textContent = riskLabel;
+  measureInsight.textContent = insight;
   if (pngSrc || svgSrc) {
     measureImage.src = pngSrc || svgSrc;
     measureImage.classList.remove('hidden');
-    viewerEmptyState.classList.add('hidden');
   } else {
     measureImage.classList.add('hidden');
     measureImage.removeAttribute('src');
-    viewerEmptyState.classList.remove('hidden');
   }
+
+  if (metrics.length) {
+    measureMetrics.innerHTML = metrics.map((metric) => `
+      <article class="metric-chip metric-${metric.tone || 'default'}">
+        <div class="metric-code">${metric.code}</div>
+        <div class="metric-value">${metric.valueText}</div>
+        <div class="metric-label">${metric.label}</div>
+      </article>
+    `).join('');
+  } else {
+    measureMetrics.innerHTML = '<div class="empty-cell">本次未返回可展示的测量值。</div>';
+  }
+
+  measureResult.classList.remove('hidden');
 }
 
 function renderOperatorSyncStatus(operatorSession) {
@@ -243,13 +142,15 @@ function renderOperatorSyncStatus(operatorSession) {
     operatorSyncDetail.textContent = '扩展开始同步后，这里会显示最近一次同步时间和操作者信息。';
     return;
   }
+
   operatorSyncStatus.textContent = operatorSession.active ? '在线' : '已过期';
-  operatorSyncDetail.textContent = [
+  const details = [
     operatorSession.userName ? `用户 ${operatorSession.userName}` : '',
     operatorSession.accountType ? `类型 ${operatorSession.accountType}` : '',
     operatorSession.syncedAt ? `同步于 ${formatDateTime(operatorSession.syncedAt)}` : '',
     operatorSession.expiresAt ? `过期于 ${formatDateTime(operatorSession.expiresAt)}` : '',
-  ].filter(Boolean).join('，') || '扩展已连接，但暂无更多细节。';
+  ].filter(Boolean);
+  operatorSyncDetail.textContent = details.join('，') || '扩展已连接，但暂无更多细节。';
 }
 
 async function requestJson(url, options = {}) {
@@ -288,7 +189,9 @@ function renderAdminUsers(users) {
   }
 
   adminUsersBody.innerHTML = users.map((user) => {
-    const displayName = user.role === 'admin' ? `${user.name}（管理员）` : user.name;
+    const displayName = user.role === 'admin'
+      ? `${user.name}（管理员）`
+      : user.name;
     const identifier = [user.organization || '-', user.phone || user.username || '-'].join('<br />');
     const keyMarkup = user.apiKey
       ? `<code>${user.apiKey}</code><div class="status-pill ${user.apiKeyActive ? 'active' : 'inactive'}">${user.apiKeyActive ? '有效' : '已过期'}</div>`
@@ -322,7 +225,7 @@ function renderAdminUsers(users) {
       const input = adminUsersBody.querySelector(`.admin-expiry-input[data-user-id="${userId}"]`);
       const value = input?.value;
       if (!value) {
-        showFlash('请先填写新的有效期。', 'error', portalFlash);
+        showFlash('请先填写新的有效期。', 'error');
         return;
       }
       try {
@@ -331,9 +234,9 @@ function renderAdminUsers(users) {
           body: JSON.stringify({ expiresAt: new Date(value).toISOString() }),
         });
         await loadAdminUsers();
-        showFlash('有效期已更新。', 'success', portalFlash);
+        showFlash('有效期已更新。');
       } catch (error) {
-        showFlash(error.message, 'error', portalFlash);
+        showFlash(error.message, 'error');
       }
     });
   });
@@ -342,16 +245,18 @@ function renderAdminUsers(users) {
     button.addEventListener('click', async () => {
       const userId = button.dataset.userId;
       const shouldContinue = window.confirm('删除后，该用户当前 API Key 将立即失效。是否继续？');
-      if (!shouldContinue) return;
+      if (!shouldContinue) {
+        return;
+      }
       try {
         await requestJson(`/api/admin/users/${userId}/api-key`, {
           method: 'DELETE',
           body: JSON.stringify({}),
         });
         await loadAdminUsers();
-        showFlash('API Key 已删除。', 'success', portalFlash);
+        showFlash('API Key 已删除。');
       } catch (error) {
-        showFlash(error.message, 'error', portalFlash);
+        showFlash(error.message, 'error');
       }
     });
   });
@@ -360,11 +265,15 @@ function renderAdminUsers(users) {
 async function loadAdminUsers() {
   if (state.user?.role !== 'admin') {
     state.adminUsers = [];
-    adminUsersBody.innerHTML = '<tr><td colspan="5" class="empty-cell">暂无数据</td></tr>';
+    adminPanel.classList.add('hidden');
+    operatorSyncPanel.classList.add('hidden');
+    renderOperatorSyncStatus(null);
     return;
   }
   const payload = await requestJson('/api/admin/users', { method: 'GET' });
   state.adminUsers = payload.users || [];
+  adminPanel.classList.remove('hidden');
+  operatorSyncPanel.classList.remove('hidden');
   renderAdminUsers(state.adminUsers);
 }
 
@@ -373,78 +282,37 @@ async function loadOperatorSyncStatus() {
     renderOperatorSyncStatus(null);
     return;
   }
+
   try {
-    const payload = await requestJson('/api/admin/operator-session', { method: 'GET' });
+    const payload = await requestJson('/api/admin/operator-session', {
+      method: 'GET',
+    });
     renderOperatorSyncStatus(payload.operatorSession || null);
   } catch {
     renderOperatorSyncStatus(null);
   }
 }
 
-function upsertMeasurementSummary(measurement) {
-  if (!measurement?.id) return;
-  const next = [measurement, ...state.measurements.filter((item) => item.id !== measurement.id)];
-  state.measurements = next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
-  if (state.user) {
-    state.user.measurementCount = state.measurements.length;
-  }
-}
-
-async function loadMeasurements() {
-  if (!state.user) {
-    state.measurements = [];
-    renderMeasurementHistory();
-    return;
-  }
-  const payload = await requestJson('/api/measurements', { method: 'GET' });
-  state.measurements = Array.isArray(payload.measurements) ? payload.measurements : [];
-  if (state.user) {
-    state.user.measurementCount = state.measurements.length;
-  }
-  renderMeasurementHistory();
-}
-
-async function loadMeasurementDetail(measurementId) {
-  const payload = await requestJson(`/api/measurements/${encodeURIComponent(measurementId)}`, { method: 'GET' });
-  renderMeasurementDetail(payload.measurement || null, payload.result || null);
-}
-
-function toggleShells() {
-  const loggedIn = Boolean(state.user);
-  marketingShell.classList.toggle('hidden', loggedIn);
-  portalApp.classList.toggle('hidden', !loggedIn);
-}
-
 async function syncAuthUi() {
-  toggleShells();
-  if (!state.user) {
-    setAuthTab('register');
-    resetMeasurementViewer();
-    renderMeasurementHistory();
-    clearFlash(portalFlash);
-    return;
-  }
-
-  updateDashboard(state.user);
-  workspaceTabs.forEach((tab) => {
-    if (tab.dataset.view === 'admin') {
-      tab.classList.toggle('hidden', state.user.role !== 'admin');
-    }
-  });
-
-  await Promise.all([
-    loadMeasurements(),
-    loadOperatorSyncStatus(),
-    loadAdminUsers(),
-  ]);
-
-  if (state.measurements.length) {
-    await loadMeasurementDetail(state.measurements[0].id);
+  const dashboardTab = document.querySelector('[data-tab="dashboard"]');
+  dashboardTab.classList.toggle('hidden', !state.user);
+  if (state.user) {
+    const isAdmin = state.user.role === 'admin';
+    updateDashboard(state.user);
+    measurePanel.classList.toggle('hidden', !isAdmin);
+    operatorSyncPanel.classList.toggle('hidden', !isAdmin);
+    adminPanel.classList.toggle('hidden', !isAdmin);
+    setActiveTab('dashboard');
+    await loadOperatorSyncStatus();
+    await loadAdminUsers();
   } else {
-    resetMeasurementViewer();
+    renderOperatorSyncStatus(null);
+    measurePanel.classList.add('hidden');
+    operatorSyncPanel.classList.add('hidden');
+    adminPanel.classList.add('hidden');
+    adminUsersBody.innerHTML = '<tr><td colspan="5" class="empty-cell">暂无数据</td></tr>';
+    setActiveTab('register');
   }
-
-  setWorkspaceView(state.activeView);
 }
 
 async function loadCurrentUser() {
@@ -454,77 +322,70 @@ async function loadCurrentUser() {
   } catch {
     state.user = null;
   }
+  resetMeasureResult();
   await syncAuthUi();
 }
 
-authTabs.forEach((tab) => {
+tabs.forEach((tab) => {
   tab.addEventListener('click', () => {
-    clearFlash(authFlash);
-    setAuthTab(tab.dataset.tab);
-  });
-});
-
-workspaceTabs.forEach((tab) => {
-  tab.addEventListener('click', () => {
-    clearFlash(portalFlash);
-    setWorkspaceView(tab.dataset.view);
+    clearFlash();
+    setActiveTab(tab.dataset.tab);
   });
 });
 
 registerForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  clearFlash(authFlash);
-  const payload = Object.fromEntries(new FormData(registerForm).entries());
+  clearFlash();
+  const formData = new FormData(registerForm);
+  const payload = Object.fromEntries(formData.entries());
   try {
     const result = await requestJson('/api/register', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
     state.user = result.user;
-    state.activeView = 'overview';
-    registerForm.reset();
     await syncAuthUi();
-    showFlash(result.message || '注册成功。', 'success', portalFlash);
+    showFlash(result.message || '注册成功。');
+    registerForm.reset();
   } catch (error) {
-    showFlash(error.message, 'error', authFlash);
+    showFlash(error.message, 'error');
   }
 });
 
 loginForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  clearFlash(authFlash);
-  const payload = Object.fromEntries(new FormData(loginForm).entries());
+  clearFlash();
+  const formData = new FormData(loginForm);
+  const payload = Object.fromEntries(formData.entries());
   try {
     const result = await requestJson('/api/login', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
     state.user = result.user;
-    state.activeView = 'overview';
-    loginForm.reset();
     await syncAuthUi();
-    showFlash(result.message || '登录成功。', 'success', portalFlash);
+    showFlash(result.message || '登录成功。');
+    loginForm.reset();
   } catch (error) {
-    showFlash(error.message, 'error', authFlash);
+    showFlash(error.message, 'error');
   }
 });
 
 logoutButton.addEventListener('click', async () => {
-  clearFlash(portalFlash);
+  clearFlash();
   await requestJson('/api/logout', { method: 'POST', body: JSON.stringify({}) });
   state.user = null;
-  state.measurements = [];
-  state.activeMeasurementId = null;
-  state.activeView = 'overview';
   await syncAuthUi();
-  showFlash('已退出登录。', 'success', authFlash);
+  showFlash('已退出登录。');
 });
 
 generateKeyButton.addEventListener('click', async () => {
-  clearFlash(portalFlash);
+  clearFlash();
   if (state.user?.apiKey) {
     const shouldContinue = window.confirm('重新生成后，旧 API Key 会失效。是否继续？');
-    if (!shouldContinue) return;
+    if (!shouldContinue) {
+      return;
+    }
   }
 
   try {
@@ -534,115 +395,103 @@ generateKeyButton.addEventListener('click', async () => {
     });
     state.user = result.user;
     updateDashboard(state.user);
-    await loadAdminUsers();
     await loadOperatorSyncStatus();
-    showFlash(result.message || 'API Key 已生成。', 'success', portalFlash);
+    if (state.user.role === 'admin') {
+      await loadAdminUsers();
+    }
+    showFlash(result.message || 'API Key 已生成。');
   } catch (error) {
-    showFlash(error.message, 'error', portalFlash);
+    showFlash(error.message, 'error');
   }
 });
 
 copyKeyButton.addEventListener('click', async () => {
   const value = apiKeyOutput.value.trim();
   if (!value) {
-    showFlash('请先生成 API Key。', 'error', portalFlash);
+    showFlash('请先生成 API Key。', 'error');
     return;
   }
   try {
     await navigator.clipboard.writeText(value);
-    showFlash('API Key 已复制。', 'success', portalFlash);
+    showFlash('API Key 已复制。');
   } catch {
-    showFlash('复制失败，请手动复制。', 'error', portalFlash);
+    showFlash('复制失败，请手动复制。', 'error');
   }
 });
 
-measureDropzone.addEventListener('dragover', (event) => {
-  event.preventDefault();
-  measureDropzone.classList.add('dragover');
-});
-
-measureDropzone.addEventListener('dragleave', () => {
-  measureDropzone.classList.remove('dragover');
-});
-
-measureDropzone.addEventListener('drop', (event) => {
-  event.preventDefault();
-  measureDropzone.classList.remove('dragover');
-  const file = event.dataTransfer?.files?.[0];
-  if (!file) return;
-  const transfer = new DataTransfer();
-  transfer.items.add(file);
-  measureImageInput.files = transfer.files;
+refreshAdminButton.addEventListener('click', async () => {
+  clearFlash();
+  try {
+    await loadAdminUsers();
+    await loadOperatorSyncStatus();
+    showFlash('列表已刷新。');
+  } catch (error) {
+    showFlash(error.message, 'error');
+  }
 });
 
 measureImageButton.addEventListener('click', async () => {
-  clearFlash(portalFlash);
+  clearFlash();
+  const apiKey = state.user?.apiKey || '';
   const file = measureImageInput.files?.[0];
+  if (!apiKey) {
+    showFlash('请先生成 API Key。', 'error');
+    return;
+  }
   if (!file) {
-    showFlash('请先选择一张侧位片。', 'error', portalFlash);
+    showFlash('请先选择一张侧位片。', 'error');
     return;
   }
 
   try {
     measureImageButton.disabled = true;
-    setWorkspaceView('workspace');
     const imageBase64 = await readFileAsBase64(file);
     const payload = await requestJson('/api/measure/image', {
       method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+      },
       body: JSON.stringify({
         fileName: file.name,
         mimeType: file.type || 'application/octet-stream',
         imageBase64,
       }),
     });
-    if (payload.measurement) {
-      upsertMeasurementSummary(payload.measurement);
-    }
-    renderMeasurementDetail(payload.measurement || null, payload.result || null);
-    renderMeasurementHistory();
+    renderMeasureResult(payload.result);
+    showFlash('图片测量完成。');
     measureImageInput.value = '';
-    showFlash('图片测量完成，已自动归档到你的账户。', 'success', portalFlash);
   } catch (error) {
-    showFlash(error.message, 'error', portalFlash);
+    showFlash(error.message, 'error');
   } finally {
     measureImageButton.disabled = false;
   }
 });
 
 refreshOperatorSyncButton.addEventListener('click', async () => {
-  clearFlash(portalFlash);
+  clearFlash();
   try {
     await loadOperatorSyncStatus();
-    showFlash('浏览器同步状态已刷新。', 'success', portalFlash);
+    showFlash('浏览器同步状态已刷新。');
   } catch (error) {
-    showFlash(error.message, 'error', portalFlash);
+    showFlash(error.message, 'error');
   }
 });
 
 clearOperatorSyncButton.addEventListener('click', async () => {
-  clearFlash(portalFlash);
-  const shouldContinue = window.confirm('清除后，在线测量会暂时不可用，直到扩展重新同步。是否继续？');
-  if (!shouldContinue) return;
+  clearFlash();
+  const shouldContinue = window.confirm('清除后，公开用户的远程测量会暂时不可用，直到扩展重新同步。是否继续？');
+  if (!shouldContinue) {
+    return;
+  }
   try {
     await requestJson('/api/admin/operator-session', {
       method: 'DELETE',
       body: JSON.stringify({}),
     });
     await loadOperatorSyncStatus();
-    showFlash('远程会话已清除。', 'success', portalFlash);
+    showFlash('远程会话已清除。');
   } catch (error) {
-    showFlash(error.message, 'error', portalFlash);
-  }
-});
-
-refreshAdminButton.addEventListener('click', async () => {
-  clearFlash(portalFlash);
-  try {
-    await loadAdminUsers();
-    await loadOperatorSyncStatus();
-    showFlash('列表已刷新。', 'success', portalFlash);
-  } catch (error) {
-    showFlash(error.message, 'error', portalFlash);
+    showFlash(error.message, 'error');
   }
 });
 
