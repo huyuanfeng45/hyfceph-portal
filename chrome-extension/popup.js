@@ -1,9 +1,12 @@
 const portalBaseUrlInput = document.getElementById('portalBaseUrl');
 const operatorApiKeyInput = document.getElementById('operatorApiKey');
+const autoRefreshEnabledInput = document.getElementById('autoRefreshEnabled');
+const autoRefreshMinutesInput = document.getElementById('autoRefreshMinutes');
 const saveBtn = document.getElementById('saveBtn');
 const syncBtn = document.getElementById('syncBtn');
 const pageStateEl = document.getElementById('pageState');
 const syncStateEl = document.getElementById('syncState');
+const refreshStateEl = document.getElementById('refreshState');
 const detailEl = document.getElementById('detail');
 
 function sendMessage(message) {
@@ -26,9 +29,12 @@ function setDetail(text) {
 function renderStatus(payload) {
   const activeTab = payload?.activeTab || {};
   const lastStatus = payload?.lastStatus || null;
+  const autoRefreshEnabled = payload?.autoRefreshEnabled !== false;
+  const autoRefreshMinutes = Number(payload?.autoRefreshMinutes || 10);
 
   pageStateEl.textContent = activeTab.supported ? '已就绪' : '未就绪';
   syncStateEl.textContent = lastStatus?.ok ? '在线' : (lastStatus ? '异常' : '未同步');
+  refreshStateEl.textContent = autoRefreshEnabled ? `已开启 / ${autoRefreshMinutes} 分钟` : '未开启';
 
   if (!activeTab.supported) {
     setDetail(activeTab.label || '请先打开侧位片网页。');
@@ -56,6 +62,9 @@ async function loadState() {
 
   portalBaseUrlInput.value = response.portalBaseUrl || '';
   operatorApiKeyInput.value = response.operatorApiKey || '';
+  autoRefreshEnabledInput.checked = response.autoRefreshEnabled !== false;
+  autoRefreshMinutesInput.value = String(response.autoRefreshMinutes || 10);
+  autoRefreshMinutesInput.disabled = !autoRefreshEnabledInput.checked;
   renderStatus(response);
 }
 
@@ -64,6 +73,8 @@ async function saveConfig() {
     type: 'hyfceph:save-config',
     portalBaseUrl: portalBaseUrlInput.value.trim(),
     operatorApiKey: operatorApiKeyInput.value.trim(),
+    autoRefreshEnabled: autoRefreshEnabledInput.checked,
+    autoRefreshMinutes: Number(autoRefreshMinutesInput.value || 10),
   });
   if (!response?.ok) {
     throw new Error(response?.error || '保存失败。');
@@ -95,6 +106,10 @@ syncBtn.addEventListener('click', async () => {
   } catch (error) {
     setDetail(error instanceof Error ? error.message : String(error));
   }
+});
+
+autoRefreshEnabledInput.addEventListener('change', () => {
+  autoRefreshMinutesInput.disabled = !autoRefreshEnabledInput.checked;
 });
 
 loadState().catch((error) => {

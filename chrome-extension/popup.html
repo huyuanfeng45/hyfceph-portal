@@ -25,6 +25,16 @@
           <span>管理员 API Key</span>
           <textarea id="operatorApiKey" rows="3" placeholder="请填写管理员账号生成的 API Key"></textarea>
         </label>
+        <div class="inline-settings">
+          <label class="switch-field">
+            <input id="autoRefreshEnabled" type="checkbox" />
+            <span>自动刷新网页</span>
+          </label>
+          <label class="field compact-field">
+            <span>刷新间隔（分钟）</span>
+            <input id="autoRefreshMinutes" type="number" min="1" max="240" step="1" />
+          </label>
+        </div>
         <div class="actions">
           <button id="saveBtn" class="primary" type="button">保存配置</button>
           <button id="syncBtn" type="button">立即同步</button>
@@ -39,6 +49,10 @@
         <div class="row">
           <span class="label">同步状态</span>
           <strong id="syncState">未同步</strong>
+        </div>
+        <div class="row">
+          <span class="label">自动刷新</span>
+          <strong id="refreshState">未开启</strong>
         </div>
         <p id="detail" class="detail">请先打开侧位片网页，并在这里保存管理员 API Key。</p>
       </section>

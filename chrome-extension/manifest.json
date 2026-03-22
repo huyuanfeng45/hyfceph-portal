@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "HYFCeph Bridge",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Sync the owner's active ceph browser session to HYFCeph so public users can submit images without handling upstream links or tokens.",
   "permissions": [
     "storage",
-    "tabs"
+    "tabs",
+    "alarms"
   ],
   "host_permissions": [
     "https://pd.aiyayi.com/*",

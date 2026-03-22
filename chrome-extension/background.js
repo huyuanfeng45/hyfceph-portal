@@ -1,40 +1,96 @@
 const DEFAULT_PORTAL_BASE_URL = 'https://hyfceph.52ortho.com/';
+const DEFAULT_AUTO_REFRESH_ENABLED = true;
+const DEFAULT_AUTO_REFRESH_MINUTES = 10;
+const MIN_AUTO_REFRESH_MINUTES = 1;
+const MAX_AUTO_REFRESH_MINUTES = 240;
+const AUTO_REFRESH_ALARM = 'hyfceph:auto-refresh';
+const AUTO_SYNC_DELAY_MS = 1500;
+const TAB_SYNC_MAX_ATTEMPTS = 3;
+const TAB_SYNC_RETRY_MS = 1200;
 const BARK_BASE_URL = 'https://api.day.app';
 const BARK_DEVICE_KEY = '7ffBf7F85e3WbFyKrJTEcH';
 const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
 const STORAGE_KEYS = {
   portalBaseUrl: 'hyfceph_portal_base_url',
   operatorApiKey: 'hyfceph_operator_api_key',
+  autoRefreshEnabled: 'hyfceph_auto_refresh_enabled',
+  autoRefreshMinutes: 'hyfceph_auto_refresh_minutes',
   lastStatus: 'hyfceph_last_status',
   lastPayload: 'hyfceph_last_payload',
   lastAlert: 'hyfceph_last_bark_alert',
 };
 const SUPPORTED_URL_PATTERN = /^https:\/\/pd\.aiyayi\.com\/latera\//i;
+const SUPPORTED_TAB_PATTERNS = ['https://pd.aiyayi.com/latera/*'];
 
 function ensureTrailingSlash(value) {
   return value.endsWith('/') ? value : `${value}/`;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function normalizeAutoRefreshMinutes(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_AUTO_REFRESH_MINUTES;
+  }
+  return Math.min(MAX_AUTO_REFRESH_MINUTES, Math.max(MIN_AUTO_REFRESH_MINUTES, Math.round(numeric)));
 }
 
 async function getStoredConfig() {
   const stored = await chrome.storage.local.get([
     STORAGE_KEYS.portalBaseUrl,
     STORAGE_KEYS.operatorApiKey,
+    STORAGE_KEYS.autoRefreshEnabled,
+    STORAGE_KEYS.autoRefreshMinutes,
     STORAGE_KEYS.lastStatus,
     STORAGE_KEYS.lastPayload,
   ]);
   return {
     portalBaseUrl: ensureTrailingSlash(String(stored[STORAGE_KEYS.portalBaseUrl] || DEFAULT_PORTAL_BASE_URL).trim() || DEFAULT_PORTAL_BASE_URL),
     operatorApiKey: String(stored[STORAGE_KEYS.operatorApiKey] || '').trim(),
+    autoRefreshEnabled: stored[STORAGE_KEYS.autoRefreshEnabled] !== false,
+    autoRefreshMinutes: normalizeAutoRefreshMinutes(stored[STORAGE_KEYS.autoRefreshMinutes]),
     lastStatus: stored[STORAGE_KEYS.lastStatus] || null,
     lastPayload: stored[STORAGE_KEYS.lastPayload] || null,
   };
 }
 
-async function saveStoredConfig({ portalBaseUrl, operatorApiKey }) {
-  await chrome.storage.local.set({
-    [STORAGE_KEYS.portalBaseUrl]: ensureTrailingSlash(String(portalBaseUrl || DEFAULT_PORTAL_BASE_URL).trim() || DEFAULT_PORTAL_BASE_URL),
-    [STORAGE_KEYS.operatorApiKey]: String(operatorApiKey || '').trim(),
+async function ensureAutoRefreshAlarm(config = null) {
+  const nextConfig = config || await getStoredConfig();
+  await chrome.alarms.clear(AUTO_REFRESH_ALARM);
+  if (!nextConfig.autoRefreshEnabled) {
+    return;
+  }
+  chrome.alarms.create(AUTO_REFRESH_ALARM, {
+    periodInMinutes: normalizeAutoRefreshMinutes(nextConfig.autoRefreshMinutes),
   });
+}
+
+async function saveStoredConfig({
+  portalBaseUrl,
+  operatorApiKey,
+  autoRefreshEnabled,
+  autoRefreshMinutes,
+}) {
+  const nextConfig = {
+    portalBaseUrl: ensureTrailingSlash(String(portalBaseUrl || DEFAULT_PORTAL_BASE_URL).trim() || DEFAULT_PORTAL_BASE_URL),
+    operatorApiKey: String(operatorApiKey || '').trim(),
+    autoRefreshEnabled: Boolean(autoRefreshEnabled),
+    autoRefreshMinutes: normalizeAutoRefreshMinutes(autoRefreshMinutes),
+  };
+
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.portalBaseUrl]: nextConfig.portalBaseUrl,
+    [STORAGE_KEYS.operatorApiKey]: nextConfig.operatorApiKey,
+    [STORAGE_KEYS.autoRefreshEnabled]: nextConfig.autoRefreshEnabled,
+    [STORAGE_KEYS.autoRefreshMinutes]: nextConfig.autoRefreshMinutes,
+  });
+
+  await ensureAutoRefreshAlarm(nextConfig);
 }
 
 async function setBridgeBadge(status) {
@@ -196,6 +252,12 @@ async function syncOperatorSession(payload, reason = 'capture') {
   return status;
 }
 
+async function getSupportedTabs() {
+  return chrome.tabs.query({
+    url: SUPPORTED_TAB_PATTERNS,
+  });
+}
+
 async function getActiveTabSummary() {
   const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const tab = tabs[0];
@@ -218,6 +280,52 @@ async function getActiveTabSummary() {
   };
 }
 
+function sendTabMessage(tabId, message) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, message, (response) => {
+      const runtimeError = chrome.runtime.lastError;
+      if (runtimeError) {
+        reject(new Error(runtimeError.message));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+async function requestTabSyncById(tabId, {
+  reason = 'force-sync',
+  alertOnFailure = true,
+  maxAttempts = TAB_SYNC_MAX_ATTEMPTS,
+} = {}) {
+  let lastErrorMessage = '同步失败。';
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await sendTabMessage(tabId, { type: 'hyfceph:force-sync' });
+      if (response?.ok) {
+        return response;
+      }
+      lastErrorMessage = response?.error || '同步失败。';
+    } catch (error) {
+      lastErrorMessage = error instanceof Error ? error.message : String(error);
+    }
+
+    if (attempt < maxAttempts) {
+      await wait(TAB_SYNC_RETRY_MS);
+    }
+  }
+
+  if (alertOnFailure) {
+    await sendBarkAlert({
+      title: 'HYFCeph Bridge 异常',
+      body: `自动同步失败：${lastErrorMessage}`,
+      fingerprint: `tab-sync:${reason}:${lastErrorMessage}`,
+    });
+  }
+  throw new Error(lastErrorMessage);
+}
+
 async function requestTabSync() {
   const activeTab = await getActiveTabSummary();
   if (!activeTab.supported || !activeTab.tabId) {
@@ -229,31 +337,80 @@ async function requestTabSync() {
     throw new Error(activeTab.label);
   }
 
-  return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(activeTab.tabId, { type: 'hyfceph:force-sync' }, (response) => {
-      const runtimeError = chrome.runtime.lastError;
-      if (runtimeError) {
-        void sendBarkAlert({
-          title: 'HYFCeph Bridge 异常',
-          body: '强制同步失败：当前页面还没有连接到扩展，请刷新页面后重试。',
-          fingerprint: 'force-sync:runtime-not-connected',
-        });
-        reject(new Error('当前页面还没有连接到扩展，请刷新页面后重试。'));
-        return;
-      }
-      if (!response?.ok) {
-        void sendBarkAlert({
-          title: 'HYFCeph Bridge 异常',
-          body: `强制同步失败：${response?.error || '同步失败。'}`,
-          fingerprint: `force-sync:error:${response?.error || 'unknown'}`,
-        });
-        reject(new Error(response?.error || '同步失败。'));
-        return;
-      }
-      resolve(response);
-    });
+  return requestTabSyncById(activeTab.tabId, {
+    reason: 'popup-force-sync',
+    alertOnFailure: true,
   });
 }
+
+async function reloadSupportedTabs(reason = 'auto-refresh') {
+  const config = await getStoredConfig();
+  if (!config.autoRefreshEnabled || !config.operatorApiKey) {
+    return { ok: true, refreshedTabs: 0, skipped: true };
+  }
+
+  const tabs = await getSupportedTabs();
+  const supportedTabs = tabs.filter((tab) => tab.id && SUPPORTED_URL_PATTERN.test(String(tab.url || '')));
+  if (!supportedTabs.length) {
+    return { ok: true, refreshedTabs: 0, skipped: true };
+  }
+
+  await Promise.all(supportedTabs.map((tab) => chrome.tabs.reload(tab.id)));
+  await persistStatus({
+    ok: true,
+    reason,
+    message: `已刷新 ${supportedTabs.length} 个页面，等待自动同步。`,
+    syncedAt: new Date().toISOString(),
+    operatorSession: config.lastStatus?.operatorSession || null,
+  });
+  return { ok: true, refreshedTabs: supportedTabs.length };
+}
+
+async function handleCompletedSupportedTab(tabId, tabUrl) {
+  const config = await getStoredConfig();
+  if (!config.operatorApiKey) {
+    return;
+  }
+  if (!SUPPORTED_URL_PATTERN.test(String(tabUrl || ''))) {
+    return;
+  }
+
+  await wait(AUTO_SYNC_DELAY_MS);
+  try {
+    await requestTabSyncById(tabId, {
+      reason: 'tab-load-complete',
+      alertOnFailure: true,
+    });
+  } catch {
+    // Bark and status are handled inside requestTabSyncById/syncOperatorSession.
+  }
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  void ensureAutoRefreshAlarm();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  void ensureAutoRefreshAlarm();
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== AUTO_REFRESH_ALARM) {
+    return;
+  }
+  void reloadSupportedTabs('auto-refresh');
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'complete') {
+    return;
+  }
+  const url = String(tab.url || '');
+  if (!SUPPORTED_URL_PATTERN.test(url)) {
+    return;
+  }
+  void handleCompletedSupportedTab(tabId, url);
+});
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
@@ -273,6 +430,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         ok: true,
         portalBaseUrl: config.portalBaseUrl,
         operatorApiKey: config.operatorApiKey,
+        autoRefreshEnabled: config.autoRefreshEnabled,
+        autoRefreshMinutes: config.autoRefreshMinutes,
         lastStatus: config.lastStatus,
         activeTab,
       };
@@ -282,12 +441,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       await saveStoredConfig({
         portalBaseUrl: message.portalBaseUrl,
         operatorApiKey: message.operatorApiKey,
+        autoRefreshEnabled: message.autoRefreshEnabled,
+        autoRefreshMinutes: message.autoRefreshMinutes,
       });
       const config = await getStoredConfig();
       return {
         ok: true,
         portalBaseUrl: config.portalBaseUrl,
         operatorApiKey: config.operatorApiKey,
+        autoRefreshEnabled: config.autoRefreshEnabled,
+        autoRefreshMinutes: config.autoRefreshMinutes,
       };
     }
 
@@ -309,3 +472,5 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   return true;
 });
+
+void ensureAutoRefreshAlarm();

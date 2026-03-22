@@ -75,6 +75,30 @@ body {
   min-height: 70px;
 }
 
+.inline-settings {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.switch-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #13304a;
+}
+
+.switch-field input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.compact-field {
+  margin-bottom: 0;
+}
+
 .actions {
   display: flex;
   gap: 8px;
