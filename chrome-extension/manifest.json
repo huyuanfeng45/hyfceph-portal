@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HYFCeph Bridge",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Sync the owner's active ceph browser session to HYFCeph so public users can submit images without handling upstream links or tokens.",
   "permissions": [
     "storage",
@@ -10,6 +10,7 @@
   "host_permissions": [
     "https://pd.aiyayi.com/*",
     "https://hyfceph.52ortho.com/*",
+    "https://api.day.app/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],

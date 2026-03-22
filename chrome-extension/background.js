@@ -1,9 +1,13 @@
 const DEFAULT_PORTAL_BASE_URL = 'https://hyfceph.52ortho.com/';
+const BARK_BASE_URL = 'https://api.day.app';
+const BARK_DEVICE_KEY = '7ffBf7F85e3WbFyKrJTEcH';
+const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
 const STORAGE_KEYS = {
   portalBaseUrl: 'hyfceph_portal_base_url',
   operatorApiKey: 'hyfceph_operator_api_key',
   lastStatus: 'hyfceph_last_status',
   lastPayload: 'hyfceph_last_payload',
+  lastAlert: 'hyfceph_last_bark_alert',
 };
 const SUPPORTED_URL_PATTERN = /^https:\/\/pd\.aiyayi\.com\/latera\//i;
 
@@ -48,6 +52,47 @@ async function persistStatus(status) {
   await setBridgeBadge(status);
 }
 
+function normalizeAlertText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+async function sendBarkAlert({ title, body, fingerprint }) {
+  if (!BARK_DEVICE_KEY) {
+    return false;
+  }
+
+  const stored = await chrome.storage.local.get([STORAGE_KEYS.lastAlert]);
+  const lastAlert = stored[STORAGE_KEYS.lastAlert] || null;
+  const now = Date.now();
+  if (
+    lastAlert
+    && lastAlert.fingerprint === fingerprint
+    && typeof lastAlert.sentAt === 'number'
+    && now - lastAlert.sentAt < ALERT_COOLDOWN_MS
+  ) {
+    return false;
+  }
+
+  const alertUrl = new URL(
+    `${BARK_BASE_URL}/${encodeURIComponent(BARK_DEVICE_KEY)}/${encodeURIComponent(normalizeAlertText(title))}/${encodeURIComponent(normalizeAlertText(body))}`,
+  );
+  alertUrl.searchParams.set('group', 'HYFCeph Bridge');
+  alertUrl.searchParams.set('isArchive', '1');
+
+  try {
+    await fetch(alertUrl.toString(), { method: 'GET' });
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.lastAlert]: {
+        fingerprint,
+        sentAt: now,
+      },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function buildOperatorSessionUrl(portalBaseUrl) {
   return new URL('api/admin/operator-session', portalBaseUrl).toString();
 }
@@ -89,15 +134,36 @@ async function syncOperatorSession(payload, reason = 'capture') {
     return status;
   }
 
-  const response = await fetch(buildOperatorSessionUrl(config.portalBaseUrl), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': config.operatorApiKey,
-    },
-    body: JSON.stringify(payload),
-  });
-  const data = await parseJsonResponse(response);
+  let response;
+  let data;
+  try {
+    response = await fetch(buildOperatorSessionUrl(config.portalBaseUrl), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': config.operatorApiKey,
+      },
+      body: JSON.stringify(payload),
+    });
+    data = await parseJsonResponse(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const status = {
+      ok: false,
+      reason,
+      message: message || '网络异常',
+      syncedAt: null,
+      operatorSession: null,
+    };
+    await persistStatus(status);
+    await sendBarkAlert({
+      title: 'HYFCeph Bridge 异常',
+      body: `同步失败：${status.message}\n页面：${payload?.href || payload?.pageUrl || '-'}`,
+      fingerprint: `sync-network:${status.message}:${payload?.pageUrl || ''}`,
+    });
+    throw new Error(status.message);
+  }
+
   if (!response.ok) {
     const status = {
       ok: false,
@@ -107,6 +173,11 @@ async function syncOperatorSession(payload, reason = 'capture') {
       operatorSession: null,
     };
     await persistStatus(status);
+    await sendBarkAlert({
+      title: 'HYFCeph Bridge 异常',
+      body: `同步失败：${status.message}\n页面：${payload?.href || payload?.pageUrl || '-'}`,
+      fingerprint: `sync-http:${response.status}:${status.message}:${payload?.pageUrl || ''}`,
+    });
     throw new Error(status.message);
   }
 
@@ -150,6 +221,11 @@ async function getActiveTabSummary() {
 async function requestTabSync() {
   const activeTab = await getActiveTabSummary();
   if (!activeTab.supported || !activeTab.tabId) {
+    await sendBarkAlert({
+      title: 'HYFCeph Bridge 异常',
+      body: `强制同步失败：${activeTab.label}`,
+      fingerprint: `force-sync:${activeTab.label}`,
+    });
     throw new Error(activeTab.label);
   }
 
@@ -157,10 +233,20 @@ async function requestTabSync() {
     chrome.tabs.sendMessage(activeTab.tabId, { type: 'hyfceph:force-sync' }, (response) => {
       const runtimeError = chrome.runtime.lastError;
       if (runtimeError) {
+        void sendBarkAlert({
+          title: 'HYFCeph Bridge 异常',
+          body: '强制同步失败：当前页面还没有连接到扩展，请刷新页面后重试。',
+          fingerprint: 'force-sync:runtime-not-connected',
+        });
         reject(new Error('当前页面还没有连接到扩展，请刷新页面后重试。'));
         return;
       }
       if (!response?.ok) {
+        void sendBarkAlert({
+          title: 'HYFCeph Bridge 异常',
+          body: `强制同步失败：${response?.error || '同步失败。'}`,
+          fingerprint: `force-sync:error:${response?.error || 'unknown'}`,
+        });
         reject(new Error(response?.error || '同步失败。'));
         return;
       }
