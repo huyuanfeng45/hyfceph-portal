@@ -29,12 +29,15 @@ function setDetail(text) {
 function renderStatus(payload) {
   const activeTab = payload?.activeTab || {};
   const lastStatus = payload?.lastStatus || null;
+  const lastSyncedTab = payload?.lastSyncedTab || null;
   const autoRefreshEnabled = payload?.autoRefreshEnabled !== false;
   const autoRefreshMinutes = Number(payload?.autoRefreshMinutes || 10);
 
   pageStateEl.textContent = activeTab.supported ? '已就绪' : '未就绪';
   syncStateEl.textContent = lastStatus?.ok ? '在线' : (lastStatus ? '异常' : '未同步');
-  refreshStateEl.textContent = autoRefreshEnabled ? `已开启 / ${autoRefreshMinutes} 分钟` : '未开启';
+  refreshStateEl.textContent = autoRefreshEnabled
+    ? `已开启 / ${autoRefreshMinutes} 分钟 / ${lastSyncedTab?.title ? '已绑定' : '未绑定'}`
+    : '未开启';
 
   if (!activeTab.supported) {
     setDetail(activeTab.label || '请先打开侧位片网页。');
@@ -46,6 +49,7 @@ function renderStatus(payload) {
       lastStatus.operatorSession?.userName ? `操作者：${lastStatus.operatorSession.userName}` : '',
       lastStatus.operatorSession?.syncedAt ? `最近同步：${new Date(lastStatus.operatorSession.syncedAt).toLocaleString('zh-CN')}` : '',
       lastStatus.operatorSession?.expiresAt ? `过期：${new Date(lastStatus.operatorSession.expiresAt).toLocaleString('zh-CN')}` : '',
+      lastSyncedTab?.title ? `刷新目标：${lastSyncedTab.title}` : '',
     ].filter(Boolean);
     setDetail(details.join('\n') || '同步成功。');
     return;

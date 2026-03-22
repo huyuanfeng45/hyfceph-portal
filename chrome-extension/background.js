@@ -17,6 +17,7 @@ const STORAGE_KEYS = {
   autoRefreshMinutes: 'hyfceph_auto_refresh_minutes',
   lastStatus: 'hyfceph_last_status',
   lastPayload: 'hyfceph_last_payload',
+  lastSyncedTab: 'hyfceph_last_synced_tab',
   lastAlert: 'hyfceph_last_bark_alert',
 };
 const SUPPORTED_URL_PATTERN = /^https:\/\/pd\.aiyayi\.com\/latera\//i;
@@ -48,6 +49,7 @@ async function getStoredConfig() {
     STORAGE_KEYS.autoRefreshMinutes,
     STORAGE_KEYS.lastStatus,
     STORAGE_KEYS.lastPayload,
+    STORAGE_KEYS.lastSyncedTab,
   ]);
   return {
     portalBaseUrl: ensureTrailingSlash(String(stored[STORAGE_KEYS.portalBaseUrl] || DEFAULT_PORTAL_BASE_URL).trim() || DEFAULT_PORTAL_BASE_URL),
@@ -56,6 +58,7 @@ async function getStoredConfig() {
     autoRefreshMinutes: normalizeAutoRefreshMinutes(stored[STORAGE_KEYS.autoRefreshMinutes]),
     lastStatus: stored[STORAGE_KEYS.lastStatus] || null,
     lastPayload: stored[STORAGE_KEYS.lastPayload] || null,
+    lastSyncedTab: stored[STORAGE_KEYS.lastSyncedTab] || null,
   };
 }
 
@@ -106,6 +109,47 @@ async function persistStatus(status) {
     [STORAGE_KEYS.lastStatus]: status,
   });
   await setBridgeBadge(status);
+}
+
+async function persistLastSyncedTab(tab) {
+  if (!tab?.id) {
+    return;
+  }
+
+  const url = String(tab.url || '').trim();
+  if (!SUPPORTED_URL_PATTERN.test(url)) {
+    return;
+  }
+
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.lastSyncedTab]: {
+      id: tab.id,
+      url,
+      title: String(tab.title || '').trim(),
+      windowId: tab.windowId ?? null,
+      recordedAt: new Date().toISOString(),
+    },
+  });
+}
+
+async function getTrackedRefreshTab() {
+  const { lastSyncedTab } = await getStoredConfig();
+  if (!lastSyncedTab?.id) {
+    return null;
+  }
+
+  try {
+    const tab = await chrome.tabs.get(lastSyncedTab.id);
+    const url = String(tab.url || '').trim();
+    if (!SUPPORTED_URL_PATTERN.test(url)) {
+      await chrome.storage.local.remove(STORAGE_KEYS.lastSyncedTab);
+      return null;
+    }
+    return tab;
+  } catch {
+    await chrome.storage.local.remove(STORAGE_KEYS.lastSyncedTab);
+    return null;
+  }
 }
 
 function normalizeAlertText(value) {
@@ -164,7 +208,7 @@ async function parseJsonResponse(response) {
   }
 }
 
-async function syncOperatorSession(payload, reason = 'capture') {
+async function syncOperatorSession(payload, reason = 'capture', sourceTab = null) {
   const config = await getStoredConfig();
   if (!config.operatorApiKey) {
     const status = {
@@ -248,14 +292,9 @@ async function syncOperatorSession(payload, reason = 'capture') {
   await chrome.storage.local.set({
     [STORAGE_KEYS.lastPayload]: payload,
   });
+  await persistLastSyncedTab(sourceTab);
   await persistStatus(status);
   return status;
-}
-
-async function getSupportedTabs() {
-  return chrome.tabs.query({
-    url: SUPPORTED_TAB_PATTERNS,
-  });
 }
 
 async function getActiveTabSummary() {
@@ -304,6 +343,12 @@ async function requestTabSyncById(tabId, {
     try {
       const response = await sendTabMessage(tabId, { type: 'hyfceph:force-sync' });
       if (response?.ok) {
+        try {
+          const tab = await chrome.tabs.get(tabId);
+          await persistLastSyncedTab(tab);
+        } catch {
+          // Ignore tab lookup failure after a successful sync.
+        }
         return response;
       }
       lastErrorMessage = response?.error || '同步失败。';
@@ -349,21 +394,20 @@ async function reloadSupportedTabs(reason = 'auto-refresh') {
     return { ok: true, refreshedTabs: 0, skipped: true };
   }
 
-  const tabs = await getSupportedTabs();
-  const supportedTabs = tabs.filter((tab) => tab.id && SUPPORTED_URL_PATTERN.test(String(tab.url || '')));
-  if (!supportedTabs.length) {
+  const trackedTab = await getTrackedRefreshTab();
+  if (!trackedTab?.id) {
     return { ok: true, refreshedTabs: 0, skipped: true };
   }
 
-  await Promise.all(supportedTabs.map((tab) => chrome.tabs.reload(tab.id)));
+  await chrome.tabs.reload(trackedTab.id);
   await persistStatus({
     ok: true,
     reason,
-    message: `已刷新 ${supportedTabs.length} 个页面，等待自动同步。`,
+    message: `已刷新上次成功同步的页面，等待自动同步。`,
     syncedAt: new Date().toISOString(),
     operatorSession: config.lastStatus?.operatorSession || null,
   });
-  return { ok: true, refreshedTabs: supportedTabs.length };
+  return { ok: true, refreshedTabs: 1 };
 }
 
 async function handleCompletedSupportedTab(tabId, tabUrl) {
@@ -419,7 +463,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     if (message.type === 'hyfceph:session-capture') {
-      const status = await syncOperatorSession(message.payload || {}, message.reason || 'capture');
+      const status = await syncOperatorSession(message.payload || {}, message.reason || 'capture', _sender?.tab || null);
       return { ok: status.ok, status };
     }
 
@@ -433,6 +477,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         autoRefreshEnabled: config.autoRefreshEnabled,
         autoRefreshMinutes: config.autoRefreshMinutes,
         lastStatus: config.lastStatus,
+        lastSyncedTab: config.lastSyncedTab,
         activeTab,
       };
     }
