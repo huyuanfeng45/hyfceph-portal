@@ -90,6 +90,64 @@ const METRIC_ORDER = ['SNA', 'SNB', 'ANB', 'GoGn-SN', 'FMA', 'U1-SN', 'IMPA'];
 const PRIMARY_LANDMARK_KEYS = new Set(
   Object.values(METRIC_DEFINITIONS).flatMap((definition) => definition.requiredKeys),
 );
+const FEATURED_KEYPOINT_LABELS = new Set([
+  'S', 'Na', 'Po', 'Ba', 'Bo', 'Or', 'Ptm', 'ANS', 'PNS', 'A', 'Sd', 'Pt', 'Co', 'Ar', 'Go', 'B', 'Id', 'Pog', 'Me', 'Gn',
+  'D', 'DU', 'Pcd', 'Rp', 'Tpl', 'L1A', 'L1', 'L6', 'U6', 'U1A', 'U1', 'L6D', 'L6M', 'L6A', 'U6A', 'U6D', 'U6M',
+  'G', "N'", 'Sn', 'UL', 'LL', 'Ls', 'Li', "Pog'", "Me'", 'Stmi', 'Stms', "B'", "Gn'", 'Cm', 'Prn', "A'", 'C',
+  'B_A', 'Dmark', 'H1', 'Xi', 'Pt3', 'AD_O', 'airway7', 'airway5', 'airway45', 'airway4', 'airway3', 'airway2', 'airway1',
+  'D_A', 'U', 'UD', 'R1', 'J', 'VC', 'V_A', 'V_O', 'AB1', 'AB', 'A_A', 'FA', 'Smp', 'PM', 'An', 'MPW', 'UPW', 'TPPW',
+  'LPW', 'TB', 'AD2',
+]);
+const OVERLAY_CONTOUR_GROUPS = [
+  {
+    name: 'soft-profile',
+    stroke: '#22c55e',
+    width: 2.4,
+    labels: ['G', 'G1', "N'", 'N2', 'Ns1', 'Noseau0', 'Noseau1', 'Noseau2', 'Noseau3', 'Noseau4', 'Noseau5', 'Noseau6', 'Noseau7', 'Noseau8', 'Noseau9', 'Noseau10', 'Prn', 'Cm', 'Sn', 'UL', 'ULau1', 'Ls', 'Stms', 'Stmi', 'Li', 'LL', 'LLau1', "Pog'", "Me'", "Gn'"],
+  },
+  {
+    name: 'cranial-base',
+    stroke: '#60a5fa',
+    width: 2.1,
+    labels: ['S', 'Sella1', 'Sella2', 'Sella3', 'Sella4', 'Sella5', 'Sella6', 'Sella7', 'S14', 'S12', 'S11', 'S10', 'S9', 'S3', 'S2', 'Ba1', 'Ba2', 'Ba3', 'Ba4', 'Ba5', 'Ba6', 'Ba7', 'Ba8', 'Ba', 'Bo'],
+  },
+  {
+    name: 'orbit-pt',
+    stroke: '#38bdf8',
+    width: 1.9,
+    labels: ['Po1', 'Po', 'Or1', 'Or2', 'Or', 'Orau1', 'Or4', 'Pcd', 'Pt1', 'Pt2', 'Pt3', 'Pt4', 'Pt', 'Co', 'Ar'],
+  },
+  {
+    name: 'maxilla-contour',
+    stroke: '#f59e0b',
+    width: 1.9,
+    labels: ['Ptm', 'PNS', 'ANS', 'A12', 'A11', 'A10', 'A9', 'A8', 'A7', 'A6', 'A5', 'A4', 'A3', 'A2', 'A1', 'A', 'A_A', 'AB1', 'AB'],
+  },
+  {
+    name: 'mandible-contour',
+    stroke: '#f97316',
+    width: 1.9,
+    labels: ['Man1', 'Man2', 'Man3', 'Go13', 'Go12', 'Go', 'Bone_LP1', 'Bone_LP2', 'Bone_LP3', 'Bone_LP4', 'B_A', 'B', 'Pog', 'Me', 'Gn'],
+  },
+  {
+    name: 'upper-dentition',
+    stroke: '#f43f5e',
+    width: 1.7,
+    labels: ['U6A', 'U6D', 'U6M', 'U6', 'U1A', 'U1', 'DU', 'U', 'UD'],
+  },
+  {
+    name: 'lower-dentition',
+    stroke: '#fb7185',
+    width: 1.7,
+    labels: ['L6A', 'L6D', 'L6M', 'L6', 'L1A', 'L1', 'Id2', 'Id'],
+  },
+  {
+    name: 'airway',
+    stroke: '#a78bfa',
+    width: 1.8,
+    labels: ['AD_O', 'AD2', 'airway7', 'airway5', 'airway45', 'airway4', 'airway3', 'airway2', 'airway1'],
+  },
+];
 
 function printHelp() {
   console.log(`Usage:
@@ -828,6 +886,56 @@ function collectLateraLandmarks(payload) {
     .filter(Boolean);
 }
 
+function collectOverlayData(payload) {
+  const data = payload?.data || payload || {};
+  const headPoints = Array.isArray(data.head)
+    ? data.head.map((item) => extractLateraPoint(item, 'head')).filter(Boolean)
+    : [];
+  const rulerPoints = Array.isArray(data?.ruler?.kps)
+    ? data.ruler.kps.map((item) => extractLateraPoint(item, 'ruler')).filter(Boolean)
+    : [];
+  const spineSections = Array.isArray(data.spine)
+    ? data.spine
+      .map((section, index) => ({
+        name: String(section?.name || `spine-${index + 1}`),
+        points: Array.isArray(section?.kps)
+          ? section.kps.map((item) => extractLateraPoint(item, 'spine')).filter(Boolean)
+          : [],
+      }))
+      .filter((section) => section.points.length)
+    : [];
+
+  return {
+    headPoints,
+    rulerPoints,
+    spineSections,
+  };
+}
+
+function buildPointLookup(points) {
+  const lookup = new Map();
+  for (const point of points) {
+    if (!lookup.has(point.landmark)) {
+      lookup.set(point.landmark, point);
+    }
+  }
+  return lookup;
+}
+
+function buildPolylinePoints(points) {
+  return points.map((point) => `${point.x},${point.y}`).join(' ');
+}
+
+function classifyHeadPoint(point) {
+  if (PRIMARY_LANDMARK_KEYS.has(point.key)) {
+    return 'primary';
+  }
+  if (FEATURED_KEYPOINT_LABELS.has(point.landmark)) {
+    return 'keypoint';
+  }
+  return 'auxiliary';
+}
+
 function upsertPoint(pointMap, point) {
   const current = pointMap.get(point.key);
   if (!current || (current.source !== 'head' && point.source === 'head')) {
@@ -1163,25 +1271,30 @@ function buildAnnotatedSvg({
   width,
   height,
   landmarks,
+  overlayData,
   analysis,
   analysisError,
 }) {
-  const panelWidth = 320;
+  const panelWidth = 360;
   const svgWidth = width + panelWidth;
   const svgHeight = height;
   const pointRadius = clamp(Math.round(Math.min(width, height) / 220), 3, 6);
-  const labelFontSize = clamp(Math.round(Math.min(width, height) / 70), 11, 16);
-  const labelAll = landmarks.length <= 25;
+  const labelFontSize = clamp(Math.round(Math.min(width, height) / 88), 10, 14);
   const riskLabel = analysis?.riskLabel || '未生成测量结论';
   const metrics = analysis?.metrics || [];
   const confidenceText = analysis?.recognition?.confidence == null
     ? 'N/A'
     : `${analysis.recognition.confidence}%`;
+  const headPoints = overlayData?.headPoints?.length ? overlayData.headPoints : landmarks;
+  const rulerPoints = overlayData?.rulerPoints || [];
+  const spineSections = overlayData?.spineSections || [];
+  const pointLookup = buildPointLookup(headPoints);
   const panelLines = [
     `HYF Ceph`,
     `Risk: ${riskLabel}`,
-    `Points: ${landmarks.length}`,
+    `Points: ${headPoints.length}`,
     `Confidence: ${confidenceText}`,
+    `Display: image / outline / key / aux / labels`,
     '',
     ...metrics.map((metric) => `${metric.code}: ${metric.valueText}`),
   ];
@@ -1192,21 +1305,73 @@ function buildAnnotatedSvg({
     panelLines.push('', `Unsupported: ${analysis.unsupportedMetricCodes.join(', ')}`);
   }
 
-  const pointElements = landmarks.map((point) => {
-    const isPrimary = PRIMARY_LANDMARK_KEYS.has(point.key);
-    const shouldLabel = labelAll || isPrimary;
-    const color = isPrimary ? '#f97316' : '#38bdf8';
-    const stroke = isPrimary ? '#7c2d12' : '#0f172a';
-    const dx = isPrimary ? 10 : 6;
-    const dy = isPrimary ? -10 : -6;
+  const contourElements = OVERLAY_CONTOUR_GROUPS
+    .map((group) => {
+      const points = group.labels.map((label) => pointLookup.get(label)).filter(Boolean);
+      if (points.length < 2) {
+        return '';
+      }
+      return `<polyline points="${buildPolylinePoints(points)}" fill="none" stroke="${group.stroke}" stroke-width="${group.width}" stroke-linecap="round" stroke-linejoin="round" opacity="0.92" />`;
+    })
+    .join('');
+
+  const spineElements = spineSections
+    .map((section, index) => {
+      const hue = 270 + index * 12;
+      return `<polyline points="${buildPolylinePoints(section.points)}" fill="none" stroke="hsl(${hue} 90% 72%)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" opacity="0.92" />`;
+    })
+    .join('');
+
+  const rulerLine = rulerPoints.length >= 2
+    ? `<line x1="${rulerPoints[0].x}" y1="${rulerPoints[0].y}" x2="${rulerPoints[1].x}" y2="${rulerPoints[1].y}" stroke="#34d399" stroke-width="2" stroke-dasharray="5 4" opacity="0.95" />`
+    : '';
+
+  const renderLabel = (point, color, dxBase, dyOptions) => {
+    const seed = Array.from(point.landmark).reduce((sum, char) => sum + char.charCodeAt(0), 0);
+    const dx = dxBase + (seed % 4) * 2;
+    const dy = dyOptions[seed % dyOptions.length];
+    return `<text x="${point.x + dx}" y="${point.y + dy}" font-family="Menlo, Consolas, monospace" font-size="${labelFontSize}" fill="${color}" stroke="#111827" stroke-width="2.6" paint-order="stroke" dominant-baseline="middle">${escapeXml(point.landmark)}</text>`;
+  };
+
+  const headPointElements = headPoints.map((point) => {
+    const pointType = classifyHeadPoint(point);
+    const color = pointType === 'primary'
+      ? '#f97316'
+      : pointType === 'keypoint'
+        ? '#fde047'
+        : '#38bdf8';
+    const stroke = pointType === 'primary'
+      ? '#7c2d12'
+      : pointType === 'keypoint'
+        ? '#713f12'
+        : '#0f172a';
+    const radius = pointType === 'primary'
+      ? pointRadius + 1
+      : pointType === 'keypoint'
+        ? pointRadius
+        : Math.max(2.2, pointRadius - 0.6);
+    const labelColor = pointType === 'auxiliary' ? '#93c5fd' : '#ffffff';
 
     return [
-      `<circle cx="${point.x}" cy="${point.y}" r="${isPrimary ? pointRadius + 1 : pointRadius}" fill="${color}" stroke="${stroke}" stroke-width="1.5" />`,
-      shouldLabel
-        ? `<text x="${point.x + dx}" y="${point.y + dy}" font-family="Menlo, Consolas, monospace" font-size="${labelFontSize}" fill="#ffffff" stroke="#111827" stroke-width="3" paint-order="stroke" dominant-baseline="middle">${escapeXml(point.key)}</text>`
-        : '',
+      `<circle cx="${point.x}" cy="${point.y}" r="${radius}" fill="${color}" stroke="${stroke}" stroke-width="1.3" opacity="${pointType === 'auxiliary' ? '0.94' : '1'}" />`,
+      renderLabel(point, labelColor, pointType === 'primary' ? 10 : 7, pointType === 'auxiliary' ? [-8, -2, 6, 12] : [-12, -4, 8, 14]),
     ].join('');
   }).join('');
+
+  const rulerPointElements = rulerPoints.map((point) => [
+    `<circle cx="${point.x}" cy="${point.y}" r="${pointRadius}" fill="#34d399" stroke="#064e3b" stroke-width="1.3" />`,
+    renderLabel(point, '#bbf7d0', 8, [-10, 10]),
+  ].join('')).join('');
+
+  const spinePointElements = spineSections
+    .flatMap((section, index) => section.points.map((point) => {
+      const hue = 270 + index * 12;
+      return [
+        `<circle cx="${point.x}" cy="${point.y}" r="${Math.max(2, pointRadius - 1)}" fill="hsl(${hue} 88% 72%)" stroke="#1f2937" stroke-width="1.1" opacity="0.95" />`,
+        renderLabel(point, '#ddd6fe', 6, [-8, 8, 14]),
+      ].join('');
+    }))
+    .join('');
 
   const panelText = panelLines
     .map((line, index) => {
@@ -1222,7 +1387,8 @@ function buildAnnotatedSvg({
     `<rect width="${svgWidth}" height="${svgHeight}" fill="#0f172a" />`,
     `<image href="${imageDataUrl}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none" />`,
     `<rect x="${width}" y="0" width="${panelWidth}" height="${height}" fill="#111827" opacity="0.92" />`,
-    `<g>${pointElements}</g>`,
+    `<g>${contourElements}${spineElements}${rulerLine}</g>`,
+    `<g>${headPointElements}${rulerPointElements}${spinePointElements}</g>`,
     `<g>${panelText}</g>`,
     `</svg>`,
   ].join('');
@@ -1233,6 +1399,7 @@ async function writeAnnotatedSvg({
   imageBuffer,
   imageMimeType,
   landmarks,
+  overlayData,
   analysis,
   analysisError,
   outputPath,
@@ -1245,6 +1412,7 @@ async function writeAnnotatedSvg({
     width,
     height,
     landmarks,
+    overlayData,
     analysis,
     analysisError,
   });
@@ -1615,6 +1783,7 @@ async function main() {
   let annotatedSvgPath = null;
   let annotatedPngPath = null;
   let annotationError = null;
+  const overlayData = collectOverlayData(resolvedResult?.payload);
   const landmarks = analysis?.landmarks || collectLateraLandmarks(resolvedResult?.payload);
   if (!values['no-annotated-svg'] && landmarks.length) {
     try {
@@ -1623,6 +1792,7 @@ async function main() {
         imageBuffer: fileBuffer,
         imageMimeType,
         landmarks,
+        overlayData,
         analysis,
         analysisError,
         outputPath: path.resolve(values['annotated-output'] || defaultAnnotatedSvgPath(resolvedImagePath)),
