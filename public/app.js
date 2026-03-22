@@ -15,14 +15,16 @@ const apiKeyOutput = document.querySelector('#api-key-output');
 const apiKeyExpiry = document.querySelector('#api-key-expiry');
 const measureImageInput = document.querySelector('#measure-image-input');
 const measureImageButton = document.querySelector('#measure-image-button');
-const measureCurrentCaseButton = document.querySelector('#measure-current-case-button');
 const measureResult = document.querySelector('#measure-result');
 const measureRiskLabel = document.querySelector('#measure-risk-label');
 const measureInsight = document.querySelector('#measure-insight');
 const measureImage = document.querySelector('#measure-image');
 const measureMetrics = document.querySelector('#measure-metrics');
-const bridgeStatus = document.querySelector('#bridge-status');
-const bridgeDetail = document.querySelector('#bridge-detail');
+const operatorSyncPanel = document.querySelector('#operator-sync-panel');
+const operatorSyncStatus = document.querySelector('#operator-sync-status');
+const operatorSyncDetail = document.querySelector('#operator-sync-detail');
+const refreshOperatorSyncButton = document.querySelector('#refresh-operator-sync-button');
+const clearOperatorSyncButton = document.querySelector('#clear-operator-sync-button');
 const refreshAdminButton = document.querySelector('#refresh-admin-button');
 const adminPanel = document.querySelector('#admin-panel');
 const adminUsersBody = document.querySelector('#admin-users-body');
@@ -95,22 +97,6 @@ function resetMeasureResult() {
   measureMetrics.innerHTML = '';
 }
 
-function renderBridgeStatus(currentCase) {
-  if (!currentCase) {
-    bridgeStatus.textContent = '未同步';
-    bridgeDetail.textContent = '安装同步插件后，在病例页打开一次即可自动同步。';
-    return;
-  }
-
-  bridgeStatus.textContent = '已同步';
-  const details = [
-    currentCase.ptId ? `病例 ${currentCase.ptId}` : '已捕获病例上下文',
-    currentCase.ptVersion ? `版本 ${currentCase.ptVersion}` : '',
-    currentCase.syncedAt ? `同步于 ${formatDateTime(currentCase.syncedAt)}` : '',
-  ].filter(Boolean);
-  bridgeDetail.textContent = details.join('，');
-}
-
 function renderMeasureResult(result) {
   const analysis = result?.analysis || {};
   const metrics = result?.metrics || analysis.metrics || [];
@@ -147,6 +133,23 @@ function renderMeasureResult(result) {
   }
 
   measureResult.classList.remove('hidden');
+}
+
+function renderOperatorSyncStatus(operatorSession) {
+  if (!operatorSession) {
+    operatorSyncStatus.textContent = '未连接';
+    operatorSyncDetail.textContent = '扩展开始同步后，这里会显示最近一次同步时间和操作者信息。';
+    return;
+  }
+
+  operatorSyncStatus.textContent = operatorSession.active ? '在线' : '已过期';
+  const details = [
+    operatorSession.userName ? `用户 ${operatorSession.userName}` : '',
+    operatorSession.accountType ? `类型 ${operatorSession.accountType}` : '',
+    operatorSession.syncedAt ? `同步于 ${formatDateTime(operatorSession.syncedAt)}` : '',
+    operatorSession.expiresAt ? `过期于 ${formatDateTime(operatorSession.expiresAt)}` : '',
+  ].filter(Boolean);
+  operatorSyncDetail.textContent = details.join('，') || '扩展已连接，但暂无更多细节。';
 }
 
 async function requestJson(url, options = {}) {
@@ -262,30 +265,30 @@ async function loadAdminUsers() {
   if (state.user?.role !== 'admin') {
     state.adminUsers = [];
     adminPanel.classList.add('hidden');
+    operatorSyncPanel.classList.add('hidden');
+    renderOperatorSyncStatus(null);
     return;
   }
   const payload = await requestJson('/api/admin/users', { method: 'GET' });
   state.adminUsers = payload.users || [];
   adminPanel.classList.remove('hidden');
+  operatorSyncPanel.classList.remove('hidden');
   renderAdminUsers(state.adminUsers);
 }
 
-async function loadBridgeStatus() {
-  if (!state.user?.apiKey) {
-    renderBridgeStatus(null);
+async function loadOperatorSyncStatus() {
+  if (state.user?.role !== 'admin') {
+    renderOperatorSyncStatus(null);
     return;
   }
 
   try {
-    const payload = await requestJson('/api/bridge/current-case', {
+    const payload = await requestJson('/api/admin/operator-session', {
       method: 'GET',
-      headers: {
-        'x-api-key': state.user.apiKey,
-      },
     });
-    renderBridgeStatus(payload.currentCase || null);
+    renderOperatorSyncStatus(payload.operatorSession || null);
   } catch {
-    renderBridgeStatus(null);
+    renderOperatorSyncStatus(null);
   }
 }
 
@@ -295,10 +298,11 @@ async function syncAuthUi() {
   if (state.user) {
     updateDashboard(state.user);
     setActiveTab('dashboard');
-    await loadBridgeStatus();
+    await loadOperatorSyncStatus();
     await loadAdminUsers();
   } else {
-    renderBridgeStatus(null);
+    renderOperatorSyncStatus(null);
+    operatorSyncPanel.classList.add('hidden');
     adminPanel.classList.add('hidden');
     adminUsersBody.innerHTML = '<tr><td colspan="5" class="empty-cell">暂无数据</td></tr>';
     setActiveTab('register');
@@ -385,7 +389,7 @@ generateKeyButton.addEventListener('click', async () => {
     });
     state.user = result.user;
     updateDashboard(state.user);
-    await loadBridgeStatus();
+    await loadOperatorSyncStatus();
     if (state.user.role === 'admin') {
       await loadAdminUsers();
     }
@@ -413,36 +417,10 @@ refreshAdminButton.addEventListener('click', async () => {
   clearFlash();
   try {
     await loadAdminUsers();
+    await loadOperatorSyncStatus();
     showFlash('列表已刷新。');
   } catch (error) {
     showFlash(error.message, 'error');
-  }
-});
-
-measureCurrentCaseButton.addEventListener('click', async () => {
-  clearFlash();
-  const apiKey = state.user?.apiKey || '';
-  if (!apiKey) {
-    showFlash('请先生成 API Key。', 'error');
-    return;
-  }
-
-  try {
-    measureCurrentCaseButton.disabled = true;
-    const payload = await requestJson('/api/measure/current-case', {
-      method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
-      },
-      body: JSON.stringify({}),
-    });
-    renderMeasureResult(payload.result);
-    await loadBridgeStatus();
-    showFlash('已按当前同步病例完成测量。');
-  } catch (error) {
-    showFlash(error.message, 'error');
-  } finally {
-    measureCurrentCaseButton.disabled = false;
   }
 });
 
@@ -461,7 +439,6 @@ measureImageButton.addEventListener('click', async () => {
 
   try {
     measureImageButton.disabled = true;
-    measureCurrentCaseButton.disabled = true;
     const imageBase64 = await readFileAsBase64(file);
     const payload = await requestJson('/api/measure/image', {
       method: 'POST',
@@ -481,7 +458,34 @@ measureImageButton.addEventListener('click', async () => {
     showFlash(error.message, 'error');
   } finally {
     measureImageButton.disabled = false;
-    measureCurrentCaseButton.disabled = false;
+  }
+});
+
+refreshOperatorSyncButton.addEventListener('click', async () => {
+  clearFlash();
+  try {
+    await loadOperatorSyncStatus();
+    showFlash('浏览器同步状态已刷新。');
+  } catch (error) {
+    showFlash(error.message, 'error');
+  }
+});
+
+clearOperatorSyncButton.addEventListener('click', async () => {
+  clearFlash();
+  const shouldContinue = window.confirm('清除后，公开用户的远程测量会暂时不可用，直到扩展重新同步。是否继续？');
+  if (!shouldContinue) {
+    return;
+  }
+  try {
+    await requestJson('/api/admin/operator-session', {
+      method: 'DELETE',
+      body: JSON.stringify({}),
+    });
+    await loadOperatorSyncStatus();
+    showFlash('远程会话已清除。');
+  } catch (error) {
+    showFlash(error.message, 'error');
   }
 });
 

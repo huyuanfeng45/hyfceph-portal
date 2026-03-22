@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HYFCeph Bridge</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div class="logo">H</div>
+        <div>
+          <h1>HYFCeph Bridge</h1>
+          <p>只装在你的电脑上。负责把当前浏览器里的远程会话同步到 HYFCeph 门户。</p>
+        </div>
+      </header>
+
+      <section class="card">
+        <label class="field">
+          <span>门户地址</span>
+          <input id="portalBaseUrl" type="url" placeholder="https://hyfceph.52ortho.com/" />
+        </label>
+        <label class="field">
+          <span>管理员 API Key</span>
+          <textarea id="operatorApiKey" rows="3" placeholder="请填写管理员账号生成的 API Key"></textarea>
+        </label>
+        <div class="actions">
+          <button id="saveBtn" class="primary" type="button">保存配置</button>
+          <button id="syncBtn" type="button">立即同步</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="row">
+          <span class="label">当前页面</span>
+          <strong id="pageState">检测中</strong>
+        </div>
+        <div class="row">
+          <span class="label">同步状态</span>
+          <strong id="syncState">未同步</strong>
+        </div>
+        <p id="detail" class="detail">请先打开侧位片网页，并在这里保存管理员 API Key。</p>
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

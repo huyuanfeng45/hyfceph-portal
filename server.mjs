@@ -20,6 +20,7 @@ const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const SESSION_SECRET = process.env.HYFCEPH_SESSION_SECRET || `hyfceph:${process.env.HYFCEPH_ADMIN_PASSWORD || '85301298'}:${process.env.HYFCEPH_BARK_KEY || 'bark'}`;
 const DEFAULT_API_KEY_DAYS = Number(process.env.HYFCEPH_API_KEY_DAYS || '90');
 const DEFAULT_BRIDGE_TTL_MINUTES = Number(process.env.HYFCEPH_BRIDGE_TTL_MINUTES || '30');
+const DEFAULT_OPERATOR_SESSION_TTL_MINUTES = Number(process.env.HYFCEPH_OPERATOR_SESSION_TTL_MINUTES || '240');
 const ADMIN_USERNAME = process.env.HYFCEPH_ADMIN_USERNAME || 'huyuanfeng45';
 const ADMIN_PASSWORD = process.env.HYFCEPH_ADMIN_PASSWORD || '85301298';
 const BARK_DEVICE_KEY = process.env.HYFCEPH_BARK_KEY || '7ffBf7F85e3WbFyKrJTEcH';
@@ -255,6 +256,82 @@ function normalizeBridgeState(bridgeState) {
   };
 }
 
+function normalizeOperatorSession(operatorSession) {
+  if (!operatorSession || typeof operatorSession !== 'object') {
+    return null;
+  }
+
+  const href = typeof operatorSession.href === 'string' && operatorSession.href.trim()
+    ? operatorSession.href.trim()
+    : null;
+  const pageUrl = typeof operatorSession.pageUrl === 'string' && operatorSession.pageUrl.trim()
+    ? operatorSession.pageUrl.trim()
+    : (href ? new URL('./', href).toString() : 'https://pd.aiyayi.com/latera/');
+
+  const syncedAt = isIsoDate(operatorSession.syncedAt) ? new Date(operatorSession.syncedAt).toISOString() : nowIso();
+  const expiresAt = isIsoDate(operatorSession.expiresAt)
+    ? new Date(operatorSession.expiresAt).toISOString()
+    : addMinutesIso(DEFAULT_OPERATOR_SESSION_TTL_MINUTES);
+
+  return {
+    source: typeof operatorSession.source === 'string' && operatorSession.source.trim()
+      ? operatorSession.source.trim()
+      : 'chrome-extension',
+    syncedAt,
+    expiresAt,
+    href,
+    title: typeof operatorSession.title === 'string' && operatorSession.title.trim() ? operatorSession.title.trim() : null,
+    pageUrl,
+    token: typeof operatorSession.token === 'string' ? operatorSession.token.trim() : '',
+    accountType: typeof operatorSession.accountType === 'string' && operatorSession.accountType.trim()
+      ? operatorSession.accountType.trim()
+      : null,
+    lang: typeof operatorSession.lang === 'string' && operatorSession.lang.trim()
+      ? operatorSession.lang.trim()
+      : null,
+    userName: typeof operatorSession.userName === 'string' && operatorSession.userName.trim()
+      ? operatorSession.userName.trim()
+      : null,
+    userAgent: typeof operatorSession.userAgent === 'string' && operatorSession.userAgent.trim()
+      ? operatorSession.userAgent.trim()
+      : null,
+  };
+}
+
+function isOperatorSessionActive(operatorSession) {
+  if (!operatorSession?.token || !operatorSession?.pageUrl || !operatorSession?.expiresAt) {
+    return false;
+  }
+  return new Date(operatorSession.expiresAt).getTime() > Date.now();
+}
+
+function publicOperatorSession(operatorSession) {
+  if (!operatorSession) {
+    return null;
+  }
+  return {
+    source: operatorSession.source,
+    syncedAt: operatorSession.syncedAt,
+    expiresAt: operatorSession.expiresAt,
+    href: operatorSession.href,
+    title: operatorSession.title,
+    pageUrl: operatorSession.pageUrl,
+    userName: operatorSession.userName,
+    accountType: operatorSession.accountType,
+    lang: operatorSession.lang,
+    hasToken: Boolean(operatorSession.token),
+    active: isOperatorSessionActive(operatorSession),
+  };
+}
+
+function normalizeStoreRecord(store) {
+  const source = store && typeof store === 'object' ? store : {};
+  return {
+    users: Array.isArray(source.users) ? source.users.map(normalizeUserRecord) : [],
+    operatorSession: normalizeOperatorSession(source.operatorSession),
+  };
+}
+
 function base64UrlEncode(value) {
   return Buffer.from(value, 'utf8').toString('base64url');
 }
@@ -397,7 +474,8 @@ async function writeStore(store) {
 
 function ensureAdminUser(store) {
   let changed = false;
-  const users = Array.isArray(store.users) ? store.users.map(normalizeUserRecord) : [];
+  const normalizedStore = normalizeStoreRecord(store);
+  const users = normalizedStore.users;
   const existingAdmin = users.find((item) => item.role === 'admin' || item.username === ADMIN_USERNAME);
   if (!existingAdmin) {
     users.push({
@@ -416,12 +494,12 @@ function ensureAdminUser(store) {
     });
     changed = true;
   }
-  return { store: { users }, changed };
+  return { store: { ...normalizedStore, users }, changed };
 }
 
 async function readStore() {
   const parsed = shouldUseBlobStore() ? await readStoreFromBlob() : await readStoreFromFile();
-  const normalized = parsed && typeof parsed === 'object' ? parsed : { users: [] };
+  const normalized = normalizeStoreRecord(parsed);
   const { store, changed } = ensureAdminUser(normalized);
   if (changed || JSON.stringify(normalized) !== JSON.stringify(store)) {
     await writeStore(store);
@@ -540,6 +618,19 @@ async function requireActiveApiKeyUser(apiKey) {
   return { store, user };
 }
 
+async function requireActiveAdminApiKey(apiKey) {
+  const { store, user } = await requireActiveApiKeyUser(apiKey);
+  if (!user || user.role !== 'admin') {
+    return { store, user: null };
+  }
+  return { store, user };
+}
+
+function isLikelyUpstreamAuthError(message) {
+  const text = String(message || '');
+  return /Authentication failed|unable to access system resources|getAccessToken failed|algorithm token/i.test(text);
+}
+
 async function loadResvg() {
   if (!resvgPromise) {
     resvgPromise = import('@resvg/resvg-js');
@@ -649,6 +740,7 @@ async function runServerSideMeasurement({
   shareUrl,
   bridgeState,
   imagePath,
+  operatorSession,
 }) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hyfceph-portal-'));
   const outputPath = path.join(tempDir, 'result.json');
@@ -677,6 +769,12 @@ async function runServerSideMeasurement({
     args.push('--current-case', '--bridge-file', bridgeFilePath);
   } else if (imagePath) {
     args.push('--image', imagePath);
+    if (operatorSession?.token) {
+      args.push('--token', operatorSession.token);
+    }
+    if (operatorSession?.pageUrl) {
+      args.push('--page-url', operatorSession.pageUrl);
+    }
   } else {
     throw new Error('缺少可用病例上下文。');
   }
@@ -974,6 +1072,79 @@ async function handleBridgeCurrentCasePost(request, response) {
   });
 }
 
+async function resolveAdminOperatorAccess(request) {
+  const sessionUser = await getSessionUser(request);
+  if (sessionUser?.role === 'admin') {
+    return { store: await readStore(), user: sessionUser, mode: 'session' };
+  }
+
+  const apiKey = String(request.headers['x-api-key'] || '').trim();
+  if (!apiKey) {
+    return { store: null, user: null, mode: null };
+  }
+  const { store, user } = await requireActiveAdminApiKey(apiKey);
+  if (!user) {
+    return { store, user: null, mode: null };
+  }
+  return { store, user, mode: 'api-key' };
+}
+
+async function handleAdminOperatorSessionGet(request, response) {
+  const { store, user } = await resolveAdminOperatorAccess(request);
+  if (!user) {
+    return sendJson(response, 401, { error: '管理员认证已失效。' });
+  }
+
+  const operatorSession = normalizeOperatorSession(store.operatorSession);
+  if (operatorSession && !isOperatorSessionActive(operatorSession)) {
+    store.operatorSession = null;
+    await writeStore(store);
+  }
+
+  return sendJson(response, 200, {
+    ok: true,
+    operatorSession: publicOperatorSession(operatorSession && isOperatorSessionActive(operatorSession) ? operatorSession : null),
+  });
+}
+
+async function handleAdminOperatorSessionPost(request, response) {
+  const { store, user } = await resolveAdminOperatorAccess(request);
+  if (!user) {
+    return sendJson(response, 401, { error: '管理员认证已失效。' });
+  }
+
+  const payload = await readRequestJson(request);
+  const operatorSession = normalizeOperatorSession({
+    ...payload,
+    source: payload?.source || 'chrome-extension',
+    syncedAt: nowIso(),
+    expiresAt: addMinutesIso(DEFAULT_OPERATOR_SESSION_TTL_MINUTES),
+  });
+
+  if (!operatorSession?.token || !operatorSession?.pageUrl) {
+    return sendJson(response, 400, { error: '会话同步不完整，至少需要 token 和 pageUrl。' });
+  }
+
+  store.operatorSession = operatorSession;
+  await writeStore(store);
+
+  return sendJson(response, 200, {
+    ok: true,
+    operatorSession: publicOperatorSession(operatorSession),
+  });
+}
+
+async function handleAdminOperatorSessionDelete(request, response) {
+  const { store, user } = await resolveAdminOperatorAccess(request);
+  if (!user) {
+    return sendJson(response, 401, { error: '管理员认证已失效。' });
+  }
+
+  store.operatorSession = null;
+  await writeStore(store);
+  return sendJson(response, 200, { ok: true });
+}
+
 async function handleMeasureShareUrl(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
@@ -1068,7 +1239,7 @@ async function handleMeasureImage(request, response) {
     return sendJson(response, 400, { error: '缺少 API Key。' });
   }
 
-  const { user } = await requireActiveApiKeyUser(apiKey);
+  const { store, user } = await requireActiveApiKeyUser(apiKey);
   if (!user) {
     return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
   }
@@ -1089,9 +1260,19 @@ async function handleMeasureImage(request, response) {
   const resolvedImagePath = path.join(tempDir, `${sanitizeFileStem(path.basename(upload.fileName, path.extname(upload.fileName)))}${uploadExt}`);
 
   try {
+    const operatorSession = normalizeOperatorSession(store.operatorSession);
+    if (!isOperatorSessionActive(operatorSession)) {
+      if (store.operatorSession) {
+        store.operatorSession = null;
+        await writeStore(store);
+      }
+      return sendJson(response, 503, { error: '服务端远程会话暂不可用，请稍后重试。' });
+    }
+
     await fs.writeFile(resolvedImagePath, upload.imageBuffer);
-    const result = await runLocalImageMeasurement({
+    const result = await runServerSideMeasurement({
       imagePath: resolvedImagePath,
+      operatorSession,
     });
     await sendBarkPush('HYFCeph 图片测量', `用户：${user.name}\n单位：${user.organization || '-'}\n图片：${path.basename(resolvedImagePath)}`);
     return sendJson(response, 200, {
@@ -1101,6 +1282,11 @@ async function handleMeasureImage(request, response) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (isLikelyUpstreamAuthError(message)) {
+      store.operatorSession = null;
+      await writeStore(store);
+      return sendJson(response, 503, { error: '服务端远程会话暂不可用，请稍后重试。' });
+    }
     return sendJson(response, 502, { error: message || '图片测量失败。' });
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
@@ -1234,11 +1420,13 @@ export async function handleNodeRequest(request, response) {
     const url = new URL(request.url || '/', `http://${request.headers.host || `${HOST}:${PORT}`}`);
 
     if (request.method === 'GET' && url.pathname === '/api/health') {
+      const store = await readStore();
       return sendJson(response, 200, {
         ok: true,
         service: 'HYFCeph Portal',
         barkConfigured: Boolean(BARK_DEVICE_KEY),
         storeBackend: STORE_BACKEND,
+        operatorSessionActive: isOperatorSessionActive(store.operatorSession),
       });
     }
     if (request.method === 'POST' && url.pathname === '/api/register') {
@@ -1264,6 +1452,15 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'POST' && url.pathname === '/api/bridge/current-case') {
       return await handleBridgeCurrentCasePost(request, response);
+    }
+    if (request.method === 'GET' && url.pathname === '/api/admin/operator-session') {
+      return await handleAdminOperatorSessionGet(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/admin/operator-session') {
+      return await handleAdminOperatorSessionPost(request, response);
+    }
+    if (request.method === 'DELETE' && url.pathname === '/api/admin/operator-session') {
+      return await handleAdminOperatorSessionDelete(request, response);
     }
     if (request.method === 'POST' && url.pathname === '/api/measure/share-url') {
       return await handleMeasureShareUrl(request, response);

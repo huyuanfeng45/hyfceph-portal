@@ -6,7 +6,8 @@ HYFCeph Portal provides:
 - API key generation and validation
 - admin management for API key expiry and deletion
 - Bark push notifications for new registrations and ceph image submissions
-- image-upload ceph measurement through the bundled local ceph engine
+- image-upload ceph measurement through a shared remote browser session
+- owner-side Chrome extension for syncing the remote browser session
 - current-case bridge measurement as a compatibility path
 
 ## Local run
@@ -28,25 +29,16 @@ For public use, deploy this project on your own server or 1Panel host.
 
 This project is suitable for:
 
-- `Node` project deployment on a Linux server with Python 3 available
+- `Node` project deployment on a Linux server
 - `Docker` deployment with the bundled `Dockerfile`
 
-This project is not suitable for Vercel image inference, because image mode depends on a local ceph engine runtime.
+The default public image path now works like this:
 
-## Image engine
+1. Public user uploads a ceph image with their API key.
+2. The portal reuses the owner's Chrome-synced remote session.
+3. The server calls the upstream remote ceph service and returns PNG plus metrics.
 
-The bundled image engine lives inside this project:
-
-```text
-engines/ceph-autopoint/
-```
-
-Notes:
-
-- The first image measurement will create `engines/ceph-autopoint/.venv/`
-- The first image measurement will also download the ceph model into `engines/ceph-autopoint/models/hrnet-ceph19/best_model.pth`
-- The model file is about 347 MB, so the first run is slower
-- The server must be able to reach Hugging Face on first run, unless you pre-seed the model file yourself
+Because of that, public users do not install a plugin and do not provide share links or upstream tokens.
 
 ## 1Panel / Node deployment
 
@@ -57,16 +49,6 @@ Use these basics:
 - Port: `3077`
 - Persistent directories:
   - `data/`
-  - `engines/ceph-autopoint/.venv/`
-  - `engines/ceph-autopoint/models/`
-
-The first request to image measurement will install Python dependencies inside the engine virtualenv and download the model if missing.
-
-Your server also needs:
-
-- `python3`
-- `python3-venv`
-- outbound network access for the first model download
 
 ## Docker deployment
 
@@ -85,8 +67,6 @@ docker run -d \
   -e HYFCEPH_SESSION_SECRET='replace-with-random-secret' \
   -e HYFCEPH_BARK_KEY='7ffBf7F85e3WbFyKrJTEcH' \
   -v $(pwd)/data:/app/data \
-  -v $(pwd)/engine-venv:/app/engines/ceph-autopoint/.venv \
-  -v $(pwd)/engine-models:/app/engines/ceph-autopoint/models \
   hyfceph-portal
 ```
 
@@ -99,17 +79,16 @@ docker run -d \
 - `HYFCEPH_BARK_KEY`
 - `HYFCEPH_BARK_BASE_URL`
 - `HYFCEPH_API_KEY_DAYS`
+- `HYFCEPH_OPERATOR_SESSION_TTL_MINUTES`
 - `HYFCEPH_SESSION_SECRET`
 - `HYFCEPH_STORE_BACKEND`
 - `HYFCEPH_STORE_BLOB_PATH`
-- `HYFCEPH_LOCAL_IMAGE_RUNNER`
-- `CEPH_AUTOPOINT_BOOTSTRAP_PYTHON`
-- `CEPH_AUTOPOINT_MODEL_DIR`
-- `CEPH_AUTOPOINT_MODEL_URL`
 
 ## Notes
 
 - Local data is stored in `data/users.json`.
+- The owner-side Chrome extension lives in `chrome-extension/`.
+- The extension should be configured with the portal URL and an active admin API key.
 - For Vercel, connect a private Blob store and set `HYFCEPH_STORE_BACKEND=blob`.
 - When using Vercel, authentication uses signed cookies instead of in-memory sessions.
-- Public production use should prefer self-hosted deployment if image upload measurement is required.
+- Public production use should still prefer self-hosted deployment, because the image measurement path shells out to the bundled Node runner.

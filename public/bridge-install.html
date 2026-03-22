@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HYFCeph Bridge 安装说明</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-bg"></div>
+    <main class="shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow">HYFCeph Bridge</div>
+          <h1>管理员 Chrome 扩展安装说明</h1>
+          <p class="hero-text">
+            这套扩展只装在管理员自己的电脑上。它会把你浏览器里当前可用的远程会话同步到 HYFCeph 门户，公开用户随后只需要在 skill 里发送侧位片即可。
+          </p>
+          <div class="hero-cards">
+            <article class="feature-card accent-sky">
+              <h2>给谁安装</h2>
+              <p>只给管理员自己安装。公开用户不需要扩展，不需要分享链接，也不需要上游账号。</p>
+            </article>
+            <article class="feature-card accent-amber">
+              <h2>需要什么</h2>
+              <p>Chrome 浏览器、门户管理员 API Key，以及部署包里的 <code>chrome-extension/</code> 文件夹。</p>
+            </article>
+            <article class="feature-card accent-ink">
+              <h2>安装后作用</h2>
+              <p>扩展会在你打开侧位片网页时自动同步可用会话，门户就能代用户完成远程测量。</p>
+            </article>
+          </div>
+        </div>
+
+        <aside class="auth-panel">
+          <div class="panel-header">
+            <div class="brand-mark">H</div>
+            <div>
+              <div class="panel-title">安装步骤</div>
+              <div class="panel-subtitle">只需管理员操作一次</div>
+            </div>
+          </div>
+
+          <section class="tab-panel active" data-panel="guide">
+            <div class="dashboard-card">
+              <div class="dashboard-row">
+                <span class="label">1. 解压部署包</span>
+                <strong>找到 <code>hyfceph-portal/chrome-extension/</code></strong>
+              </div>
+              <p class="api-note">如果你手里是单独的扩展包，也可以直接解压扩展压缩包，然后使用其中的 <code>chrome-extension/</code> 目录。</p>
+            </div>
+
+            <div class="dashboard-card">
+              <div class="dashboard-row">
+                <span class="label">2. 打开扩展管理页</span>
+                <strong><code>chrome://extensions/</code></strong>
+              </div>
+              <p class="api-note">打开右上角“开发者模式”。</p>
+            </div>
+
+            <div class="dashboard-card">
+              <div class="dashboard-row">
+                <span class="label">3. 加载扩展</span>
+                <strong>选择 <code>chrome-extension/</code> 文件夹</strong>
+              </div>
+              <p class="api-note">点击“加载已解压的扩展程序”，选择整个扩展目录，而不是单个文件。</p>
+            </div>
+
+            <div class="dashboard-card">
+              <div class="dashboard-row">
+                <span class="label">4. 生成管理员 API Key</span>
+                <strong>在门户控制台里生成</strong>
+              </div>
+              <p class="api-note">必须使用管理员账号自己的 API Key，不要填普通用户的 Key。</p>
+            </div>
+
+            <div class="dashboard-card">
+              <div class="dashboard-row">
+                <span class="label">5. 配置扩展</span>
+                <strong>填门户地址和管理员 API Key</strong>
+              </div>
+              <p class="api-note">门户地址通常就是你部署后的正式域名，例如当前站点域名。</p>
+            </div>
+
+            <div class="dashboard-card">
+              <div class="dashboard-row">
+                <span class="label">6. 同步一次</span>
+                <strong>打开侧位片网页，再点“立即同步”</strong>
+              </div>
+              <p class="api-note">同步成功后，门户管理员面板里的“浏览器同步状态”会显示在线。</p>
+            </div>
+          </section>
+        </aside>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "HYFCeph Bridge",
+  "version": "1.0.0",
+  "description": "Sync the owner's active ceph browser session to HYFCeph so public users can submit images without handling upstream links or tokens.",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://pd.aiyayi.com/*",
+    "https://hyfceph.52ortho.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "HYFCeph Bridge",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://pd.aiyayi.com/latera/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

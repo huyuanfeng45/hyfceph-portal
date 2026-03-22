@@ -139,7 +139,7 @@
               <div class="api-header">
                 <div>
                   <div class="label">图片测量</div>
-                  <div class="api-tip">推荐方式：直接上传侧位片，服务端会完成定点和测量。当前病例同步保留为兼容入口。</div>
+                  <div class="api-tip">直接上传侧位片即可。服务端会复用管理员浏览器保持在线的远程会话完成定点和测量，公开用户无需安装任何插件。</div>
                 </div>
               </div>
 
@@ -151,20 +151,7 @@
               <div class="api-actions">
                 <button id="measure-image-button" class="primary-button" type="button">上传图片并测量</button>
               </div>
-
-              <div class="dashboard-row">
-                <span class="label">当前病例同步状态</span>
-                <strong id="bridge-status">未同步</strong>
-              </div>
-
-              <p id="bridge-detail" class="api-note">安装同步插件后，在病例页打开一次即可自动同步。</p>
-
-              <div class="api-actions">
-                <a class="primary-button link-button" href="/hyfceph-bridge.user.js" target="_blank" rel="noreferrer">安装同步插件</a>
-                <button id="measure-current-case-button" class="ghost-button" type="button">测当前同步病例</button>
-              </div>
-
-              <p class="api-note">插件安装后，只需要在浏览器脚本菜单里填一次 API Key，后面会自动静默同步。</p>
+              <p class="api-note">如果服务暂时不可用，通常表示管理员浏览器中的远程会话需要刷新。</p>
 
               <section id="measure-result" class="measure-result hidden">
                 <div class="dashboard-row">
@@ -176,6 +163,28 @@
                 <div id="measure-metrics" class="metric-grid"></div>
               </section>
             </div>
+
+            <section id="operator-sync-panel" class="dashboard-card hidden">
+              <div class="admin-header">
+                <div>
+                  <div class="label">浏览器同步状态</div>
+                  <div class="api-tip">仅管理员需要使用。请在你自己的 Chrome 中安装 HYFCeph Bridge 扩展，并填入当前管理员 API Key。</div>
+                </div>
+                <button id="refresh-operator-sync-button" class="ghost-button" type="button">刷新状态</button>
+              </div>
+
+              <div class="dashboard-row">
+                <span class="label">当前状态</span>
+                <strong id="operator-sync-status">未连接</strong>
+              </div>
+
+              <p id="operator-sync-detail" class="api-note">扩展开始同步后，这里会显示最近一次同步时间和操作者信息。</p>
+
+              <div class="api-actions">
+                <a class="primary-button link-button" href="/bridge-install.html" target="_blank" rel="noreferrer">查看安装说明</a>
+                <button id="clear-operator-sync-button" class="ghost-button" type="button">清除远程会话</button>
+              </div>
+            </section>
 
             <section id="admin-panel" class="dashboard-card hidden">
               <div class="admin-header">
