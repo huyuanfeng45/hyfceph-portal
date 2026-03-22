@@ -138,13 +138,22 @@
             <div class="dashboard-card measure-card">
               <div class="api-header">
                 <div>
-                  <div class="label">当前病例同步</div>
-                  <div class="api-tip">推荐方式：安装浏览器同步插件，填入 API Key，然后在病例页打开一次。之后这里就能直接测量当前同步病例。</div>
+                  <div class="label">图片测量</div>
+                  <div class="api-tip">推荐方式：直接上传侧位片，服务端会完成定点和测量。当前病例同步保留为兼容入口。</div>
                 </div>
               </div>
 
+              <label>
+                <span>侧位片文件</span>
+                <input id="measure-image-input" type="file" accept="image/png,image/jpeg,image/jpg,image/webp,image/bmp,image/tiff,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff" />
+              </label>
+
+              <div class="api-actions">
+                <button id="measure-image-button" class="primary-button" type="button">上传图片并测量</button>
+              </div>
+
               <div class="dashboard-row">
-                <span class="label">同步状态</span>
+                <span class="label">当前病例同步状态</span>
                 <strong id="bridge-status">未同步</strong>
               </div>
 

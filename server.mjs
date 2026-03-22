@@ -30,7 +30,9 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const SERVICE_RUNNER = path.join(__dirname, 'scripts', 'hyfceph-remote-runner.mjs');
+const LOCAL_CEPH_AUTOPOINT_RUNNER = process.env.HYFCEPH_LOCAL_IMAGE_RUNNER || '/Users/hyf/.codex/skills/ceph-autopoint/scripts/run-ceph-autopoint.js';
 const MAX_MEASURE_BUFFER_BYTES = 24 * 1024 * 1024;
+const MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 let blobSdkPromise = null;
 let resvgPromise = null;
@@ -82,6 +84,26 @@ function coerceOptionalNumber(value) {
   }
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+function sanitizeFileStem(value) {
+  const cleaned = String(value || '').trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return cleaned || 'ceph-image';
+}
+
+function extensionFromUpload({ fileName, mimeType }) {
+  const explicitExt = path.extname(String(fileName || '').trim()).toLowerCase();
+  if (explicitExt) {
+    return explicitExt;
+  }
+
+  const mime = String(mimeType || '').toLowerCase();
+  if (mime === 'image/png') return '.png';
+  if (mime === 'image/jpeg' || mime === 'image/jpg') return '.jpg';
+  if (mime === 'image/webp') return '.webp';
+  if (mime === 'image/bmp') return '.bmp';
+  if (mime === 'image/tiff') return '.tif';
+  return '.png';
 }
 
 function validatePhone(value) {
@@ -422,6 +444,36 @@ async function readRequestJson(request) {
   }
 }
 
+function decodeUploadedImagePayload(payload) {
+  const imageBase64 = String(payload?.imageBase64 || '').trim();
+  const fileName = String(payload?.fileName || payload?.imageName || '').trim();
+  const mimeType = String(payload?.mimeType || '').trim();
+
+  if (!imageBase64) {
+    throw new Error('缺少图片数据。');
+  }
+
+  let imageBuffer;
+  try {
+    imageBuffer = Buffer.from(imageBase64, 'base64');
+  } catch {
+    throw new Error('图片编码无效。');
+  }
+
+  if (!imageBuffer.length) {
+    throw new Error('图片数据为空。');
+  }
+  if (imageBuffer.length > MAX_IMAGE_UPLOAD_BYTES) {
+    throw new Error(`图片过大，请控制在 ${Math.floor(MAX_IMAGE_UPLOAD_BYTES / (1024 * 1024))}MB 以内。`);
+  }
+
+  return {
+    fileName: sanitizeFileStem(path.basename(fileName || 'ceph-image')),
+    mimeType,
+    imageBuffer,
+  };
+}
+
 async function getSessionUser(request) {
   const cookies = parseCookies(request);
   const sessionToken = cookies[COOKIE_NAME];
@@ -541,9 +593,61 @@ async function buildMeasurementResponseArtifacts({ output, annotatedSvgPath, ann
   };
 }
 
+async function buildLocalImageMeasurementArtifacts(localOutput) {
+  const annotatedImagePath = localOutput?.annotatedImagePath || '';
+  const annotatedPng = annotatedImagePath ? await readFileIfExists(annotatedImagePath) : null;
+  const metrics = Array.isArray(localOutput?.metrics) ? localOutput.metrics : [];
+  const unsupportedMetricCodes = Array.isArray(localOutput?.unsupportedMetricCodes)
+    ? localOutput.unsupportedMetricCodes
+    : [];
+  const supportedMetricCodes = Array.isArray(localOutput?.supportedMetricCodes)
+    ? localOutput.supportedMetricCodes
+    : metrics.map((item) => item.code).filter(Boolean);
+  const metricValues = Object.fromEntries(
+    metrics
+      .filter((item) => item?.code && Number.isFinite(Number(item.value)))
+      .map((item) => [item.code, Number(item.value)]),
+  );
+
+  return {
+    analysis: {
+      riskLabel: localOutput?.riskLabel || null,
+      insight: localOutput?.insight || localOutput?.note || null,
+      metrics,
+      unsupportedMetricCodes,
+      reviewTargets: Array.isArray(localOutput?.reviewTargets) ? localOutput.reviewTargets : [],
+      landmarks: Array.isArray(localOutput?.landmarks) ? localOutput.landmarks : [],
+      recognition: localOutput?.recognition || null,
+      engine: localOutput?.engine || null,
+    },
+    analysisError: null,
+    annotationError: annotatedPng ? null : '未生成 PNG 标注图。',
+    summary: {
+      headPoints: Array.isArray(localOutput?.landmarks) ? localOutput.landmarks.length : 0,
+      rulerPoints: 0,
+      spineSections: 0,
+      hasRuler: false,
+      supportedMetrics: supportedMetricCodes,
+      unsupportedMetrics: unsupportedMetricCodes,
+      metricValues,
+      riskLabel: localOutput?.riskLabel || null,
+    },
+    metrics,
+    taskId: null,
+    resultUrl: null,
+    artifacts: {
+      annotatedPngBase64: annotatedPng ? annotatedPng.toString('base64') : null,
+      annotatedPngMimeType: annotatedPng ? 'image/png' : null,
+      annotatedSvgBase64: null,
+      annotatedSvgMimeType: null,
+    },
+  };
+}
+
 async function runServerSideMeasurement({
   shareUrl,
   bridgeState,
+  imagePath,
 }) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hyfceph-portal-'));
   const outputPath = path.join(tempDir, 'result.json');
@@ -570,6 +674,8 @@ async function runServerSideMeasurement({
   } else if (bridgeState) {
     await fs.writeFile(bridgeFilePath, JSON.stringify(bridgeState, null, 2), 'utf8');
     args.push('--current-case', '--bridge-file', bridgeFilePath);
+  } else if (imagePath) {
+    args.push('--image', imagePath);
   } else {
     throw new Error('缺少可用病例上下文。');
   }
@@ -596,6 +702,41 @@ async function runServerSideMeasurement({
     throw new Error(reason || '服务端测量失败。');
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function runLocalImageMeasurement({
+  imagePath,
+}) {
+  if (!imagePath) {
+    throw new Error('缺少本地图片路径。');
+  }
+  const runnerPath = LOCAL_CEPH_AUTOPOINT_RUNNER;
+  try {
+    await fs.access(runnerPath);
+  } catch {
+    throw new Error('本地图片测量引擎不存在。请在可运行本地 Ceph 模型的服务器上部署，或改用当前病例同步模式。');
+  }
+
+  try {
+    const { stdout, stderr } = await execFileAsync(process.execPath, [runnerPath, '--image', imagePath], {
+      cwd: __dirname,
+      env: {
+        ...process.env,
+      },
+      maxBuffer: MAX_MEASURE_BUFFER_BYTES,
+    });
+    const rawOutput = String(stdout || '').trim();
+    if (!rawOutput) {
+      throw new Error(String(stderr || '').trim() || '本地图片测量没有返回结果。');
+    }
+    const parsedOutput = JSON.parse(rawOutput);
+    return await buildLocalImageMeasurementArtifacts(parsedOutput);
+  } catch (error) {
+    const stderr = String(error?.stderr || '').trim();
+    const stdout = String(error?.stdout || '').trim();
+    const reason = stderr || stdout || (error instanceof Error ? error.message : String(error));
+    throw new Error(reason || '本地图片测量失败。');
   }
 }
 
@@ -919,6 +1060,52 @@ async function handleMeasureCurrentCase(request, response) {
   }
 }
 
+async function handleMeasureImage(request, response) {
+  const payload = await readRequestJson(request);
+  const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
+  if (!apiKey) {
+    return sendJson(response, 400, { error: '缺少 API Key。' });
+  }
+
+  const { user } = await requireActiveApiKeyUser(apiKey);
+  if (!user) {
+    return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
+  }
+
+  let upload;
+  try {
+    upload = decodeUploadedImagePayload(payload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return sendJson(response, 400, { error: message || '图片上传无效。' });
+  }
+
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hyfceph-upload-'));
+  const uploadExt = extensionFromUpload({
+    fileName: upload.fileName,
+    mimeType: upload.mimeType,
+  });
+  const resolvedImagePath = path.join(tempDir, `${sanitizeFileStem(path.basename(upload.fileName, path.extname(upload.fileName)))}${uploadExt}`);
+
+  try {
+    await fs.writeFile(resolvedImagePath, upload.imageBuffer);
+    const result = await runLocalImageMeasurement({
+      imagePath: resolvedImagePath,
+    });
+    await sendBarkPush('HYFCeph 图片测量', `用户：${user.name}\n单位：${user.organization || '-'}\n图片：${path.basename(resolvedImagePath)}`);
+    return sendJson(response, 200, {
+      ok: true,
+      mode: 'image',
+      result,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return sendJson(response, 502, { error: message || '图片测量失败。' });
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function handleSkillEvent(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || '').trim();
@@ -1079,6 +1266,9 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'POST' && url.pathname === '/api/measure/share-url') {
       return await handleMeasureShareUrl(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/measure/image') {
+      return await handleMeasureImage(request, response);
     }
     if (request.method === 'POST' && url.pathname === '/api/measure/current-case') {
       return await handleMeasureCurrentCase(request, response);

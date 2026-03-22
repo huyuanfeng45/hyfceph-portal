@@ -13,6 +13,8 @@ const generateKeyButton = document.querySelector('#generate-key-button');
 const copyKeyButton = document.querySelector('#copy-key-button');
 const apiKeyOutput = document.querySelector('#api-key-output');
 const apiKeyExpiry = document.querySelector('#api-key-expiry');
+const measureImageInput = document.querySelector('#measure-image-input');
+const measureImageButton = document.querySelector('#measure-image-button');
 const measureCurrentCaseButton = document.querySelector('#measure-current-case-button');
 const measureResult = document.querySelector('#measure-result');
 const measureRiskLabel = document.querySelector('#measure-risk-label');
@@ -161,6 +163,19 @@ async function requestJson(url, options = {}) {
     throw new Error(payload.error || '请求失败。');
   }
   return payload;
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const base64 = result.includes(',') ? result.split(',').pop() : result;
+      resolve(base64 || '');
+    };
+    reader.onerror = () => reject(new Error('读取图片失败。'));
+    reader.readAsDataURL(file);
+  });
 }
 
 function renderAdminUsers(users) {
@@ -427,6 +442,45 @@ measureCurrentCaseButton.addEventListener('click', async () => {
   } catch (error) {
     showFlash(error.message, 'error');
   } finally {
+    measureCurrentCaseButton.disabled = false;
+  }
+});
+
+measureImageButton.addEventListener('click', async () => {
+  clearFlash();
+  const apiKey = state.user?.apiKey || '';
+  const file = measureImageInput.files?.[0];
+  if (!apiKey) {
+    showFlash('请先生成 API Key。', 'error');
+    return;
+  }
+  if (!file) {
+    showFlash('请先选择一张侧位片。', 'error');
+    return;
+  }
+
+  try {
+    measureImageButton.disabled = true;
+    measureCurrentCaseButton.disabled = true;
+    const imageBase64 = await readFileAsBase64(file);
+    const payload = await requestJson('/api/measure/image', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+      },
+      body: JSON.stringify({
+        fileName: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        imageBase64,
+      }),
+    });
+    renderMeasureResult(payload.result);
+    showFlash('图片测量完成。');
+    measureImageInput.value = '';
+  } catch (error) {
+    showFlash(error.message, 'error');
+  } finally {
+    measureImageButton.disabled = false;
     measureCurrentCaseButton.disabled = false;
   }
 });
