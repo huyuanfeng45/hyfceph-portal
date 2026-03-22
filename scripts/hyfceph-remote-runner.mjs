@@ -2,12 +2,13 @@
 
 import { execFileSync } from 'node:child_process';
 import { createDecipheriv, createHash, getCiphers } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { parseArgs } from 'node:util';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { curveCatmullRom, curveCatmullRomClosed, line as svgLine } from 'd3-shape';
 import { TOOTH_TEMPLATE_DATA } from './hyfceph-web-tooth-templates.mjs';
 
@@ -22,6 +23,7 @@ const SHARE_DES_KEY_BYTES = Buffer.from(SHARE_DES_KEY.slice(0, 8), 'utf8');
 const LANDMARK_ALIAS_MAP = new Map([
   ['s', 'S'],
   ['n', 'N'],
+  ['na', 'N'],
   ['a', 'A'],
   ['b', 'B'],
   ['go', 'Go'],
@@ -94,6 +96,167 @@ const PRIMARY_LANDMARK_KEYS = new Set(
   Object.values(METRIC_DEFINITIONS).flatMap((definition) => definition.requiredKeys),
 );
 const FRAMEWORK_CHOICES = ['Downs', 'Steiner', '北大分析法', 'ABO', 'Ricketts', 'Tweed', 'McNamara', 'Jarabak'];
+const RICKETTS_CONTOUR_KEYS = ['Tpl', 'Go', 'Rp', 'Man3', 'Ar', 'Pcd', 'Co', 'Go13', 'Go12', 'R3', 'Lj5', 'Lj4', 'Lj3', 'J'];
+const WEB_FRAMEWORK_DATA = [
+  {
+    code: 'downs',
+    label: 'Downs',
+    items: [
+      ['FH-NPo', 'FH-NPo', 85.5, 3],
+      ['NA-APo', 'NA-APo', 6.5, 4.5],
+      ['AB-NPo', 'AB-NPo', -5.4, 2.3],
+      ['FH-MP', 'FH-MP', 27.9, 4.4],
+      ['SGn-FH', 'SGn-FH', 63.5, 3.2],
+      ['OP-FH', 'OP-FH', 14, 3.8],
+      ['U1-L1', 'U1-L1', 126.9, 8.5],
+      ['L1-OP', 'L1-OP', 109, 5.6],
+      ['U1-APo(mm)', 'U1-APo(mm)', 6.7, 2],
+      ['L1-MP', 'L1-MP', 95, 6.5],
+    ],
+  },
+  {
+    code: 'steiner',
+    label: 'Steiner',
+    items: [
+      ['SNA', 'SNA', 82.8, 4],
+      ['SNB', 'SNB', 80.1, 3.9],
+      ['ANB', 'ANB', 2.7, 2],
+      ['SND', 'SND', 77.3, 3.8],
+      ['Pog-NB(mm)', 'Pog-NB(mm)', 1, 1.5],
+      ['OP-SN', 'OP-SN', 16.1, 5],
+      ['GoGn-SN', 'GoGn-SN', 32.5, 5.2],
+      ['SE(mm)', 'SE(mm)', 20.2, 2.6],
+      ['SL(mm)', 'SL(mm)', 52.2, 5.4],
+      ['U1-NA(mm)', 'U1-NA(mm)', 5.1, 2.4],
+      ['U1-NA', 'U1-NA', 22.8, 5.7],
+      ['L1-NB(mm)', 'L1-NB(mm)', 6.7, 2.1],
+      ['L1-NB', 'L1-NB', 30.3, 5.8],
+      ['U1-L1', 'U1-L1', 124, 8.2],
+    ],
+  },
+  {
+    code: 'pku',
+    label: '北大分析法',
+    items: [
+      ['SNA', 'SNA', 82.8, 4],
+      ['SNB', 'SNB', 80.1, 3.9],
+      ['ANB', 'ANB', 2.7, 2],
+      ['FH-NPo', 'FH-NPo', 85.4, 3.7],
+      ['NA-APo', 'NA-APo', 6, 4.4],
+      ['FH-MP', 'FH-MP', 31.1, 5.6],
+      ['SGn-FH', 'SGn-FH', 66.3, 7.1],
+      ['MP-SN', 'MP-SN', 32.5, 5.2],
+      ['Pog-NB(mm)', 'Pog-NB(mm)', 1, 1.5],
+      ['U1-NA(mm)', 'U1-NA(mm)', 5.1, 2.4],
+      ['U1-NA', 'U1-NA', 22.8, 5.7],
+      ['L1-NB(mm)', 'L1-NB(mm)', 6.7, 2.1],
+      ['U1-L1', 'U1-L1', 125.4, 7.9],
+      ['U1-SN', 'U1-SN', 105.7, 6.3],
+      ['L1-MP', 'L1-MP', 91.6, 7],
+    ],
+  },
+  {
+    code: 'abo',
+    label: 'ABO',
+    items: [
+      ['SNA', 'SNA', 82.8, 4],
+      ['SNB', 'SNB', 80.1, 3.9],
+      ['ANB', 'ANB', 2.7, 2],
+      ['MP-SN', 'MP-SN', 35, 4],
+      ['FH-MP', 'FH-MP', 27.3, 6.1],
+      ['U1-NA(mm)', 'U1-NA(mm)', 5.1, 2.4],
+      ['L1-NB(mm)', 'L1-NB(mm)', 6.7, 2.1],
+      ['U1-SN', 'U1-SN', 105.7, 6.3],
+      ['L1-MP', 'L1-MP', 91.6, 7],
+      ['UL-EP(mm)', 'UL-EP(mm)', 2, 2],
+      ['LL-EP(mm)', 'LL-EP(mm)', 3, 3],
+    ],
+  },
+  {
+    code: 'ricketts',
+    label: 'Ricketts',
+    items: [
+      ['NBa-PtGn', 'NBa-PtGn', 93.2, 3.4],
+      ['FH-NPo', 'FH-NPo', 88.2, 3.2],
+      ['FH-MP', 'FH-MP', 27.6, 5.7],
+      ['MP-SN', 'MP-SN', 32.5, 5.2],
+      ['MP-NPo', 'MP-NPo', 66.3, 5],
+      ['ANS-Xi-Pm', 'ANS-Xi-Pm', 47, 4],
+      ['Dc-Xi-Pm', 'Dc-Xi-Pm', 26, 4],
+      ['A-NPo(mm)', 'A-NPo(mm)', 3.7, 2.6],
+      ['U1-APo(mm)', 'U1-APo(mm)', 7.6, 2],
+      ['L1-APo(mm)', 'L1-APo(mm)', 4.6, 1.9],
+      ['L1-APo', 'L1-APo', 24.4, 4.1],
+      ['U6-PtV(mm)', 'U6-PtV(mm)', 17.8, 4.2],
+      ['LL-EP(mm)', 'LL-EP(mm)', 0.3, 2.1],
+    ],
+  },
+  {
+    code: 'tweed',
+    label: 'Tweed',
+    items: [
+      ['L1-FH', 'L1-FH', 54.9, 6.1],
+      ['FH-MP', 'FH-MP', 31.3, 5],
+      ['L1-MP', 'L1-MP', 93.9, 6.2],
+      ['SNA', 'SNA', 82.8, 4],
+      ['SNB', 'SNB', 80.1, 3.9],
+      ['ANB', 'ANB', 2.7, 2],
+      ['AO-BO(mm)', 'AO-BO(mm)', -1, 2.8],
+      ['OP-FH', 'OP-FH', 10, 2],
+      ['Z-Angle', 'Z-Angle', 75, 5],
+      ['Upper thickness', 'Upper thickness', 14.1, 1.2],
+      ["Pog'-NB(mm)", "Pog'-NB(mm)", 11.8, 1.2],
+      ["Ar-Go'(mm)", "Ar-Go'(mm)", 44, 5],
+      ['Me-PP(mm)', 'Me-PP(mm)', 63, 4],
+      ["Ar-Go'/Me-PP(%)", "Ar-Go'/Me-PP(%)", 70, 5],
+    ],
+  },
+  {
+    code: 'mcnamara',
+    label: 'McNamara',
+    items: [
+      ['A-Np(mm)', 'A-Np(mm)', 0.8, 2.1],
+      ['Pog-Np(mm)', 'Pog-Np(mm)', -3.1, 4.9],
+      ['Co-A(mm)', 'Co-A(mm)', 76, 3.9],
+      ['Co-Gn(mm)', 'Co-Gn(mm)', 103.4, 5.3],
+      ['ANS-Me(mm)', 'ANS-Me(mm)', 61, 3.4],
+      ['U1-A(mm)', 'U1-A(mm)', 7, 2.4],
+      ['L1-APog(mm)', 'L1-APog(mm)', 5.3, 2.7],
+      ['FH-MP', 'FH-MP', 27.3, 6.1],
+      ['NBa-PtGn', 'NBa-PtGn', 87, 4],
+    ],
+  },
+  {
+    code: 'jarabak',
+    label: 'Jarabak',
+    items: [
+      ['N-S-Ar', 'N-S-Ar', 120.9, 5],
+      ["S-Ar-Go'", "S-Ar-Go'", 148.5, 6.1],
+      ["Ar-Go'-Me", "Ar-Go'-Me", 122.9, 5.6],
+      ["Ar-Go'-N", "Ar-Go'-N", 53.5, 1.5],
+      ["N-Go'-Me", "N-Go'-Me", 70, 2],
+      ['Sum(S+Ar+Go)', 'Sum(S+Ar+Go)', 392.3, 6.4],
+      ['S-N(mm)', 'S-N(mm)', 66, 3.4],
+      ['Ar-S(mm)', 'Ar-S(mm)', 37.2, 5.2],
+      ["Ar-Go'(mm)", "Ar-Go'(mm)", 46.3, 5.2],
+      ["Go'-Me(mm)", "Go'-Me(mm)", 73.4, 4.9],
+      ['N-Me(mm)', 'N-Me(mm)', 120.7, 7.3],
+      ["S-Go'(mm)", "S-Go'(mm)", 79.9, 8.9],
+      ['N-Go', 'N-Go', 122.6, 6.8],
+      ['S-Me', 'S-Me', 130.3, 7.7],
+      ["S-Ar/Ar-Go'(%)", "S-Ar/Ar-Go'(%)", 79.9, 6.3],
+      ["Go'-Me/S-N'(%)", "Go'-Me/S-N'(%)", 111.2, 6.3],
+      ["S-Go'/N-Me(%)", "S-Go'/N-Me(%)", 70.9, 4.2],
+      ['SNA', 'SNA', 82.8, 4],
+      ['SNB', 'SNB', 80.1, 3.9],
+      ['ANB', 'ANB', 2.7, 2],
+      ['GoGn-SN', 'GoGn-SN', 30.6, 5.2],
+      ['SN-SGn', 'SN-SGn', 68.1, 4.1],
+      ['SN-NPo', 'SN-NPo', 81.3, 4.2],
+      ['NA-APo', 'NA-APo', 10.3, 3.2],
+    ],
+  },
+];
 const FEATURED_KEYPOINT_LABELS = new Set([
   'S', 'Na', 'Po', 'Ba', 'Bo', 'Or', 'Ptm', 'ANS', 'PNS', 'A', 'Sd', 'Pt', 'Co', 'Ar', 'Go', 'B', 'Id', 'Pog', 'Me', 'Gn',
   'D', 'DU', 'Pcd', 'Rp', 'Tpl', 'L1A', 'L1', 'L6', 'U6', 'U1A', 'U1', 'L6D', 'L6M', 'L6A', 'U6A', 'U6D', 'U6M',
@@ -1036,8 +1199,9 @@ function normalizeLandmarkToken(value) {
 }
 
 function canonicalLandmarkName(rawName) {
-  const normalized = normalizeLandmarkToken(rawName);
-  return LANDMARK_ALIAS_MAP.get(normalized) || String(rawName || '').trim() || null;
+  const trimmed = String(rawName || '').trim();
+  if (!trimmed) return null;
+  return LANDMARK_ALIAS_MAP.get(trimmed.toLowerCase()) || trimmed;
 }
 
 function extractLateraPoint(item, source) {
@@ -1265,9 +1429,12 @@ function classifyHeadPoint(point) {
 }
 
 function upsertPoint(pointMap, point) {
-  const current = pointMap.get(point.key);
-  if (!current || (current.source !== 'head' && point.source === 'head')) {
-    pointMap.set(point.key, point);
+  const candidateKeys = [...new Set([point.key, point.landmark].filter(Boolean))];
+  for (const candidateKey of candidateKeys) {
+    const current = pointMap.get(candidateKey);
+    if (!current || (current.source !== 'head' && point.source === 'head')) {
+      pointMap.set(candidateKey, point);
+    }
   }
 }
 
@@ -1408,6 +1575,8 @@ function buildFrameworkItem({
   unit = 'deg',
   value,
   reference = '',
+  referenceMean = null,
+  referenceSd = null,
   normalMin = null,
   normalMax = null,
   landmarks = [],
@@ -1430,6 +1599,8 @@ function buildFrameworkItem({
     value: rounded,
     valueText: formatItemValue(unit, rounded),
     reference,
+    referenceMean,
+    referenceSd,
     tone,
     landmarks,
     formula,
@@ -1437,7 +1608,16 @@ function buildFrameworkItem({
   };
 }
 
-function buildUnsupportedFrameworkItem({ code, label, landmarks = [], formula = '', reason }) {
+function buildUnsupportedFrameworkItem({
+  code,
+  label,
+  landmarks = [],
+  formula = '',
+  reference = '',
+  referenceMean = null,
+  referenceSd = null,
+  reason,
+}) {
   return {
     code,
     label,
@@ -1445,6 +1625,9 @@ function buildUnsupportedFrameworkItem({ code, label, landmarks = [], formula = 
     reason,
     landmarks,
     formula,
+    reference,
+    referenceMean,
+    referenceSd,
   };
 }
 
@@ -1464,27 +1647,27 @@ function buildOcclusalPlane(pointMap) {
 }
 
 function buildCommonGeometry(pointMap) {
-  const fhLine = {
-    start: getPoint(pointMap, 'Po'),
-    end: getPoint(pointMap, 'Or'),
+  const safeLine = (start, end) => {
+    try {
+      return {
+        start: getPoint(pointMap, start),
+        end: getPoint(pointMap, end),
+      };
+    } catch {
+      return null;
+    }
   };
-  const snLine = {
-    start: getPoint(pointMap, 'S'),
-    end: getPoint(pointMap, 'N'),
-  };
-  const mandibularPlane = {
-    start: getPoint(pointMap, 'Go'),
-    end: getPoint(pointMap, 'Me'),
-  };
-  const facialPlane = {
-    start: getPoint(pointMap, 'N'),
-    end: getPoint(pointMap, 'Pog'),
-  };
-  const apogLine = {
-    start: getPoint(pointMap, 'A'),
-    end: getPoint(pointMap, 'Pog'),
-  };
-  const occlusalPlane = buildOcclusalPlane(pointMap);
+  const fhLine = safeLine('Po', 'Or');
+  const snLine = safeLine('S', 'N');
+  const mandibularPlane = safeLine('Go', 'Me');
+  const facialPlane = safeLine('N', 'Pog');
+  const apogLine = safeLine('A', 'Pog');
+  let occlusalPlane = null;
+  try {
+    occlusalPlane = buildOcclusalPlane(pointMap);
+  } catch {
+    occlusalPlane = null;
+  }
   return {
     fhLine,
     snLine,
@@ -1495,705 +1678,387 @@ function buildCommonGeometry(pointMap) {
   };
 }
 
-const FRAMEWORK_DEFINITIONS = [
-  {
-    code: 'downs',
-    label: 'Downs',
-    note: '输出 Downs 常用骨性与牙性项目的原始数值。',
-    items: [
-      {
-        code: 'facialAngle',
-        label: 'Facial Angle',
-        unit: 'deg',
-        reference: '参考: 87.8° ± 3°',
-        normalMin: 84.8,
-        normalMax: 90.8,
-        landmarks: ['N', 'Pog', 'Po', 'Or'],
-        formula: 'FH 与 N-Pog 的夹角',
-        compute: ({ pointMap }) => acuteAngleBetweenLines(getPoint(pointMap, 'Po'), getPoint(pointMap, 'Or'), getPoint(pointMap, 'N'), getPoint(pointMap, 'Pog')),
-      },
-      {
-        code: 'mandibularPlaneAngle',
-        label: 'Mandibular Plane Angle',
-        unit: 'deg',
-        reference: '参考: 21.9° ± 4°',
-        normalMin: 17.9,
-        normalMax: 25.9,
-        landmarks: ['Po', 'Or', 'Go', 'Me'],
-        formula: 'FH 与 Go-Me 的夹角',
-        compute: ({ geometry }) => acuteAngleBetweenLines(geometry.fhLine.start, geometry.fhLine.end, geometry.mandibularPlane.start, geometry.mandibularPlane.end),
-      },
-      {
-        code: 'yAxis',
-        label: 'Y-Axis',
-        unit: 'deg',
-        reference: '参考: 59.4° ± 4°',
-        normalMin: 55.4,
-        normalMax: 63.4,
-        landmarks: ['S', 'Gn', 'Po', 'Or'],
-        formula: 'FH 与 S-Gn 的夹角',
-        compute: ({ pointMap, geometry }) => acuteAngleBetweenLines(geometry.fhLine.start, geometry.fhLine.end, getPoint(pointMap, 'S'), getPoint(pointMap, 'Gn')),
-      },
-      {
-        code: 'interincisalAngle',
-        label: 'Interincisal Angle',
-        unit: 'deg',
-        reference: '参考: 135.4° ± 6°',
-        normalMin: 129.4,
-        normalMax: 141.4,
-        landmarks: ['U1R', 'U1T', 'L1R', 'L1T'],
-        formula: '上下中切牙长轴夹角',
-        compute: ({ pointMap }) => obtuseAngleBetweenLines(getPoint(pointMap, 'U1R'), getPoint(pointMap, 'U1T'), getPoint(pointMap, 'L1R'), getPoint(pointMap, 'L1T')),
-      },
-      {
-        code: 'u1ToAPogAngle',
-        label: 'U1 to A-Pog',
-        unit: 'deg',
-        reference: '参考: 28.5° ± 4°',
-        normalMin: 24.5,
-        normalMax: 32.5,
-        landmarks: ['U1R', 'U1T', 'A', 'Pog'],
-        formula: '上中切牙长轴与 A-Pog 夹角',
-        compute: ({ pointMap, geometry }) => acuteAngleBetweenLines(getPoint(pointMap, 'U1R'), getPoint(pointMap, 'U1T'), geometry.apogLine.start, geometry.apogLine.end),
-      },
-      {
-        code: 'u1ToAPogMm',
-        label: 'U1 to A-Pog',
-        unit: 'mm',
-        reference: '参考: 4.0 ± 2.0 mm',
-        normalMin: 2,
-        normalMax: 6,
-        landmarks: ['U1T', 'A', 'Pog'],
-        formula: 'U1 切缘到 A-Pog 的垂距',
-        compute: ({ pointMap, scale, geometry }) => perpendicularDistanceToLine(getPoint(pointMap, 'U1T'), geometry.apogLine.start, geometry.apogLine.end) * scale.mmPerPx,
-      },
-      {
-        code: 'impa',
-        label: 'IMPA',
-        unit: 'deg',
-        reference: '参考: 90° ± 5°',
-        normalMin: 85,
-        normalMax: 95,
-        landmarks: ['L1R', 'L1T', 'Go', 'Me'],
-        formula: '下中切牙长轴与下颌平面夹角',
-        compute: ({ pointMap, geometry }) => acuteAngleBetweenLines(getPoint(pointMap, 'L1R'), getPoint(pointMap, 'L1T'), geometry.mandibularPlane.start, geometry.mandibularPlane.end),
-      },
-    ],
-  },
-  {
-    code: 'steiner',
-    label: 'Steiner',
-    note: '输出 Steiner 常用角度、线距和切牙项目的原始数值。',
-    items: [
-      {
-        code: 'SNA',
-        label: 'SNA',
-        unit: 'deg',
-        reference: '参考: 82° ± 2°',
-        normalMin: 80,
-        normalMax: 84,
-        landmarks: ['S', 'N', 'A'],
-        formula: '∠SNA',
-        compute: ({ pointMap }) => angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'N'), getPoint(pointMap, 'A')),
-      },
-      {
-        code: 'SNB',
-        label: 'SNB',
-        unit: 'deg',
-        reference: '参考: 80° ± 2°',
-        normalMin: 78,
-        normalMax: 82,
-        landmarks: ['S', 'N', 'B'],
-        formula: '∠SNB',
-        compute: ({ pointMap }) => angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'N'), getPoint(pointMap, 'B')),
-      },
-      {
-        code: 'ANB',
-        label: 'ANB',
-        unit: 'deg',
-        reference: '参考: 2° ± 2°',
-        normalMin: 0,
-        normalMax: 4,
-        landmarks: ['S', 'N', 'A', 'B'],
-        formula: '∠SNA - ∠SNB',
-        compute: ({ pointMap }) => angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'N'), getPoint(pointMap, 'A')) - angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'N'), getPoint(pointMap, 'B')),
-      },
-      {
-        code: 'occlToSN',
-        label: 'Occlusal Plane to SN',
-        unit: 'deg',
-        reference: '参考: 14° ± 2°',
-        normalMin: 12,
-        normalMax: 16,
-        landmarks: ['U1T', 'L1T', 'U6', 'L6', 'S', 'N'],
-        formula: '咬合平面与 SN 的夹角',
-        compute: ({ geometry }) => acuteAngleBetweenLines(geometry.occlusalPlane.posterior, geometry.occlusalPlane.anterior, geometry.snLine.start, geometry.snLine.end),
-      },
-      {
-        code: 'goGnToSN',
-        label: 'GoGn to SN',
-        unit: 'deg',
-        reference: '参考: 32° ± 4°',
-        normalMin: 28,
-        normalMax: 36,
-        landmarks: ['Go', 'Gn', 'S', 'N'],
-        formula: '下颌平面与 SN 的夹角',
-        compute: ({ pointMap, geometry }) => acuteAngleBetweenLines(getPoint(pointMap, 'Go'), getPoint(pointMap, 'Gn'), geometry.snLine.start, geometry.snLine.end),
-      },
-      {
-        code: 'u1ToNAAngle',
-        label: 'U1 to NA',
-        unit: 'deg',
-        reference: '参考: 22° ± 2°',
-        normalMin: 20,
-        normalMax: 24,
-        landmarks: ['U1R', 'U1T', 'N', 'A'],
-        formula: '上中切牙长轴与 NA 的夹角',
-        compute: ({ pointMap }) => acuteAngleBetweenLines(getPoint(pointMap, 'U1R'), getPoint(pointMap, 'U1T'), getPoint(pointMap, 'N'), getPoint(pointMap, 'A')),
-      },
-      {
-        code: 'u1ToNAMm',
-        label: 'U1 to NA',
-        unit: 'mm',
-        reference: '参考: 4.0 ± 2.0 mm',
-        normalMin: 2,
-        normalMax: 6,
-        landmarks: ['U1T', 'N', 'A'],
-        formula: 'U1 切缘到 NA 的垂距',
-        compute: ({ pointMap, scale }) => perpendicularDistanceToLine(getPoint(pointMap, 'U1T'), getPoint(pointMap, 'N'), getPoint(pointMap, 'A')) * scale.mmPerPx,
-      },
-      {
-        code: 'l1ToNBAngle',
-        label: 'L1 to NB',
-        unit: 'deg',
-        reference: '参考: 25° ± 2°',
-        normalMin: 23,
-        normalMax: 27,
-        landmarks: ['L1R', 'L1T', 'N', 'B'],
-        formula: '下中切牙长轴与 NB 的夹角',
-        compute: ({ pointMap }) => acuteAngleBetweenLines(getPoint(pointMap, 'L1R'), getPoint(pointMap, 'L1T'), getPoint(pointMap, 'N'), getPoint(pointMap, 'B')),
-      },
-      {
-        code: 'l1ToNBMm',
-        label: 'L1 to NB',
-        unit: 'mm',
-        reference: '参考: 4.0 ± 2.0 mm',
-        normalMin: 2,
-        normalMax: 6,
-        landmarks: ['L1T', 'N', 'B'],
-        formula: 'L1 切缘到 NB 的垂距',
-        compute: ({ pointMap, scale }) => perpendicularDistanceToLine(getPoint(pointMap, 'L1T'), getPoint(pointMap, 'N'), getPoint(pointMap, 'B')) * scale.mmPerPx,
-      },
-      {
-        code: 'interincisalAngle',
-        label: 'Interincisal Angle',
-        unit: 'deg',
-        reference: '参考: 131° ± 6°',
-        normalMin: 125,
-        normalMax: 137,
-        landmarks: ['U1R', 'U1T', 'L1R', 'L1T'],
-        formula: '上下中切牙长轴夹角',
-        compute: ({ pointMap }) => obtuseAngleBetweenLines(getPoint(pointMap, 'U1R'), getPoint(pointMap, 'U1T'), getPoint(pointMap, 'L1R'), getPoint(pointMap, 'L1T')),
-      },
-    ],
-  },
-  {
-    code: 'pku',
-    label: '北大分析法',
-    note: '输出北大分析法常用骨性、垂直向与牙性核心项目的原始数值。',
-    items: [
-      {
-        code: 'SNA',
-        label: 'SNA',
-        unit: 'deg',
-        reference: '参考: 82° ± 2°',
-        normalMin: 80,
-        normalMax: 84,
-        landmarks: ['S', 'N', 'A'],
-        formula: '∠SNA',
-        compute: ({ pointMap }) => angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'N'), getPoint(pointMap, 'A')),
-      },
-      {
-        code: 'SNB',
-        label: 'SNB',
-        unit: 'deg',
-        reference: '参考: 80° ± 2°',
-        normalMin: 78,
-        normalMax: 82,
-        landmarks: ['S', 'N', 'B'],
-        formula: '∠SNB',
-        compute: ({ pointMap }) => angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'N'), getPoint(pointMap, 'B')),
-      },
-      {
-        code: 'ANB',
-        label: 'ANB',
-        unit: 'deg',
-        reference: '参考: 2° ± 2°',
-        normalMin: 0,
-        normalMax: 4,
-        landmarks: ['S', 'N', 'A', 'B'],
-        formula: '∠SNA - ∠SNB',
-        compute: ({ pointMap }) => angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'N'), getPoint(pointMap, 'A')) - angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'N'), getPoint(pointMap, 'B')),
-      },
-      {
-        code: 'wits',
-        label: 'Wits',
-        unit: 'mm',
-        reference: '参考: 0 ± 2 mm',
-        normalMin: -2,
-        normalMax: 2,
-        landmarks: ['A', 'B', 'U1T', 'L1T', 'U6', 'L6'],
-        formula: 'A、B 在咬合平面投影点的前后距离',
-        compute: ({ pointMap, scale, geometry }) => {
-          const unit = normalizeVector({
-            x: geometry.occlusalPlane.anterior.x - geometry.occlusalPlane.posterior.x,
-            y: geometry.occlusalPlane.anterior.y - geometry.occlusalPlane.posterior.y,
-          });
-          const aProjection = projectPointToLine(getPoint(pointMap, 'A'), geometry.occlusalPlane.posterior, geometry.occlusalPlane.anterior);
-          const bProjection = projectPointToLine(getPoint(pointMap, 'B'), geometry.occlusalPlane.posterior, geometry.occlusalPlane.anterior);
-          return signedDistanceAlongAxis(aProjection, bProjection, unit) * scale.mmPerPx;
-        },
-      },
-      {
-        code: 'FMA',
-        label: 'FMA',
-        unit: 'deg',
-        reference: '参考: 25° ± 4°',
-        normalMin: 21,
-        normalMax: 29,
-        landmarks: ['Po', 'Or', 'Go', 'Me'],
-        formula: 'FH 与 Go-Me 的夹角',
-        compute: ({ geometry }) => acuteAngleBetweenLines(geometry.fhLine.start, geometry.fhLine.end, geometry.mandibularPlane.start, geometry.mandibularPlane.end),
-      },
-      {
-        code: 'GoGn-SN',
-        label: 'GoGn-SN',
-        unit: 'deg',
-        reference: '参考: 32° ± 4°',
-        normalMin: 28,
-        normalMax: 36,
-        landmarks: ['Go', 'Gn', 'S', 'N'],
-        formula: '下颌平面与 SN 的夹角',
-        compute: ({ pointMap, geometry }) => acuteAngleBetweenLines(getPoint(pointMap, 'Go'), getPoint(pointMap, 'Gn'), geometry.snLine.start, geometry.snLine.end),
-      },
-      {
-        code: 'U1-SN',
-        label: 'U1-SN',
-        unit: 'deg',
-        reference: '参考: 102° ± 2°',
-        normalMin: 100,
-        normalMax: 104,
-        landmarks: ['U1R', 'U1T', 'S', 'N'],
-        formula: '上中切牙长轴与 SN 的夹角',
-        compute: ({ pointMap, geometry }) => 180 - acuteAngleBetweenLines(getPoint(pointMap, 'U1R'), getPoint(pointMap, 'U1T'), geometry.snLine.start, geometry.snLine.end),
-      },
-      {
-        code: 'IMPA',
-        label: 'IMPA',
-        unit: 'deg',
-        reference: '参考: 90° ± 5°',
-        normalMin: 85,
-        normalMax: 95,
-        landmarks: ['L1R', 'L1T', 'Go', 'Me'],
-        formula: '下中切牙长轴与下颌平面夹角',
-        compute: ({ pointMap, geometry }) => acuteAngleBetweenLines(getPoint(pointMap, 'L1R'), getPoint(pointMap, 'L1T'), geometry.mandibularPlane.start, geometry.mandibularPlane.end),
-      },
-      {
-        code: 'interincisalAngle',
-        label: 'Interincisal Angle',
-        unit: 'deg',
-        reference: '参考: 131° ± 6°',
-        normalMin: 125,
-        normalMax: 137,
-        landmarks: ['U1R', 'U1T', 'L1R', 'L1T'],
-        formula: '上下中切牙长轴夹角',
-        compute: ({ pointMap }) => obtuseAngleBetweenLines(getPoint(pointMap, 'U1R'), getPoint(pointMap, 'U1T'), getPoint(pointMap, 'L1R'), getPoint(pointMap, 'L1T')),
-      },
-    ],
-  },
-  {
-    code: 'abo',
-    label: 'ABO',
-    note: '输出 ABO 常用头影核心项目的原始数值，便于快速复核骨性与牙代偿。',
-    items: [
-      {
-        code: 'ANB',
-        label: 'ANB',
-        unit: 'deg',
-        reference: '参考: 2° ± 2°',
-        normalMin: 0,
-        normalMax: 4,
-        landmarks: ['S', 'N', 'A', 'B'],
-        formula: '∠SNA - ∠SNB',
-        compute: ({ pointMap }) => angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'N'), getPoint(pointMap, 'A')) - angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'N'), getPoint(pointMap, 'B')),
-      },
-      {
-        code: 'wits',
-        label: 'Wits',
-        unit: 'mm',
-        reference: '参考: 0 ± 2 mm',
-        normalMin: -2,
-        normalMax: 2,
-        landmarks: ['A', 'B', 'U1T', 'L1T', 'U6', 'L6'],
-        formula: 'A、B 在咬合平面投影点的前后距离',
-        compute: ({ pointMap, scale, geometry }) => {
-          const unit = normalizeVector({
-            x: geometry.occlusalPlane.anterior.x - geometry.occlusalPlane.posterior.x,
-            y: geometry.occlusalPlane.anterior.y - geometry.occlusalPlane.posterior.y,
-          });
-          const aProjection = projectPointToLine(getPoint(pointMap, 'A'), geometry.occlusalPlane.posterior, geometry.occlusalPlane.anterior);
-          const bProjection = projectPointToLine(getPoint(pointMap, 'B'), geometry.occlusalPlane.posterior, geometry.occlusalPlane.anterior);
-          return signedDistanceAlongAxis(aProjection, bProjection, unit) * scale.mmPerPx;
-        },
-      },
-      {
-        code: 'FMA',
-        label: 'FMA',
-        unit: 'deg',
-        reference: '参考: 25° ± 4°',
-        normalMin: 21,
-        normalMax: 29,
-        landmarks: ['Po', 'Or', 'Go', 'Me'],
-        formula: 'FH 与 Go-Me 的夹角',
-        compute: ({ geometry }) => acuteAngleBetweenLines(geometry.fhLine.start, geometry.fhLine.end, geometry.mandibularPlane.start, geometry.mandibularPlane.end),
-      },
-      {
-        code: 'GoGn-SN',
-        label: 'GoGn-SN',
-        unit: 'deg',
-        reference: '参考: 32° ± 4°',
-        normalMin: 28,
-        normalMax: 36,
-        landmarks: ['Go', 'Gn', 'S', 'N'],
-        formula: '下颌平面与 SN 的夹角',
-        compute: ({ pointMap, geometry }) => acuteAngleBetweenLines(getPoint(pointMap, 'Go'), getPoint(pointMap, 'Gn'), geometry.snLine.start, geometry.snLine.end),
-      },
-      {
-        code: 'U1-SN',
-        label: 'U1-SN',
-        unit: 'deg',
-        reference: '参考: 102° ± 2°',
-        normalMin: 100,
-        normalMax: 104,
-        landmarks: ['U1R', 'U1T', 'S', 'N'],
-        formula: '上中切牙长轴与 SN 的夹角',
-        compute: ({ pointMap, geometry }) => 180 - acuteAngleBetweenLines(getPoint(pointMap, 'U1R'), getPoint(pointMap, 'U1T'), geometry.snLine.start, geometry.snLine.end),
-      },
-      {
-        code: 'IMPA',
-        label: 'IMPA',
-        unit: 'deg',
-        reference: '参考: 90° ± 5°',
-        normalMin: 85,
-        normalMax: 95,
-        landmarks: ['L1R', 'L1T', 'Go', 'Me'],
-        formula: '下中切牙长轴与下颌平面夹角',
-        compute: ({ pointMap, geometry }) => acuteAngleBetweenLines(getPoint(pointMap, 'L1R'), getPoint(pointMap, 'L1T'), geometry.mandibularPlane.start, geometry.mandibularPlane.end),
-      },
-      {
-        code: 'interincisalAngle',
-        label: 'Interincisal Angle',
-        unit: 'deg',
-        reference: '参考: 131° ± 6°',
-        normalMin: 125,
-        normalMax: 137,
-        landmarks: ['U1R', 'U1T', 'L1R', 'L1T'],
-        formula: '上下中切牙长轴夹角',
-        compute: ({ pointMap }) => obtuseAngleBetweenLines(getPoint(pointMap, 'U1R'), getPoint(pointMap, 'U1T'), getPoint(pointMap, 'L1R'), getPoint(pointMap, 'L1T')),
-      },
-    ],
-  },
-  {
-    code: 'ricketts',
-    label: 'Ricketts',
-    note: '输出 Ricketts 常用骨面型与切牙位置项目的原始数值。',
-    items: [
-      {
-        code: 'facialAxis',
-        label: 'Facial Axis',
-        unit: 'deg',
-        reference: '参考: 90° ± 3°',
-        normalMin: 87,
-        normalMax: 93,
-        landmarks: ['Ba', 'N', 'Pt', 'Gn'],
-        formula: 'Ba-N 与 Pt-Gn 的夹角',
-        compute: ({ pointMap }) => acuteAngleBetweenLines(getPoint(pointMap, 'Ba'), getPoint(pointMap, 'N'), getPoint(pointMap, 'Pt'), getPoint(pointMap, 'Gn')),
-      },
-      {
-        code: 'facialDepth',
-        label: 'Facial Depth',
-        unit: 'deg',
-        reference: '参考: 87° ± 3°',
-        normalMin: 84,
-        normalMax: 90,
-        landmarks: ['Po', 'Or', 'N', 'Pog'],
-        formula: 'FH 与 N-Pog 的夹角',
-        compute: ({ geometry }) => acuteAngleBetweenLines(geometry.fhLine.start, geometry.fhLine.end, geometry.facialPlane.start, geometry.facialPlane.end),
-      },
-      {
-        code: 'mandibularPlane',
-        label: 'Mandibular Plane',
-        unit: 'deg',
-        reference: '参考: 26° ± 4°',
-        normalMin: 22,
-        normalMax: 30,
-        landmarks: ['Po', 'Or', 'Go', 'Me'],
-        formula: 'FH 与 Go-Me 的夹角',
-        compute: ({ geometry }) => acuteAngleBetweenLines(geometry.fhLine.start, geometry.fhLine.end, geometry.mandibularPlane.start, geometry.mandibularPlane.end),
-      },
-      {
-        code: 'convexityAtA',
-        label: 'Convexity at A',
-        unit: 'mm',
-        reference: '参考: 2 ± 2 mm',
-        normalMin: 0,
-        normalMax: 4,
-        landmarks: ['A', 'N', 'Pog'],
-        formula: 'A 点到 N-Pog 的垂距',
-        compute: ({ pointMap, scale, geometry }) => perpendicularDistanceToLine(getPoint(pointMap, 'A'), geometry.facialPlane.start, geometry.facialPlane.end) * scale.mmPerPx,
-      },
-      {
-        code: 'l1ToAPogAngle',
-        label: 'L1 to A-Pog',
-        unit: 'deg',
-        reference: '参考: 22° ± 4°',
-        normalMin: 18,
-        normalMax: 26,
-        landmarks: ['L1R', 'L1T', 'A', 'Pog'],
-        formula: '下中切牙长轴与 A-Pog 的夹角',
-        compute: ({ pointMap, geometry }) => acuteAngleBetweenLines(getPoint(pointMap, 'L1R'), getPoint(pointMap, 'L1T'), geometry.apogLine.start, geometry.apogLine.end),
-      },
-      {
-        code: 'l1ToAPogMm',
-        label: 'L1 to A-Pog',
-        unit: 'mm',
-        reference: '参考: 1 ± 2 mm',
-        normalMin: -1,
-        normalMax: 3,
-        landmarks: ['L1T', 'A', 'Pog'],
-        formula: 'L1 切缘到 A-Pog 的垂距',
-        compute: ({ pointMap, scale, geometry }) => perpendicularDistanceToLine(getPoint(pointMap, 'L1T'), geometry.apogLine.start, geometry.apogLine.end) * scale.mmPerPx,
-      },
-    ],
-  },
-  {
-    code: 'tweed',
-    label: 'Tweed',
-    note: '输出 Tweed 三角的原始角度项目。',
-    items: [
-      {
-        code: 'FMA',
-        label: 'FMA',
-        unit: 'deg',
-        reference: '参考: 25° ± 4°',
-        normalMin: 21,
-        normalMax: 29,
-        landmarks: ['Po', 'Or', 'Go', 'Me'],
-        formula: 'FH 与 Go-Me 的夹角',
-        compute: ({ geometry }) => acuteAngleBetweenLines(geometry.fhLine.start, geometry.fhLine.end, geometry.mandibularPlane.start, geometry.mandibularPlane.end),
-      },
-      {
-        code: 'IMPA',
-        label: 'IMPA',
-        unit: 'deg',
-        reference: '参考: 90° ± 5°',
-        normalMin: 85,
-        normalMax: 95,
-        landmarks: ['L1R', 'L1T', 'Go', 'Me'],
-        formula: '下中切牙长轴与下颌平面夹角',
-        compute: ({ pointMap, geometry }) => acuteAngleBetweenLines(getPoint(pointMap, 'L1R'), getPoint(pointMap, 'L1T'), geometry.mandibularPlane.start, geometry.mandibularPlane.end),
-      },
-      {
-        code: 'FMIA',
-        label: 'FMIA',
-        unit: 'deg',
-        reference: '参考: 65° ± 5°',
-        normalMin: 60,
-        normalMax: 70,
-        landmarks: ['Po', 'Or', 'L1R', 'L1T'],
-        formula: 'FH 与下中切牙长轴夹角',
-        compute: ({ pointMap, geometry }) => acuteAngleBetweenLines(geometry.fhLine.start, geometry.fhLine.end, getPoint(pointMap, 'L1R'), getPoint(pointMap, 'L1T')),
-      },
-    ],
-  },
-  {
-    code: 'mcnamara',
-    label: 'McNamara',
-    note: '输出 McNamara 常用前后向与长度项目的原始数值；长度类需结合年龄和性别解读。',
-    items: [
-      {
-        code: 'AtoNPerp',
-        label: 'A to N-perp',
-        unit: 'mm',
-        reference: '参考: 1 ± 2 mm',
-        normalMin: -1,
-        normalMax: 3,
-        landmarks: ['N', 'Po', 'Or', 'A'],
-        formula: 'A 点相对 N 垂线的前后距离',
-        compute: ({ pointMap, scale, geometry }) => {
-          const fhUnit = normalizeVector({
-            x: geometry.fhLine.end.x - geometry.fhLine.start.x,
-            y: geometry.fhLine.end.y - geometry.fhLine.start.y,
-          });
-          return signedDistanceAlongAxis(getPoint(pointMap, 'A'), getPoint(pointMap, 'N'), fhUnit) * scale.mmPerPx;
-        },
-      },
-      {
-        code: 'PogToNPerp',
-        label: 'Pog to N-perp',
-        unit: 'mm',
-        reference: '参考: -4 ± 4 mm',
-        normalMin: -8,
-        normalMax: 0,
-        landmarks: ['N', 'Po', 'Or', 'Pog'],
-        formula: 'Pog 相对 N 垂线的前后距离',
-        compute: ({ pointMap, scale, geometry }) => {
-          const fhUnit = normalizeVector({
-            x: geometry.fhLine.end.x - geometry.fhLine.start.x,
-            y: geometry.fhLine.end.y - geometry.fhLine.start.y,
-          });
-          return signedDistanceAlongAxis(getPoint(pointMap, 'Pog'), getPoint(pointMap, 'N'), fhUnit) * scale.mmPerPx;
-        },
-      },
-      {
-        code: 'CoA',
-        label: 'Co-A',
-        unit: 'mm',
-        reference: '参考: 需结合年龄/性别',
-        landmarks: ['Co', 'A'],
-        formula: '髁点到 A 点距离',
-        compute: ({ pointMap, scale }) => distanceBetweenPoints(getPoint(pointMap, 'Co'), getPoint(pointMap, 'A')) * scale.mmPerPx,
-      },
-      {
-        code: 'CoGn',
-        label: 'Co-Gn',
-        unit: 'mm',
-        reference: '参考: 需结合年龄/性别',
-        landmarks: ['Co', 'Gn'],
-        formula: '髁点到 Gn 点距离',
-        compute: ({ pointMap, scale }) => distanceBetweenPoints(getPoint(pointMap, 'Co'), getPoint(pointMap, 'Gn')) * scale.mmPerPx,
-      },
-      {
-        code: 'ANSMe',
-        label: 'ANS-Me',
-        unit: 'mm',
-        reference: '参考: 需结合年龄/性别',
-        landmarks: ['ANS', 'Me'],
-        formula: '下前面高',
-        compute: ({ pointMap, scale }) => distanceBetweenPoints(getPoint(pointMap, 'ANS'), getPoint(pointMap, 'Me')) * scale.mmPerPx,
-      },
-      {
-        code: 'U1toAPogMm',
-        label: 'U1 to A-Pog',
-        unit: 'mm',
-        reference: '参考: 需结合牙性代偿解读',
-        landmarks: ['U1T', 'A', 'Pog'],
-        formula: 'U1 切缘到 A-Pog 的垂距',
-        compute: ({ pointMap, scale, geometry }) => perpendicularDistanceToLine(getPoint(pointMap, 'U1T'), geometry.apogLine.start, geometry.apogLine.end) * scale.mmPerPx,
-      },
-    ],
-  },
-  {
-    code: 'jarabak',
-    label: 'Jarabak',
-    note: '输出 Jarabak 角度总和与面高比例等原始数值。',
-    items: [
-      {
-        code: 'saddleAngle',
-        label: 'Saddle Angle',
-        unit: 'deg',
-        reference: '参考: 123° ± 5°',
-        normalMin: 118,
-        normalMax: 128,
-        landmarks: ['N', 'S', 'Ar'],
-        formula: '∠NSAr',
-        compute: ({ pointMap }) => angleAt(getPoint(pointMap, 'N'), getPoint(pointMap, 'S'), getPoint(pointMap, 'Ar')),
-      },
-      {
-        code: 'articularAngle',
-        label: 'Articular Angle',
-        unit: 'deg',
-        reference: '参考: 143° ± 6°',
-        normalMin: 137,
-        normalMax: 149,
-        landmarks: ['S', 'Ar', 'Go'],
-        formula: '∠SArGo',
-        compute: ({ pointMap }) => angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'Ar'), getPoint(pointMap, 'Go')),
-      },
-      {
-        code: 'gonialAngle',
-        label: 'Gonial Angle',
-        unit: 'deg',
-        reference: '参考: 130° ± 7°',
-        normalMin: 123,
-        normalMax: 137,
-        landmarks: ['Ar', 'Go', 'Me'],
-        formula: '∠ArGoMe',
-        compute: ({ pointMap }) => angleAt(getPoint(pointMap, 'Ar'), getPoint(pointMap, 'Go'), getPoint(pointMap, 'Me')),
-      },
-      {
-        code: 'sumOfAngles',
-        label: 'Sum of Angles',
-        unit: 'deg',
-        reference: '参考: 396° ± 6°',
-        normalMin: 390,
-        normalMax: 402,
-        landmarks: ['N', 'S', 'Ar', 'Go', 'Me'],
-        formula: 'Saddle + Articular + Gonial',
-        compute: ({ pointMap }) => angleAt(getPoint(pointMap, 'N'), getPoint(pointMap, 'S'), getPoint(pointMap, 'Ar')) + angleAt(getPoint(pointMap, 'S'), getPoint(pointMap, 'Ar'), getPoint(pointMap, 'Go')) + angleAt(getPoint(pointMap, 'Ar'), getPoint(pointMap, 'Go'), getPoint(pointMap, 'Me')),
-      },
-      {
-        code: 'posteriorAnteriorRatio',
-        label: 'Posterior / Anterior Facial Height',
-        unit: '%',
-        reference: '参考: 62% ± 5%',
-        normalMin: 57,
-        normalMax: 67,
-        landmarks: ['S', 'Go', 'N', 'Me'],
-        formula: 'S-Go / N-Me × 100',
-        compute: ({ pointMap, scale }) => (
-          (distanceBetweenPoints(getPoint(pointMap, 'S'), getPoint(pointMap, 'Go')) * scale.mmPerPx)
-          / (distanceBetweenPoints(getPoint(pointMap, 'N'), getPoint(pointMap, 'Me')) * scale.mmPerPx)
-        ) * 100,
-      },
-    ],
-  },
-];
+function createDerivedPoint(name, x, y) {
+  return {
+    landmark: name,
+    key: name,
+    source: 'derived',
+    x: round1(x),
+    y: round1(y),
+    confidence: null,
+  };
+}
+
+function addDerivedPoint(pointMap, name, x, y) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  upsertPoint(pointMap, createDerivedPoint(name, x, y));
+}
+
+function buildRawPointLookupFromPointMap(pointMap) {
+  const lookup = new Map();
+  for (const point of pointMap.values()) {
+    if (point?.landmark && !lookup.has(point.landmark)) {
+      lookup.set(point.landmark, point);
+    }
+  }
+  return lookup;
+}
+
+function lineIntersection(pointA, pointB, pointC, pointD) {
+  const denominator = (pointA.x - pointB.x) * (pointC.y - pointD.y) - (pointA.y - pointB.y) * (pointC.x - pointD.x);
+  if (Math.abs(denominator) < 1e-8) {
+    return null;
+  }
+  return {
+    x: ((pointA.x * pointB.y - pointA.y * pointB.x) * (pointC.x - pointD.x) - (pointA.x - pointB.x) * (pointC.x * pointD.y - pointC.y * pointD.x)) / denominator,
+    y: ((pointA.x * pointB.y - pointA.y * pointB.x) * (pointC.y - pointD.y) - (pointA.y - pointB.y) * (pointC.x * pointD.y - pointC.y * pointD.x)) / denominator,
+  };
+}
+
+function lineSegmentIntersection(pointA, pointB, pointC, pointD) {
+  const intersection = lineIntersection(pointA, pointB, pointC, pointD);
+  if (!intersection) return null;
+  const epsilon = 1e-6;
+  const within = (value, start, end) => value >= Math.min(start, end) - epsilon && value <= Math.max(start, end) + epsilon;
+  if (
+    within(intersection.x, pointA.x, pointB.x)
+    && within(intersection.y, pointA.y, pointB.y)
+    && within(intersection.x, pointC.x, pointD.x)
+    && within(intersection.y, pointC.y, pointD.y)
+  ) {
+    return intersection;
+  }
+  return null;
+}
+
+function signedDistanceLikeWeb(lineStart, lineEnd, point) {
+  const deltaX = lineEnd.x - lineStart.x;
+  const deltaY = lineEnd.y - lineStart.y;
+  if (Math.abs(deltaX) < 1e-8) {
+    return point.x - lineStart.x;
+  }
+  const slope = deltaY / deltaX;
+  const base = (slope * (point.x - lineStart.x) - (point.y - lineStart.y)) / Math.sqrt(slope ** 2 + 1);
+  return slope > 0 ? base : -base;
+}
+
+function ensureWebDerivedPoints(pointMap) {
+  try {
+    const occlusalPlane = buildOcclusalPlane(pointMap);
+    addDerivedPoint(pointMap, 'post_occlusal_point', occlusalPlane.posterior.x, occlusalPlane.posterior.y);
+    addDerivedPoint(pointMap, 'ant_occlusal_point', occlusalPlane.anterior.x, occlusalPlane.anterior.y);
+  } catch {
+    // Ignore missing tooth anchors here; downstream items will surface unsupported status.
+  }
+
+  const rawLookup = buildRawPointLookupFromPointMap(pointMap);
+  for (const shape of buildToothFillShapes(rawLookup)) {
+    for (const point of shape.points) {
+      if (!rawLookup.has(point.landmark) && !pointMap.has(point.landmark)) {
+        addDerivedPoint(pointMap, point.landmark, point.x, point.y);
+      }
+    }
+  }
+
+  try {
+    if (!pointMap.has("Go'")) {
+      const goPrime = lineIntersection(
+        getPoint(pointMap, 'Ar'),
+        getPoint(pointMap, 'Rp'),
+        getPoint(pointMap, 'Tpl'),
+        getPoint(pointMap, 'Me'),
+      );
+      if (goPrime) {
+        addDerivedPoint(pointMap, "Go'", goPrime.x, goPrime.y);
+      }
+    }
+  } catch {
+    // Ignore; the related items will be marked unsupported.
+  }
+
+  try {
+    if (!pointMap.has('Xi')) {
+      const fhStart = getPoint(pointMap, 'Po');
+      const fhEnd = getPoint(pointMap, 'Or');
+      const centerStart = getPoint(pointMap, 'J');
+      const centerEnd = getPoint(pointMap, 'R3');
+      const dx = fhEnd.x - fhStart.x;
+      const dy = fhEnd.y - fhStart.y;
+      const xi = lineIntersection(
+        centerStart,
+        { x: centerStart.x + dx, y: centerStart.y + dy },
+        centerEnd,
+        { x: centerEnd.x - dy, y: centerEnd.y + dx },
+      );
+      if (xi) {
+        addDerivedPoint(pointMap, 'Xi', xi.x, xi.y);
+      }
+    }
+  } catch {
+    // Ignore; the related items will be marked unsupported.
+  }
+
+  try {
+    if (!pointMap.has('DC')) {
+      const nasion = getPoint(pointMap, 'N');
+      const basion = getPoint(pointMap, 'Ba');
+      const contour = RICKETTS_CONTOUR_KEYS.map((name) => pointMap.get(name)).filter(Boolean);
+      const intersections = [];
+      for (let index = 1; index < contour.length; index += 1) {
+        const intersection = lineSegmentIntersection(nasion, basion, contour[index - 1], contour[index]);
+        if (intersection) {
+          intersections.push(intersection);
+        }
+      }
+      if (intersections.length >= 2) {
+        const first = intersections[0];
+        const last = intersections[intersections.length - 1];
+        addDerivedPoint(pointMap, 'DC', (first.x + last.x) / 2, (first.y + last.y) / 2);
+      }
+    }
+  } catch {
+    // Ignore; the related items will be marked unsupported.
+  }
+}
+
+function inferFrameworkUnit(calculationId) {
+  if (calculationId.includes('(%)')) return '%';
+  if (calculationId.includes('(mm)') || calculationId === 'N-Go' || calculationId === 'S-Me') return 'mm';
+  return 'deg';
+}
+
+function formatFrameworkReference(mean, sd, unit) {
+  if (!Number.isFinite(mean) || !Number.isFinite(sd)) return '';
+  const suffix = unit === '%' ? '%' : unit === 'mm' ? ' mm' : '°';
+  return `参考: ${mean} ± ${sd}${suffix}`;
+}
+
+function lineAngle(pointMap, names) {
+  const [a, b, c, d] = names.map((name) => getPoint(pointMap, name));
+  return angleBetweenLines(a, b, c, d);
+}
+
+function triangleAngle(pointMap, names) {
+  const [a, b, c] = names.map((name) => getPoint(pointMap, name));
+  return angleAt(a, b, c);
+}
+
+function pointDistanceMm(pointMap, names, scale) {
+  const [a, b] = names.map((name) => getPoint(pointMap, name));
+  return distanceBetweenPoints(a, b) * scale.mmPerPx;
+}
+
+function pointLineDistanceMm(pointMap, lineNames, pointName, scale) {
+  const lineStart = getPoint(pointMap, lineNames[0]);
+  const lineEnd = getPoint(pointMap, lineNames[1]);
+  const point = getPoint(pointMap, pointName);
+  return perpendicularDistanceToLine(point, lineStart, lineEnd) * scale.mmPerPx;
+}
+
+function signedVrMm(pointMap, lineNames, pointName, scale) {
+  const lineStart = getPoint(pointMap, lineNames[0]);
+  const lineEnd = getPoint(pointMap, lineNames[1]);
+  const point = getPoint(pointMap, pointName);
+  return signedDistanceLikeWeb(lineStart, lineEnd, point) * scale.mmPerPx;
+}
+
+function projectionPoint(pointMap, lineNames, pointName) {
+  const lineStart = getPoint(pointMap, lineNames[0]);
+  const lineEnd = getPoint(pointMap, lineNames[1]);
+  const point = getPoint(pointMap, pointName);
+  return projectPointToLine(point, lineStart, lineEnd);
+}
+
+function projectedDistanceMm(pointMap, lineNames, firstPoint, secondPoint, scale) {
+  const firstProjection = projectionPoint(pointMap, lineNames, firstPoint);
+  const secondProjection = projectionPoint(pointMap, lineNames, secondPoint);
+  return distanceBetweenPoints(firstProjection, secondProjection) * scale.mmPerPx;
+}
+
+function makeFrameworkSpec(unit, landmarks, formula, compute) {
+  return { unit, landmarks, formula, compute };
+}
+
+function makeDegSpec(landmarks, formula, compute) {
+  return makeFrameworkSpec('deg', landmarks, formula, compute);
+}
+
+function makeMmSpec(landmarks, formula, compute) {
+  return makeFrameworkSpec('mm', landmarks, formula, compute);
+}
+
+function makePercentSpec(landmarks, formula, compute) {
+  return makeFrameworkSpec('%', landmarks, formula, compute);
+}
+
+const FRAMEWORK_CALCULATION_REGISTRY = {
+  'SNA': makeDegSpec(['S', 'N', 'A'], '∠SNA', ({ pointMap }) => triangleAngle(pointMap, ['S', 'N', 'A'])),
+  'SNB': makeDegSpec(['S', 'N', 'B'], '∠SNB', ({ pointMap }) => triangleAngle(pointMap, ['S', 'N', 'B'])),
+  'ANB': makeDegSpec(['S', 'N', 'A', 'B'], '∠SNA - ∠SNB', ({ pointMap }) => triangleAngle(pointMap, ['S', 'N', 'A']) - triangleAngle(pointMap, ['S', 'N', 'B'])),
+  'SND': makeDegSpec(['S', 'N', 'D'], '∠SND', ({ pointMap }) => triangleAngle(pointMap, ['S', 'N', 'D'])),
+  'FH-NPo': makeDegSpec(['Pog', 'N', 'Po', 'Or'], 'Ft(Pog,N,Po,Or)', ({ pointMap }) => lineAngle(pointMap, ['Pog', 'N', 'Po', 'Or'])),
+  'NA-APo': makeDegSpec(['N', 'A', 'A', 'Pog'], 'Ft(N,A,A,Pog)', ({ pointMap }) => lineAngle(pointMap, ['N', 'A', 'A', 'Pog'])),
+  'AB-NPo': makeDegSpec(['B', 'A', 'Pog', 'N'], 'Ft(B,A,Pog,N)', ({ pointMap }) => lineAngle(pointMap, ['B', 'A', 'Pog', 'N'])),
+  'FH-MP': makeDegSpec(['Po', 'Or', 'Tpl', 'Me'], 'Ft(Po,Or,Tpl,Me)', ({ pointMap }) => lineAngle(pointMap, ['Po', 'Or', 'Tpl', 'Me'])),
+  'SGn-FH': makeDegSpec(['Po', 'Or', 'S', 'Gn'], 'Ft(Po,Or,S,Gn)', ({ pointMap }) => lineAngle(pointMap, ['Po', 'Or', 'S', 'Gn'])),
+  'OP-FH': makeDegSpec(['Po', 'Or', 'post_occlusal_point', 'ant_occlusal_point'], 'Ft(Po,Or,post_occlusal_point,ant_occlusal_point)', ({ pointMap }) => lineAngle(pointMap, ['Po', 'Or', 'post_occlusal_point', 'ant_occlusal_point'])),
+  'U1-L1': makeDegSpec(['L1A', 'L1', 'U1A', 'U1'], 'Ft(L1A,L1,U1A,U1)', ({ pointMap }) => lineAngle(pointMap, ['L1A', 'L1', 'U1A', 'U1'])),
+  'L1-OP': makeDegSpec(['post_occlusal_point', 'ant_occlusal_point', 'L1', 'L1A'], 'Ft(post_occlusal_point,ant_occlusal_point,L1,L1A)', ({ pointMap }) => lineAngle(pointMap, ['post_occlusal_point', 'ant_occlusal_point', 'L1', 'L1A'])),
+  'U1-APo(mm)': makeMmSpec(['A', 'Pog', 'U1'], 'In(A,Pog,U1)', ({ pointMap, scale }) => pointLineDistanceMm(pointMap, ['A', 'Pog'], 'U1', scale)),
+  'L1-MP': makeDegSpec(['Tpl', 'Me', 'L1', 'L1A'], 'Ft(Tpl,Me,L1,L1A)', ({ pointMap }) => lineAngle(pointMap, ['Tpl', 'Me', 'L1', 'L1A'])),
+  'Pog-NB(mm)': makeMmSpec(['N', 'B', 'Pog'], 'Pog 到 NB 的垂距', ({ pointMap, scale }) => pointLineDistanceMm(pointMap, ['N', 'B'], 'Pog', scale)),
+  'OP-SN': makeDegSpec(['S', 'N', 'post_occlusal_point', 'ant_occlusal_point'], 'Ft(S,N,post_occlusal_point,ant_occlusal_point)', ({ pointMap }) => lineAngle(pointMap, ['S', 'N', 'post_occlusal_point', 'ant_occlusal_point'])),
+  'GoGn-SN': makeDegSpec(['S', 'N', 'Go', 'Gn'], 'Ft(S,N,Go,Gn)', ({ pointMap }) => lineAngle(pointMap, ['S', 'N', 'Go', 'Gn'])),
+  'SE(mm)': makeMmSpec(['S', 'N', 'Pcd'], 'S 到 Pcd 在 SN 上投影点的距离', ({ pointMap, scale }) => projectedDistanceMm(pointMap, ['S', 'N'], 'S', 'Pcd', scale)),
+  'SL(mm)': makeMmSpec(['S', 'N', 'Pog'], 'S 到 Pog 在 SN 上投影点的距离', ({ pointMap, scale }) => projectedDistanceMm(pointMap, ['S', 'N'], 'S', 'Pog', scale)),
+  'U1-NA(mm)': makeMmSpec(['N', 'A', 'U1'], 'In(N,A,U1)', ({ pointMap, scale }) => pointLineDistanceMm(pointMap, ['N', 'A'], 'U1', scale)),
+  'U1-NA': makeDegSpec(['U1A', 'U1', 'N', 'A'], 'Ft(U1A,U1,N,A)', ({ pointMap }) => lineAngle(pointMap, ['U1A', 'U1', 'N', 'A'])),
+  'L1-NB(mm)': makeMmSpec(['N', 'B', 'L1'], 'In(N,B,L1)', ({ pointMap, scale }) => pointLineDistanceMm(pointMap, ['N', 'B'], 'L1', scale)),
+  'L1-NB': makeDegSpec(['B', 'N', 'L1A', 'L1'], 'Ft(B,N,L1A,L1)', ({ pointMap }) => lineAngle(pointMap, ['B', 'N', 'L1A', 'L1'])),
+  'U1-SN': makeDegSpec(['U1A', 'U1', 'N', 'S'], 'Ft(U1A,U1,N,S)', ({ pointMap }) => {
+    const value = lineAngle(pointMap, ['U1A', 'U1', 'N', 'S']);
+    return value < 0 ? 360 + value : value;
+  }),
+  'MP-SN': makeDegSpec(['S', 'N', 'Tpl', 'Me'], 'Ft(S,N,Tpl,Me)', ({ pointMap }) => lineAngle(pointMap, ['S', 'N', 'Tpl', 'Me'])),
+  'UL-EP(mm)': makeMmSpec(['Prn', "Pog'", 'Ls'], "Vr(Prn,Pog',Ls)", ({ pointMap, scale }) => signedVrMm(pointMap, ['Prn', "Pog'"], 'Ls', scale)),
+  'LL-EP(mm)': makeMmSpec(['Prn', "Pog'", 'LL'], "Vr(Prn,Pog',LL)", ({ pointMap, scale }) => signedVrMm(pointMap, ['Prn', "Pog'"], 'LL', scale)),
+  'NBa-PtGn': makeDegSpec(['Pt', 'Gn', 'N', 'Ba'], 'Ft(Pt,Gn,N,Ba)', ({ pointMap }) => lineAngle(pointMap, ['Pt', 'Gn', 'N', 'Ba'])),
+  'MP-NPo': makeDegSpec(['N', 'Pog', 'Tpl', 'Me'], '-Ft(N,Pog,Tpl,Me)', ({ pointMap }) => -lineAngle(pointMap, ['N', 'Pog', 'Tpl', 'Me'])),
+  'ANS-Xi-Pm': makeDegSpec(['ANS', 'Xi', 'PM'], 'vr(ANS,Xi,PM)', ({ pointMap }) => triangleAngle(pointMap, ['ANS', 'Xi', 'PM'])),
+  'Dc-Xi-Pm': makeDegSpec(['PM', 'Xi', 'DC'], 'Ft(PM,Xi,Xi,DC)', ({ pointMap }) => lineAngle(pointMap, ['PM', 'Xi', 'Xi', 'DC'])),
+  'A-NPo(mm)': makeMmSpec(['N', 'Pog', 'A'], 'Vr(N,Pog,A)', ({ pointMap, scale }) => signedVrMm(pointMap, ['N', 'Pog'], 'A', scale)),
+  'L1-APo(mm)': makeMmSpec(['A', 'Pog', 'L1'], 'In(A,Pog,L1)', ({ pointMap, scale }) => pointLineDistanceMm(pointMap, ['A', 'Pog'], 'L1', scale)),
+  'L1-APo': makeDegSpec(['A', 'Pog', 'L1', 'L1A'], 'Ft(A,Pog,L1,L1A)', ({ pointMap }) => lineAngle(pointMap, ['A', 'Pog', 'L1', 'L1A'])),
+  'U6-PtV(mm)': makeMmSpec(['Ptm', 'U6D', 'Po', 'Or'], 'Ptm 与 U6D 在 FH 上投影距离', ({ pointMap, scale }) => projectedDistanceMm(pointMap, ['Po', 'Or'], 'Ptm', 'U6D', scale)),
+  'L1-FH': makeDegSpec(['L1A', 'L1', 'Po', 'Or'], 'Ft(L1A,L1,Po,Or)', ({ pointMap }) => lineAngle(pointMap, ['L1A', 'L1', 'Po', 'Or'])),
+  'AO-BO(mm)': makeMmSpec(['A', 'B', 'post_occlusal_point', 'ant_occlusal_point'], 'A、B 在咬合平面投影前后距离', ({ pointMap, scale }) => {
+    const aProjection = projectionPoint(pointMap, ['post_occlusal_point', 'ant_occlusal_point'], 'A');
+    const bProjection = projectionPoint(pointMap, ['post_occlusal_point', 'ant_occlusal_point'], 'B');
+    const magnitude = distanceBetweenPoints(aProjection, bProjection) * scale.mmPerPx;
+    return aProjection.x < bProjection.x ? -magnitude : magnitude;
+  }),
+  'Z-Angle': makeDegSpec(['Po', 'Or', "Pog'", 'LL', 'Ls'], 'max(-Ft(Po,Or,Pog\',LL), -Ft(Po,Or,Pog\',Ls))', ({ pointMap }) => {
+    const withLowerLip = -lineAngle(pointMap, ['Po', 'Or', "Pog'", 'LL']);
+    const withStomion = -lineAngle(pointMap, ['Po', 'Or', "Pog'", 'Ls']);
+    return Math.max(withLowerLip, withStomion);
+  }),
+  'Upper thickness': makeMmSpec(['Ls', 'UFa'], 'bt(Ls,UFa)', ({ pointMap, scale }) => pointDistanceMm(pointMap, ['Ls', 'UFa'], scale)),
+  "Pog'-NB(mm)": makeMmSpec(["Pog'", 'N', 'B'], "Pog' 到 NB 的垂距", ({ pointMap, scale }) => pointLineDistanceMm(pointMap, ['N', 'B'], "Pog'", scale)),
+  "Ar-Go'(mm)": makeMmSpec(['Ar', "Go'"], "bt(Ar,Go')", ({ pointMap, scale }) => pointDistanceMm(pointMap, ['Ar', "Go'"], scale)),
+  'Me-PP(mm)': makeMmSpec(['PNS', 'ANS', 'Me'], 'In(PNS,ANS,Me)', ({ pointMap, scale }) => pointLineDistanceMm(pointMap, ['PNS', 'ANS'], 'Me', scale)),
+  "Ar-Go'/Me-PP(%)": makePercentSpec(['Ar', "Go'", 'PNS', 'ANS', 'Me'], "Ar-Go' / Me-PP × 100", ({ pointMap, scale }) => {
+    const numerator = pointDistanceMm(pointMap, ['Ar', "Go'"], scale);
+    const denominator = pointLineDistanceMm(pointMap, ['PNS', 'ANS'], 'Me', scale);
+    return denominator ? (numerator / denominator) * 100 : Number.NaN;
+  }),
+  'A-Np(mm)': makeMmSpec(['Po', 'Or', 'N', 'A'], 'A 相对 N 垂线的前后距离', ({ pointMap, scale }) => {
+    const magnitude = projectedDistanceMm(pointMap, ['Po', 'Or'], 'N', 'A', scale);
+    return getPoint(pointMap, 'N').x - getPoint(pointMap, 'A').x >= 0 ? magnitude : -magnitude;
+  }),
+  'Pog-Np(mm)': makeMmSpec(['Po', 'Or', 'Pog', 'N'], 'Pog 相对 N 垂线的前后距离', ({ pointMap, scale }) => {
+    const magnitude = projectedDistanceMm(pointMap, ['Po', 'Or'], 'Pog', 'N', scale);
+    return getPoint(pointMap, 'Pog').x - getPoint(pointMap, 'N').x >= 0 ? magnitude : -magnitude;
+  }),
+  'Co-A(mm)': makeMmSpec(['Co', 'A'], 'bt(Co,A)', ({ pointMap, scale }) => pointDistanceMm(pointMap, ['Co', 'A'], scale)),
+  'Co-Gn(mm)': makeMmSpec(['Co', 'Gn'], 'bt(Co,Gn)', ({ pointMap, scale }) => pointDistanceMm(pointMap, ['Co', 'Gn'], scale)),
+  'ANS-Me(mm)': makeMmSpec(['ANS', 'Me', 'Po', 'Or'], 'ANS、Me 到 FH 垂距之差', ({ pointMap, scale }) => {
+    const ansDistance = perpendicularDistanceToLine(getPoint(pointMap, 'ANS'), getPoint(pointMap, 'Po'), getPoint(pointMap, 'Or')) * scale.mmPerPx;
+    const meDistance = perpendicularDistanceToLine(getPoint(pointMap, 'Me'), getPoint(pointMap, 'Po'), getPoint(pointMap, 'Or')) * scale.mmPerPx;
+    return meDistance - ansDistance;
+  }),
+  'U1-A(mm)': makeMmSpec(['A', 'U1'], 'U1.x - A.x', ({ pointMap, scale }) => (getPoint(pointMap, 'U1').x - getPoint(pointMap, 'A').x) * scale.mmPerPx),
+  'L1-APog(mm)': makeMmSpec(['A', 'Pog', 'L1'], 'In(A,Pog,L1)', ({ pointMap, scale }) => pointLineDistanceMm(pointMap, ['A', 'Pog'], 'L1', scale)),
+  'N-S-Ar': makeDegSpec(['N', 'S', 'Ar'], 'vr(N,S,Ar)', ({ pointMap }) => triangleAngle(pointMap, ['N', 'S', 'Ar'])),
+  "S-Ar-Go'": makeDegSpec(['S', 'Ar', "Go'"], "vr(S,Ar,Go')", ({ pointMap }) => triangleAngle(pointMap, ['S', 'Ar', "Go'"])),
+  "Ar-Go'-Me": makeDegSpec(['Ar', "Go'", 'Me'], "vr(Ar,Go',Me)", ({ pointMap }) => triangleAngle(pointMap, ['Ar', "Go'", 'Me'])),
+  "Ar-Go'-N": makeDegSpec(['Ar', "Go'", 'N'], "vr(Ar,Go',N)", ({ pointMap }) => triangleAngle(pointMap, ['Ar', "Go'", 'N'])),
+  "N-Go'-Me": makeDegSpec(['N', "Go'", 'Me'], "vr(N,Go',Me)", ({ pointMap }) => triangleAngle(pointMap, ['N', "Go'", 'Me'])),
+  'Sum(S+Ar+Go)': makeDegSpec(['N', 'S', 'Ar', "Go'", 'Me'], 'vr(N,S,Ar)+vr(S,Ar,Go\')+vr(Ar,Go\',Me)', ({ pointMap }) => (
+    triangleAngle(pointMap, ['N', 'S', 'Ar'])
+    + triangleAngle(pointMap, ['S', 'Ar', "Go'"])
+    + triangleAngle(pointMap, ['Ar', "Go'", 'Me'])
+  )),
+  'S-N(mm)': makeMmSpec(['S', 'N'], 'bt(S,N)', ({ pointMap, scale }) => pointDistanceMm(pointMap, ['S', 'N'], scale)),
+  'Ar-S(mm)': makeMmSpec(['S', 'Ar'], 'bt(S,Ar)', ({ pointMap, scale }) => pointDistanceMm(pointMap, ['S', 'Ar'], scale)),
+  "Go'-Me(mm)": makeMmSpec(["Go'", 'Me'], "bt(Go',Me)", ({ pointMap, scale }) => pointDistanceMm(pointMap, ["Go'", 'Me'], scale)),
+  'N-Me(mm)': makeMmSpec(['N', 'Me'], 'bt(N,Me)', ({ pointMap, scale }) => pointDistanceMm(pointMap, ['N', 'Me'], scale)),
+  "S-Go'(mm)": makeMmSpec(['S', "Go'"], "bt(S,Go')", ({ pointMap, scale }) => pointDistanceMm(pointMap, ['S', "Go'"], scale)),
+  'N-Go': makeMmSpec(['N', 'Go'], 'bt(N,Go)', ({ pointMap, scale }) => pointDistanceMm(pointMap, ['N', 'Go'], scale)),
+  'S-Me': makeMmSpec(['S', 'Me'], 'bt(S,Me)', ({ pointMap, scale }) => pointDistanceMm(pointMap, ['S', 'Me'], scale)),
+  "S-Ar/Ar-Go'(%)": makePercentSpec(['S', 'Ar', "Go'"], "S-Ar / Ar-Go' × 100", ({ pointMap, scale }) => {
+    const numerator = pointDistanceMm(pointMap, ['S', 'Ar'], scale);
+    const denominator = pointDistanceMm(pointMap, ['Ar', "Go'"], scale);
+    return denominator ? (numerator / denominator) * 100 : Number.NaN;
+  }),
+  "Go'-Me/S-N'(%)": makePercentSpec(["Go'", 'Me', 'S', 'N'], "Go'-Me / S-N × 100", ({ pointMap, scale }) => {
+    const numerator = pointDistanceMm(pointMap, ["Go'", 'Me'], scale);
+    const denominator = pointDistanceMm(pointMap, ['S', 'N'], scale);
+    return denominator ? (numerator / denominator) * 100 : Number.NaN;
+  }),
+  "S-Go'/N-Me(%)": makePercentSpec(['N', 'Me', 'S', "Go'"], "S-Go' / N-Me × 100", ({ pointMap, scale }) => {
+    const numerator = pointDistanceMm(pointMap, ['S', "Go'"], scale);
+    const denominator = pointDistanceMm(pointMap, ['N', 'Me'], scale);
+    return denominator ? (numerator / denominator) * 100 : Number.NaN;
+  }),
+  'SN-SGn': makeDegSpec(['S', 'N', 'Gn'], 'Ft(S,N,S,Gn)', ({ pointMap }) => lineAngle(pointMap, ['S', 'N', 'S', 'Gn'])),
+  'SN-NPo': makeDegSpec(['S', 'N', 'Pog'], 'vr(S,N,Pog)', ({ pointMap }) => triangleAngle(pointMap, ['S', 'N', 'Pog'])),
+};
 
 function buildFrameworkReports(pointMap, payload) {
   const scale = buildMeasurementScale(payload);
-  const geometry = buildCommonGeometry(pointMap);
+  const workingPointMap = new Map(pointMap);
+  ensureWebDerivedPoints(workingPointMap);
+  const geometry = buildCommonGeometry(workingPointMap);
   const reports = {};
 
-  for (const framework of FRAMEWORK_DEFINITIONS) {
+  for (const framework of WEB_FRAMEWORK_DATA) {
     const items = [];
     const involvedLandmarks = new Set();
-    for (const definition of framework.items) {
-      for (const landmark of definition.landmarks || []) {
+
+    for (const [calculationId, label, referenceMean, referenceSd] of framework.items) {
+      const definition = FRAMEWORK_CALCULATION_REGISTRY[calculationId];
+      const unit = definition?.unit || inferFrameworkUnit(calculationId);
+      const reference = formatFrameworkReference(referenceMean, referenceSd, unit);
+      const normalMin = Number.isFinite(referenceMean) && Number.isFinite(referenceSd) ? referenceMean - referenceSd : null;
+      const normalMax = Number.isFinite(referenceMean) && Number.isFinite(referenceSd) ? referenceMean + referenceSd : null;
+      const landmarks = definition?.landmarks || [];
+      for (const landmark of landmarks) {
         involvedLandmarks.add(landmark);
       }
+
       try {
-        if (definition.unit === 'mm' && !scale.mmPerPx) {
+        if (!definition) {
+          throw new Error('尚未实现该网页项目公式');
+        }
+        if (unit === 'mm' && !scale.mmPerPx) {
           throw new Error('缺少有效标尺，无法换算毫米');
         }
-        const value = definition.compute({ pointMap, scale, geometry });
+        const value = definition.compute({ pointMap: workingPointMap, scale, geometry });
+        if (!Number.isFinite(value)) {
+          throw new Error('计算结果不是有效数值');
+        }
         items.push(buildFrameworkItem({
-          code: definition.code,
-          label: definition.label,
-          unit: definition.unit,
+          code: calculationId,
+          label,
+          unit,
           value,
-          reference: definition.reference,
-          normalMin: definition.normalMin ?? null,
-          normalMax: definition.normalMax ?? null,
-          landmarks: definition.landmarks,
+          reference,
+          referenceMean,
+          referenceSd,
+          normalMin,
+          normalMax,
+          landmarks,
           formula: definition.formula,
         }));
       } catch (error) {
         items.push(buildUnsupportedFrameworkItem({
-          code: definition.code,
-          label: definition.label,
-          landmarks: definition.landmarks,
-          formula: definition.formula,
+          code: calculationId,
+          label,
+          landmarks,
+          formula: definition?.formula || calculationId,
+          reference,
+          referenceMean,
+          referenceSd,
           reason: error instanceof Error ? error.message.replace(/^Missing ceph landmark:\s*/, '缺少 ') : String(error),
         }));
       }
@@ -2204,7 +2069,8 @@ function buildFrameworkReports(pointMap, payload) {
     reports[framework.code] = {
       code: framework.code,
       label: framework.label,
-      note: framework.note,
+      note: `输出网页中 ${framework.label} 的完整项目原始数值。`,
+      source: 'webpage-full-set',
       scale,
       status: unsupportedItems.length ? (supportedItems.length ? 'partial' : 'unsupported') : 'supported',
       supportedItemCount: supportedItems.length,
@@ -2212,9 +2078,9 @@ function buildFrameworkReports(pointMap, payload) {
       items,
       rawLandmarks: Object.fromEntries(
         [...involvedLandmarks]
-          .filter((landmark) => pointMap.has(landmark))
+          .filter((landmark) => workingPointMap.has(landmark))
           .map((landmark) => {
-            const point = pointMap.get(landmark);
+            const point = workingPointMap.get(landmark);
             return [landmark, {
               landmark: point.landmark,
               key: point.key,
@@ -3116,7 +2982,19 @@ export {
   buildToothFillShapes,
 };
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isDirectCliRun() {
+  if (!process.argv[1]) {
+    return false;
+  }
+
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return import.meta.url === pathToFileURL(process.argv[1]).href;
+  }
+}
+
+if (isDirectCliRun()) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
