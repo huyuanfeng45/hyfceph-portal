@@ -1464,7 +1464,6 @@ function buildAnnotatedSvg({
   const svgWidth = width + panelWidth;
   const svgHeight = height;
   const pointRadius = clamp(Math.round(Math.min(width, height) / 220), 3, 6);
-  const labelFontSize = clamp(Math.round(Math.min(width, height) / 88), 10, 14);
   const riskLabel = analysis?.riskLabel || '未生成测量结论';
   const metrics = analysis?.metrics || [];
   const confidenceText = analysis?.recognition?.confidence == null
@@ -1481,7 +1480,7 @@ function buildAnnotatedSvg({
     `Risk: ${riskLabel}`,
     `Points: ${overlayPoints.length}`,
     `Confidence: ${confidenceText}`,
-    `Display: image / outline / key / aux / labels`,
+    `Display: image / outline / key / aux`,
     '',
     ...metrics.map((metric) => `${metric.code}: ${metric.valueText}`),
   ];
@@ -1505,13 +1504,6 @@ function buildAnnotatedSvg({
     })
     .join('');
 
-  const renderLabel = (point, color, dxBase, dyOptions) => {
-    const seed = Array.from(point.landmark).reduce((sum, char) => sum + char.charCodeAt(0), 0);
-    const dx = dxBase + (seed % 4) * 2;
-    const dy = dyOptions[seed % dyOptions.length];
-    return `<text x="${point.x + dx}" y="${point.y + dy}" font-family="Menlo, Consolas, monospace" font-size="${labelFontSize}" fill="${color}" stroke="#111827" stroke-width="2.6" paint-order="stroke" dominant-baseline="middle">${escapeXml(point.landmark)}</text>`;
-  };
-
   const headPointElements = headPoints.map((point) => {
     const pointType = classifyHeadPoint(point);
     const color = pointType === 'primary'
@@ -1529,26 +1521,18 @@ function buildAnnotatedSvg({
       : pointType === 'keypoint'
         ? pointRadius
         : Math.max(2.2, pointRadius - 0.6);
-    const labelColor = pointType === 'auxiliary' ? '#93c5fd' : '#ffffff';
 
-    return [
-      `<circle cx="${point.x}" cy="${point.y}" r="${radius}" fill="${color}" stroke="${stroke}" stroke-width="1.3" opacity="${pointType === 'auxiliary' ? '0.94' : '1'}" />`,
-      renderLabel(point, labelColor, pointType === 'primary' ? 10 : 7, pointType === 'auxiliary' ? [-8, -2, 6, 12] : [-12, -4, 8, 14]),
-    ].join('');
+    return `<circle cx="${point.x}" cy="${point.y}" r="${radius}" fill="${color}" stroke="${stroke}" stroke-width="1.3" opacity="${pointType === 'auxiliary' ? '0.94' : '1'}" />`;
   }).join('');
 
-  const rulerPointElements = rulerPoints.map((point) => [
-    `<circle cx="${point.x}" cy="${point.y}" r="${pointRadius}" fill="#34d399" stroke="#064e3b" stroke-width="1.3" />`,
-    renderLabel(point, '#bbf7d0', 8, [-10, 10]),
-  ].join('')).join('');
+  const rulerPointElements = rulerPoints
+    .map((point) => `<circle cx="${point.x}" cy="${point.y}" r="${pointRadius}" fill="#34d399" stroke="#064e3b" stroke-width="1.3" />`)
+    .join('');
 
   const spinePointElements = spineSections
     .flatMap((section, index) => section.points.map((point) => {
       const hue = 270 + index * 12;
-      return [
-        `<circle cx="${point.x}" cy="${point.y}" r="${Math.max(2, pointRadius - 1)}" fill="hsl(${hue} 88% 72%)" stroke="#1f2937" stroke-width="1.1" opacity="0.95" />`,
-        renderLabel(point, '#ddd6fe', 6, [-8, 8, 14]),
-      ].join('');
+      return `<circle cx="${point.x}" cy="${point.y}" r="${Math.max(2, pointRadius - 1)}" fill="hsl(${hue} 88% 72%)" stroke="#1f2937" stroke-width="1.1" opacity="0.95" />`;
     }))
     .join('');
 
