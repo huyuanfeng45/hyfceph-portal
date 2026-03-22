@@ -9,6 +9,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { buildOverlapRender, listSupportedAlignModes } from './scripts/hyfceph-overlap-renderer.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -523,27 +524,27 @@ async function readRequestJson(request) {
   }
 }
 
-function decodeUploadedImagePayload(payload) {
-  const imageBase64 = String(payload?.imageBase64 || '').trim();
-  const fileName = String(payload?.fileName || payload?.imageName || '').trim();
-  const mimeType = String(payload?.mimeType || '').trim();
+function decodeUploadedImageFields(fields, label = '图片') {
+  const imageBase64 = String(fields?.imageBase64 || '').trim();
+  const fileName = String(fields?.fileName || fields?.imageName || '').trim();
+  const mimeType = String(fields?.mimeType || '').trim();
 
   if (!imageBase64) {
-    throw new Error('缺少图片数据。');
+    throw new Error(`缺少${label}数据。`);
   }
 
   let imageBuffer;
   try {
     imageBuffer = Buffer.from(imageBase64, 'base64');
   } catch {
-    throw new Error('图片编码无效。');
+    throw new Error(`${label}编码无效。`);
   }
 
   if (!imageBuffer.length) {
-    throw new Error('图片数据为空。');
+    throw new Error(`${label}数据为空。`);
   }
   if (imageBuffer.length > MAX_IMAGE_UPLOAD_BYTES) {
-    throw new Error(`图片过大，请控制在 ${Math.floor(MAX_IMAGE_UPLOAD_BYTES / (1024 * 1024))}MB 以内。`);
+    throw new Error(`${label}过大，请控制在 ${Math.floor(MAX_IMAGE_UPLOAD_BYTES / (1024 * 1024))}MB 以内。`);
   }
 
   return {
@@ -551,6 +552,10 @@ function decodeUploadedImagePayload(payload) {
     mimeType,
     imageBuffer,
   };
+}
+
+function decodeUploadedImagePayload(payload) {
+  return decodeUploadedImageFields(payload);
 }
 
 async function getSessionUser(request) {
@@ -656,18 +661,7 @@ async function convertSvgTextToPngBuffer(svgText) {
   return Buffer.from(resvg.render().asPng());
 }
 
-async function buildMeasurementResponseArtifacts({ output, annotatedSvgPath, annotatedPngPath }) {
-  const svgText = annotatedSvgPath ? await readFileIfExists(annotatedSvgPath, 'utf8') : null;
-  let pngBuffer = annotatedPngPath ? await readFileIfExists(annotatedPngPath) : null;
-
-  if (!pngBuffer && svgText) {
-    try {
-      pngBuffer = await convertSvgTextToPngBuffer(svgText);
-    } catch {
-      pngBuffer = null;
-    }
-  }
-
+function buildMeasurementResponseArtifactsFromBuffers({ output, svgText, pngBuffer }) {
   return {
     analysis: output.analysis || null,
     analysisError: output.analysisError || null,
@@ -683,6 +677,25 @@ async function buildMeasurementResponseArtifacts({ output, annotatedSvgPath, ann
       annotatedSvgMimeType: svgText ? 'image/svg+xml' : null,
     },
   };
+}
+
+async function buildMeasurementResponseArtifacts({ output, annotatedSvgPath, annotatedPngPath }) {
+  const svgText = annotatedSvgPath ? await readFileIfExists(annotatedSvgPath, 'utf8') : null;
+  let pngBuffer = annotatedPngPath ? await readFileIfExists(annotatedPngPath) : null;
+
+  if (!pngBuffer && svgText) {
+    try {
+      pngBuffer = await convertSvgTextToPngBuffer(svgText);
+    } catch {
+      pngBuffer = null;
+    }
+  }
+
+  return buildMeasurementResponseArtifactsFromBuffers({
+    output,
+    svgText,
+    pngBuffer,
+  });
 }
 
 async function buildLocalImageMeasurementArtifacts(localOutput) {
@@ -736,11 +749,12 @@ async function buildLocalImageMeasurementArtifacts(localOutput) {
   };
 }
 
-async function runServerSideMeasurement({
+async function executeRunnerMeasurement({
   shareUrl,
   bridgeState,
   imagePath,
   operatorSession,
+  annotate = true,
 }) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hyfceph-portal-'));
   const outputPath = path.join(tempDir, 'result.json');
@@ -761,6 +775,10 @@ async function runServerSideMeasurement({
     '--downloaded-image-output',
     downloadedImagePath,
   ];
+
+  if (!annotate) {
+    args.push('--no-annotated-svg');
+  }
 
   if (shareUrl) {
     args.push('--share-url', shareUrl);
@@ -789,11 +807,24 @@ async function runServerSideMeasurement({
     });
     const rawOutput = await fs.readFile(outputPath, 'utf8');
     const output = JSON.parse(rawOutput);
-    return await buildMeasurementResponseArtifacts({
+    const resolvedSvgPath = output.annotatedSvgPath || annotatedSvgPath;
+    const resolvedPngPath = output.annotatedPngPath || annotatedPngPath;
+    const svgText = annotate ? await readFileIfExists(resolvedSvgPath, 'utf8') : null;
+    let pngBuffer = annotate ? await readFileIfExists(resolvedPngPath) : null;
+
+    if (annotate && !pngBuffer && svgText) {
+      try {
+        pngBuffer = await convertSvgTextToPngBuffer(svgText);
+      } catch {
+        pngBuffer = null;
+      }
+    }
+
+    return {
       output,
-      annotatedSvgPath: output.annotatedSvgPath || annotatedSvgPath,
-      annotatedPngPath: output.annotatedPngPath || annotatedPngPath,
-    });
+      svgText,
+      pngBuffer,
+    };
   } catch (error) {
     const stderr = String(error?.stderr || '').trim();
     const stdout = String(error?.stdout || '').trim();
@@ -802,6 +833,70 @@ async function runServerSideMeasurement({
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+async function runServerSideMeasurement({
+  shareUrl,
+  bridgeState,
+  imagePath,
+  operatorSession,
+}) {
+  const measurement = await executeRunnerMeasurement({
+    shareUrl,
+    bridgeState,
+    imagePath,
+    operatorSession,
+    annotate: true,
+  });
+
+  return buildMeasurementResponseArtifactsFromBuffers({
+    output: measurement.output,
+    svgText: measurement.svgText,
+    pngBuffer: measurement.pngBuffer,
+  });
+}
+
+async function runServerSideOverlapMeasurement({
+  baseImagePath,
+  compareImagePath,
+  operatorSession,
+  alignMode,
+}) {
+  const [baseMeasurement, compareMeasurement] = await Promise.all([
+    executeRunnerMeasurement({
+      imagePath: baseImagePath,
+      operatorSession,
+      annotate: false,
+    }),
+    executeRunnerMeasurement({
+      imagePath: compareImagePath,
+      operatorSession,
+      annotate: false,
+    }),
+  ]);
+
+  const overlap = buildOverlapRender({
+    baseOutput: baseMeasurement.output,
+    compareOutput: compareMeasurement.output,
+    alignMode,
+  });
+  const pngBuffer = await convertSvgTextToPngBuffer(overlap.svgText);
+
+  return {
+    analysis: overlap.analysis,
+    analysisError: null,
+    annotationError: pngBuffer ? null : '未生成 PNG 重叠图。',
+    summary: overlap.summary,
+    metrics: overlap.metrics,
+    taskId: null,
+    resultUrl: null,
+    artifacts: {
+      annotatedPngBase64: pngBuffer ? pngBuffer.toString('base64') : null,
+      annotatedPngMimeType: pngBuffer ? 'image/png' : null,
+      annotatedSvgBase64: Buffer.from(overlap.svgText, 'utf8').toString('base64'),
+      annotatedSvgMimeType: 'image/svg+xml',
+    },
+  };
 }
 
 async function runLocalImageMeasurement({
@@ -1293,6 +1388,99 @@ async function handleMeasureImage(request, response) {
   }
 }
 
+async function handleMeasureOverlap(request, response) {
+  const payload = await readRequestJson(request);
+  const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
+  if (!apiKey) {
+    return sendJson(response, 400, { error: '缺少 API Key。' });
+  }
+
+  const { store, user } = await requireActiveApiKeyUser(apiKey);
+  if (!user) {
+    return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
+  }
+
+  let baseUpload;
+  let compareUpload;
+  try {
+    baseUpload = decodeUploadedImageFields({
+      imageBase64: payload.baseImageBase64 || payload.imageBase64,
+      fileName: payload.baseFileName || payload.fileName || payload.imageName,
+      mimeType: payload.baseMimeType || payload.mimeType,
+    }, '基准图');
+    compareUpload = decodeUploadedImageFields({
+      imageBase64: payload.compareImageBase64,
+      fileName: payload.compareFileName,
+      mimeType: payload.compareMimeType,
+    }, '对照图');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return sendJson(response, 400, { error: message || '重叠上传无效。' });
+  }
+
+  const alignMode = String(payload.alignMode || 'SN').trim().toUpperCase() || 'SN';
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hyfceph-overlap-upload-'));
+  const baseImagePath = path.join(
+    tempDir,
+    `base-${sanitizeFileStem(path.basename(baseUpload.fileName, path.extname(baseUpload.fileName)))}${extensionFromUpload(baseUpload)}`,
+  );
+  const compareImagePath = path.join(
+    tempDir,
+    `compare-${sanitizeFileStem(path.basename(compareUpload.fileName, path.extname(compareUpload.fileName)))}${extensionFromUpload(compareUpload)}`,
+  );
+
+  try {
+    const operatorSession = normalizeOperatorSession(store.operatorSession);
+    if (!isOperatorSessionActive(operatorSession)) {
+      if (store.operatorSession) {
+        store.operatorSession = null;
+        await writeStore(store);
+      }
+      return sendJson(response, 503, { error: '服务端远程会话暂不可用，请稍后重试。' });
+    }
+
+    await fs.writeFile(baseImagePath, baseUpload.imageBuffer);
+    await fs.writeFile(compareImagePath, compareUpload.imageBuffer);
+
+    const result = await runServerSideOverlapMeasurement({
+      baseImagePath,
+      compareImagePath,
+      operatorSession,
+      alignMode,
+    });
+
+    await sendBarkPush(
+      'HYFCeph 轮廓重叠',
+      [
+        `用户：${user.name}`,
+        `单位：${user.organization || '-'}`,
+        `模式：${result.summary?.alignLabel || alignMode}`,
+        `基准图：${path.basename(baseImagePath)}`,
+        `对照图：${path.basename(compareImagePath)}`,
+      ].join('\n'),
+    );
+
+    return sendJson(response, 200, {
+      ok: true,
+      mode: 'overlap',
+      result,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (isLikelyUpstreamAuthError(message)) {
+      store.operatorSession = null;
+      await writeStore(store);
+      return sendJson(response, 503, { error: '服务端远程会话暂不可用，请稍后重试。' });
+    }
+    return sendJson(response, 502, {
+      error: message || '轮廓重叠失败。',
+      supportedAlignModes: listSupportedAlignModes(),
+    });
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function handleSkillEvent(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || '').trim();
@@ -1467,6 +1655,9 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'POST' && url.pathname === '/api/measure/image') {
       return await handleMeasureImage(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/measure/overlap') {
+      return await handleMeasureOverlap(request, response);
     }
     if (request.method === 'POST' && url.pathname === '/api/measure/current-case') {
       return await handleMeasureCurrentCase(request, response);

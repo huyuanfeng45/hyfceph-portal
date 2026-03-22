@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { parseArgs } from 'node:util';
+import { pathToFileURL } from 'node:url';
 import { curveCatmullRom, curveCatmullRomClosed, line as svgLine } from 'd3-shape';
 import { TOOTH_TEMPLATE_DATA } from './hyfceph-web-tooth-templates.mjs';
 
@@ -2168,7 +2169,18 @@ async function main() {
   }, null, 2));
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+export {
+  WEBPAGE_LINE_TEMPLATES,
+  collectOverlayData,
+  buildPointLookup,
+  buildTemplateSegments,
+  buildSmoothPath,
+  buildSimilarityTransform,
+};
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}
