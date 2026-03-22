@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { parseArgs } from 'node:util';
+import { curveCatmullRom, curveCatmullRomClosed, line as svgLine } from 'd3-shape';
 
 const DEFAULT_PAGE_URL = 'https://pd.aiyayi.com/latera/';
 const DEFAULT_PORTAL_BASE_URL = 'https://hyfceph.52ortho.com/';
@@ -98,54 +99,197 @@ const FEATURED_KEYPOINT_LABELS = new Set([
   'D_A', 'U', 'UD', 'R1', 'J', 'VC', 'V_A', 'V_O', 'AB1', 'AB', 'A_A', 'FA', 'Smp', 'PM', 'An', 'MPW', 'UPW', 'TPPW',
   'LPW', 'TB', 'AD2',
 ]);
-const OVERLAY_CONTOUR_GROUPS = [
+const WEBPAGE_CURVE_ALPHA = 0.15;
+const WEBPAGE_LINE_TEMPLATES = [
   {
-    name: 'soft-profile',
+    name: 'line_UpFace',
     stroke: '#22c55e',
     width: 2.4,
-    labels: ['G', 'G1', "N'", 'N2', 'Ns1', 'Noseau0', 'Noseau1', 'Noseau2', 'Noseau3', 'Noseau4', 'Noseau5', 'Noseau6', 'Noseau7', 'Noseau8', 'Noseau9', 'Noseau10', 'Prn', 'Cm', 'Sn', 'UL', 'ULau1', 'Ls', 'Stms', 'Stmi', 'Li', 'LL', 'LLau1', "Pog'", "Me'", "Gn'"],
+    pointsName: ['Fu0', 'G', 'Fu1', 'Fu2', "N'", 'Noseau0', 'Noseau1', 'Noseau2', 'Noseau3', 'Noseau9', 'Noseau5', 'Prn', 'Cm', 'Noseau6', 'Sn', 'Noseau10', "A'", 'UL', 'Ls', 'ULau1', 'Stms'],
   },
   {
-    name: 'cranial-base',
-    stroke: '#60a5fa',
-    width: 2.1,
-    labels: ['S', 'Sella1', 'Sella2', 'Sella3', 'Sella4', 'Sella5', 'Sella6', 'Sella7', 'S14', 'S12', 'S11', 'S10', 'S9', 'S3', 'S2', 'Ba1', 'Ba2', 'Ba3', 'Ba4', 'Ba5', 'Ba6', 'Ba7', 'Ba8', 'Ba', 'Bo'],
+    name: 'line_DownFace',
+    stroke: '#22c55e',
+    width: 2.4,
+    pointsName: ['Stmi', 'LLau1', 'Li', 'LL', 'Soft_LP2', "B'", 'Soft_LP3', "Pog'", "Gn'", "Me'", 'F5', 'Smp', 'C'],
   },
   {
-    name: 'orbit-pt',
-    stroke: '#38bdf8',
-    width: 1.9,
-    labels: ['Po1', 'Po', 'Or1', 'Or2', 'Or', 'Orau1', 'Or4', 'Pcd', 'Pt1', 'Pt2', 'Pt3', 'Pt4', 'Pt', 'Co', 'Ar'],
-  },
-  {
-    name: 'maxilla-contour',
+    name: 'line_Cheeks',
     stroke: '#f59e0b',
     width: 1.9,
-    labels: ['Ptm', 'PNS', 'ANS', 'A12', 'A11', 'A10', 'A9', 'A8', 'A7', 'A6', 'A5', 'A4', 'A3', 'A2', 'A1', 'A', 'A_A', 'AB1', 'AB'],
+    pointsName: ['Me', 'Man1', 'Man2', 'An', 'Tpl', 'Go', 'Rp', 'Man3', 'Ar', 'Pcd', 'Co', 'Go13', 'Go12', 'R3', 'Lj5', 'Lj4', 'Lj3', 'J'],
   },
   {
-    name: 'mandible-contour',
-    stroke: '#f97316',
+    name: 'line_UpTeeth2',
+    stroke: '#f59e0b',
+    width: 1.8,
+    pointsName: ['Spr2', 'A3', 'A2', 'A1', 'PNS', 'A12', 'A11', 'A10', 'A9', 'A8', 'A7', 'ANS', 'A6', 'A', 'A5', 'Sd'],
+  },
+  {
+    name: 'line_DownTeeth',
+    stroke: '#fb923c',
+    width: 1.8,
+    pointsName: ['Id', 'B', 'PM', 'Pog', 'Gn', 'Me', 'Bone_LP4', 'Bone_LP3', 'Bone_LP2', 'Bone_LP1', 'Id2'],
+  },
+  {
+    name: 'line_Eyes',
+    stroke: '#38bdf8',
+    width: 1.8,
+    pointsName: ['Or1', 'Or', 'Or2', 'Orau1', 'Or4', 'Or0'],
+  },
+  {
+    name: 'line_Ruler',
+    stroke: '#34d399',
+    width: 2,
+    opacity: 0.95,
+    dasharray: '5 4',
+    pointsName: ['Ruler0', 'Ruler1'],
+  },
+  {
+    name: 'line_Head2',
+    stroke: '#60a5fa',
+    width: 1.8,
+    pointsName: ['Ns1', 'Noseau7', 'Na'],
+  },
+  {
+    name: 'line_Head',
+    stroke: '#60a5fa',
+    width: 1.8,
+    pointsName: ['G1', 'N2', 'Na', 'N6', 'Noseau4', 'Noseau8', 'Ns1'],
+  },
+  {
+    name: 'line_Head4',
+    stroke: '#60a5fa',
+    width: 1.7,
+    pointsName: ['S9', 'W_O', 'S10', 'S11'],
+  },
+  {
+    name: 'line_Head5',
+    stroke: '#60a5fa',
+    width: 1.7,
+    pointsName: ['Ptm', 'Pt3', 'Pt', 'Pt1', 'Pt2', 'Pt4', 'Ptm1'],
+  },
+  {
+    name: 'line_Head6',
+    stroke: '#60a5fa',
+    width: 1.7,
+    pointsName: ['Ba', 'Ba3', 'Ba4', 'Ba5', 'Ba7', 'Ba6', 'W_O', 'Ba8'],
+  },
+  {
+    name: 'line_Head3',
+    stroke: '#60a5fa',
+    width: 2.1,
+    pointsName: ['S0Ba0', 'S0Ba1', 'Sella1', 'S14', 'Sella2', 'S12', 'S9', 'Sella3', 'Sella4', 'Sella5', 'Sella6', 'Sella7', 'S3', 'S2', 'Ba1', 'Ba2', 'Ba'],
+  },
+  {
+    name: 'spine_C2',
+    stroke: 'hsl(270 90% 72%)',
     width: 1.9,
-    labels: ['Man1', 'Man2', 'Man3', 'Go13', 'Go12', 'Go', 'Bone_LP1', 'Bone_LP2', 'Bone_LP3', 'Bone_LP4', 'B_A', 'B', 'Pog', 'Me', 'Gn'],
+    closePath: true,
+    pointsName: ['C2p', 'C2_2', 'C2d', 'C2_4', 'C2a', 'C2_6', 'C2_7', 'C2_8', 'C2_9', 'C2_10', 'C2_11', 'C2_12', 'C2_13', 'C2_14', 'C2_15', 'C2_16', 'C2_17', 'C2_18', 'C2_19', 'C2_20'],
   },
   {
-    name: 'upper-dentition',
-    stroke: '#f43f5e',
-    width: 1.7,
-    labels: ['U6A', 'U6D', 'U6M', 'U6', 'U1A', 'U1', 'DU', 'U', 'UD'],
+    name: 'spine_C3',
+    stroke: 'hsl(282 90% 72%)',
+    width: 1.9,
+    closePath: true,
+    pointsName: ['C3up', 'C3_2', 'C3_3', 'C3_4', 'C3lp', 'C3_6', 'C3d', 'C3_8', 'C3la', 'C3_10', 'C3am', 'C3_12', 'C3ua', 'C3_14', 'C3um', 'C3_16'],
   },
   {
-    name: 'lower-dentition',
-    stroke: '#fb7185',
-    width: 1.7,
-    labels: ['L6A', 'L6D', 'L6M', 'L6', 'L1A', 'L1', 'Id2', 'Id'],
+    name: 'spine_C4',
+    stroke: 'hsl(294 90% 72%)',
+    width: 1.9,
+    closePath: true,
+    pointsName: ['C4up', 'C4_2', 'C4_3', 'C4_4', 'C4lp', 'C4_6', 'C4d', 'C4_8', 'C4la', 'C4_10', 'C4am', 'C4_12', 'C4ua', 'C4_14', 'C4um', 'C4_16'],
   },
   {
-    name: 'airway',
+    name: 'spine_C5',
+    stroke: 'hsl(306 90% 72%)',
+    width: 1.9,
+    closePath: true,
+    pointsName: ['C5up', 'C5_2', 'C5_3', 'C5_4', 'C5lp', 'C5_6', 'C5d', 'C5_8', 'C5la', 'C5_10', 'C5am', 'C5_12', 'C5ua', 'C5_14', 'C5um', 'C5_16'],
+  },
+  {
+    name: 'spine_C6',
+    stroke: 'hsl(318 90% 72%)',
+    width: 1.9,
+    closePath: true,
+    pointsName: ['C6up', 'C6_2', 'C6_3', 'C6_4', 'C6lp', 'C6_6', 'C6d', 'C6_8', 'C6la', 'C6_10', 'C6am', 'C6_12', 'C6ua', 'C6_14', 'C6um', 'C6_16'],
+  },
+  {
+    name: 'airway_1',
     stroke: '#a78bfa',
     width: 1.8,
-    labels: ['AD_O', 'AD2', 'airway7', 'airway5', 'airway45', 'airway4', 'airway3', 'airway2', 'airway1'],
+    pointsName: ['airway1', 'airway2', 'airway3', 'airway4', 'airway45', 'airway5', 'AD_O', 'airway7'],
+  },
+  {
+    name: 'airway_2',
+    stroke: '#c084fc',
+    width: 1.8,
+    closePath: true,
+    pointsName: ['U', 'DU', 'D_A', 'UD'],
+  },
+  {
+    name: 'airway_3',
+    stroke: '#c084fc',
+    width: 1.8,
+    pointsName: ['A_A', 'AB', 'AB1', 'B_A', 'V_O', 'V_A', 'VC'],
+  },
+  {
+    name: 'airway_pns_upw',
+    stroke: '#c084fc',
+    width: 1.6,
+    opacity: 0.84,
+    pointsName: ['PNS', 'UPW'],
+  },
+  {
+    name: 'airway_pns_ad2',
+    stroke: '#c084fc',
+    width: 1.6,
+    opacity: 0.84,
+    pointsName: ['PNS', 'AD2'],
+  },
+  {
+    name: 'airway_U_MPW',
+    stroke: '#c084fc',
+    width: 1.6,
+    opacity: 0.84,
+    pointsName: ['U', 'MPW'],
+  },
+  {
+    name: 'airway_tb_TPPW',
+    stroke: '#c084fc',
+    width: 1.6,
+    opacity: 0.84,
+    pointsName: ['TB', 'TPPW'],
+  },
+  {
+    name: 'airway_V_LPW',
+    stroke: '#c084fc',
+    width: 1.6,
+    opacity: 0.84,
+    pointsName: ['V_O', 'LPW'],
+  },
+  {
+    name: 'airway_BA_S',
+    stroke: '#c084fc',
+    width: 1.6,
+    opacity: 0.84,
+    pointsName: ['Ba', 'S'],
+  },
+  {
+    name: 'airway_UPW_Ba',
+    stroke: '#c084fc',
+    width: 1.6,
+    opacity: 0.84,
+    pointsName: ['UPW', 'Ba'],
+  },
+  {
+    name: 'airway_B_TB',
+    stroke: '#c084fc',
+    width: 1.6,
+    opacity: 0.84,
+    pointsName: ['B', 'TB'],
   },
 ];
 
@@ -922,8 +1066,49 @@ function buildPointLookup(points) {
   return lookup;
 }
 
-function buildPolylinePoints(points) {
-  return points.map((point) => `${point.x},${point.y}`).join(' ');
+function buildTemplateSegments(template, pointLookup) {
+  if (template.closePath) {
+    const points = template.pointsName.map((landmark) => pointLookup.get(landmark));
+    if (points.some((point) => !point) || points.length < 3) {
+      return [];
+    }
+    return [points];
+  }
+
+  const segments = [];
+  let current = [];
+
+  for (const landmark of template.pointsName) {
+    const point = pointLookup.get(landmark);
+    if (point) {
+      current.push(point);
+      continue;
+    }
+    if (current.length >= 2) {
+      segments.push(current);
+    }
+    current = [];
+  }
+
+  if (current.length >= 2) {
+    segments.push(current);
+  }
+
+  return segments;
+}
+
+function buildSmoothPath(points, closePath = false) {
+  if (points.length < 2) {
+    return '';
+  }
+  const curveFactory = closePath
+    ? curveCatmullRomClosed.alpha(WEBPAGE_CURVE_ALPHA)
+    : curveCatmullRom.alpha(WEBPAGE_CURVE_ALPHA);
+  const generator = svgLine()
+    .x((point) => point.x)
+    .y((point) => point.y)
+    .curve(curveFactory);
+  return generator(points) || '';
 }
 
 function classifyHeadPoint(point) {
@@ -1288,11 +1473,13 @@ function buildAnnotatedSvg({
   const headPoints = overlayData?.headPoints?.length ? overlayData.headPoints : landmarks;
   const rulerPoints = overlayData?.rulerPoints || [];
   const spineSections = overlayData?.spineSections || [];
-  const pointLookup = buildPointLookup(headPoints);
+  const spinePoints = spineSections.flatMap((section) => section.points);
+  const overlayPoints = [...headPoints, ...rulerPoints, ...spinePoints];
+  const pointLookup = buildPointLookup(overlayPoints);
   const panelLines = [
     `HYF Ceph`,
     `Risk: ${riskLabel}`,
-    `Points: ${headPoints.length}`,
+    `Points: ${overlayPoints.length}`,
     `Confidence: ${confidenceText}`,
     `Display: image / outline / key / aux / labels`,
     '',
@@ -1305,26 +1492,18 @@ function buildAnnotatedSvg({
     panelLines.push('', `Unsupported: ${analysis.unsupportedMetricCodes.join(', ')}`);
   }
 
-  const contourElements = OVERLAY_CONTOUR_GROUPS
-    .map((group) => {
-      const points = group.labels.map((label) => pointLookup.get(label)).filter(Boolean);
-      if (points.length < 2) {
+  const contourElements = WEBPAGE_LINE_TEMPLATES
+    .flatMap((template) => buildTemplateSegments(template, pointLookup).map((points) => ({ template, points })))
+    .map(({ template, points }) => {
+      const pathData = buildSmoothPath(points, Boolean(template.closePath));
+      if (!pathData) {
         return '';
       }
-      return `<polyline points="${buildPolylinePoints(points)}" fill="none" stroke="${group.stroke}" stroke-width="${group.width}" stroke-linecap="round" stroke-linejoin="round" opacity="0.92" />`;
+      const dasharray = template.dasharray ? ` stroke-dasharray="${template.dasharray}"` : '';
+      const opacity = template.opacity ?? 0.92;
+      return `<path d="${pathData}" fill="none" stroke="${template.stroke}" stroke-width="${template.width}" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity}"${dasharray} />`;
     })
     .join('');
-
-  const spineElements = spineSections
-    .map((section, index) => {
-      const hue = 270 + index * 12;
-      return `<polyline points="${buildPolylinePoints(section.points)}" fill="none" stroke="hsl(${hue} 90% 72%)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" opacity="0.92" />`;
-    })
-    .join('');
-
-  const rulerLine = rulerPoints.length >= 2
-    ? `<line x1="${rulerPoints[0].x}" y1="${rulerPoints[0].y}" x2="${rulerPoints[1].x}" y2="${rulerPoints[1].y}" stroke="#34d399" stroke-width="2" stroke-dasharray="5 4" opacity="0.95" />`
-    : '';
 
   const renderLabel = (point, color, dxBase, dyOptions) => {
     const seed = Array.from(point.landmark).reduce((sum, char) => sum + char.charCodeAt(0), 0);
@@ -1387,7 +1566,7 @@ function buildAnnotatedSvg({
     `<rect width="${svgWidth}" height="${svgHeight}" fill="#0f172a" />`,
     `<image href="${imageDataUrl}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none" />`,
     `<rect x="${width}" y="0" width="${panelWidth}" height="${height}" fill="#111827" opacity="0.92" />`,
-    `<g>${contourElements}${spineElements}${rulerLine}</g>`,
+    `<g>${contourElements}</g>`,
     `<g>${headPointElements}${rulerPointElements}${spinePointElements}</g>`,
     `<g>${panelText}</g>`,
     `</svg>`,
