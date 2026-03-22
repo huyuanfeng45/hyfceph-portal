@@ -254,13 +254,16 @@ export function buildOverlapRender({ baseOutput, compareOutput, alignMode = 'SN'
       type: 'overlap',
       alignMode: alignPreset.code,
       alignLabel: alignPreset.label,
+      frameworkChoices: baseOutput?.analysis?.frameworkChoices || compareOutput?.analysis?.frameworkChoices || [],
       base: {
         riskLabel: baseOutput?.analysis?.riskLabel || null,
         metrics: Array.isArray(baseOutput?.analysis?.metrics) ? baseOutput.analysis.metrics : [],
+        frameworkReports: baseOutput?.analysis?.frameworkReports || {},
       },
       compare: {
         riskLabel: compareOutput?.analysis?.riskLabel || null,
         metrics: Array.isArray(compareOutput?.analysis?.metrics) ? compareOutput.analysis.metrics : [],
+        frameworkReports: compareOutput?.analysis?.frameworkReports || {},
       },
     },
     summary: {
@@ -271,6 +274,7 @@ export function buildOverlapRender({ baseOutput, compareOutput, alignMode = 'SN'
       compareRiskLabel: compareOutput?.analysis?.riskLabel || null,
       baseMetricValues: buildMetricMap(baseOutput),
       compareMetricValues: buildMetricMap(compareOutput),
+      frameworkChoices: baseOutput?.analysis?.frameworkChoices || compareOutput?.analysis?.frameworkChoices || [],
       supportedAlignModes: Object.keys(ALIGNMENT_PRESETS),
       basePointCount: baseHeadPoints.length,
       comparePointCount: compareHeadPoints.length,
