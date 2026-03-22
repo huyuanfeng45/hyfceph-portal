@@ -4,6 +4,7 @@ import {
   buildSimilarityTransform,
   buildSmoothPath,
   buildTemplateSegments,
+  buildToothFillShapes,
   collectOverlayData,
 } from './hyfceph-remote-runner.mjs';
 
@@ -125,6 +126,25 @@ function renderContourElements({ pointLookup, stroke, opacity, widthScale = 1, d
     .join('');
 }
 
+function renderToothFillElements({
+  pointLookup,
+  fill,
+  fillOpacity,
+  stroke,
+  strokeOpacity,
+  strokeWidthScale = 1,
+}) {
+  return buildToothFillShapes(pointLookup)
+    .map((shape) => {
+      const pathData = buildSmoothPath(shape.points, true);
+      if (!pathData) {
+        return '';
+      }
+      return `<path d="${pathData}" fill="${fill}" fill-opacity="${round1(Math.max(shape.fillOpacity || 0.2, fillOpacity))}" stroke="${stroke}" stroke-opacity="${round1(Math.max(shape.strokeOpacity || 0.8, strokeOpacity))}" stroke-width="${round1((shape.strokeWidth || 1) * strokeWidthScale)}" stroke-linecap="round" stroke-linejoin="round" />`;
+    })
+    .join('');
+}
+
 function buildMetricMap(output) {
   const metrics = Array.isArray(output?.analysis?.metrics) ? output.analysis.metrics : [];
   return Object.fromEntries(
@@ -180,6 +200,22 @@ export function buildOverlapRender({ baseOutput, compareOutput, alignMode = 'SN'
     opacity: 0.9,
     widthScale: 1.02,
   });
+  const baseToothFillElements = renderToothFillElements({
+    pointLookup: shiftedBaseLookup,
+    fill: '#fcd34d',
+    fillOpacity: 0.48,
+    stroke: baseStroke,
+    strokeOpacity: 0.82,
+    strokeWidthScale: 1,
+  });
+  const compareToothFillElements = renderToothFillElements({
+    pointLookup: shiftedCompareLookup,
+    fill: '#67e8f9',
+    fillOpacity: 0.34,
+    stroke: compareStroke,
+    strokeOpacity: 0.72,
+    strokeWidthScale: 1,
+  });
 
   const baseLegendX = width - 232;
   const legendY = 44;
@@ -204,6 +240,8 @@ export function buildOverlapRender({ baseOutput, compareOutput, alignMode = 'SN'
     `<rect x="${baseLegendX}" y="${legendY}" width="196" height="${lineHeight * legendLines.length + 34}" rx="16" fill="#111827" opacity="0.92" />`,
     `<line x1="${baseLegendX + 20}" y1="${legendY + 16}" x2="${baseLegendX + 64}" y2="${legendY + 16}" stroke="${baseStroke}" stroke-width="3.5" stroke-linecap="round" opacity="0.95" />`,
     `<line x1="${baseLegendX + 96}" y1="${legendY + 16}" x2="${baseLegendX + 140}" y2="${legendY + 16}" stroke="${compareStroke}" stroke-width="3.5" stroke-linecap="round" opacity="0.95" />`,
+    `<g>${baseToothFillElements}</g>`,
+    `<g>${compareToothFillElements}</g>`,
     `<g>${baseElements}</g>`,
     `<g>${compareElements}</g>`,
     `<g>${legendText}</g>`,
