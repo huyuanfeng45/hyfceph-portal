@@ -30,7 +30,8 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const SERVICE_RUNNER = path.join(__dirname, 'scripts', 'hyfceph-remote-runner.mjs');
-const LOCAL_CEPH_AUTOPOINT_RUNNER = process.env.HYFCEPH_LOCAL_IMAGE_RUNNER || '/Users/hyf/.codex/skills/ceph-autopoint/scripts/run-ceph-autopoint.js';
+const LOCAL_CEPH_AUTOPOINT_RUNNER = process.env.HYFCEPH_LOCAL_IMAGE_RUNNER
+  || path.join(__dirname, 'engines', 'ceph-autopoint', 'scripts', 'run-ceph-autopoint.cjs');
 const MAX_MEASURE_BUFFER_BYTES = 24 * 1024 * 1024;
 const MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
 

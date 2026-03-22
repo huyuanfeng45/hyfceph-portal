@@ -5,3 +5,5 @@ node_modules/
 .env.*
 data/*.json
 !data/.gitkeep
+engines/ceph-autopoint/.venv/
+engines/ceph-autopoint/models/hrnet-ceph19/best_model.pth
