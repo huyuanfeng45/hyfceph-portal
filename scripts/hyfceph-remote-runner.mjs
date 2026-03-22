@@ -8,6 +8,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { parseArgs } from 'node:util';
 import { curveCatmullRom, curveCatmullRomClosed, line as svgLine } from 'd3-shape';
+import { TOOTH_TEMPLATE_DATA } from './hyfceph-web-tooth-templates.mjs';
 
 const DEFAULT_PAGE_URL = 'https://pd.aiyayi.com/latera/';
 const DEFAULT_PORTAL_BASE_URL = 'https://hyfceph.52ortho.com/';
@@ -292,6 +293,55 @@ const WEBPAGE_LINE_TEMPLATES = [
     pointsName: ['B', 'TB'],
   },
 ];
+const TOOTH_FILL_TEMPLATES = [
+  {
+    name: 'fill_line_up_tooth_1',
+    anchorNames: ['U1A', 'U1'],
+    order: TOOTH_TEMPLATE_DATA.upperIncisorOrder,
+    templatePoints: TOOTH_TEMPLATE_DATA.upperIncisorTemplate,
+    fill: '#fcd34d',
+    fillOpacity: 0.28,
+    stroke: '#f59e0b',
+    strokeOpacity: 0.9,
+    strokeWidth: 1.15,
+  },
+  {
+    name: 'fill_line_low_tooth_1',
+    anchorNames: ['L1A', 'L1'],
+    order: TOOTH_TEMPLATE_DATA.lowerIncisorOrder,
+    templatePoints: TOOTH_TEMPLATE_DATA.lowerIncisorTemplate,
+    fill: '#fcd34d',
+    fillOpacity: 0.28,
+    stroke: '#f59e0b',
+    strokeOpacity: 0.9,
+    strokeWidth: 1.15,
+  },
+  {
+    name: 'fill_line_top_teeth_1',
+    anchorNames: ['U6D', 'U6M'],
+    order: TOOTH_TEMPLATE_DATA.upperMolarOrder,
+    templatePoints: TOOTH_TEMPLATE_DATA.upperMolarTemplate,
+    fill: '#fde68a',
+    fillOpacity: 0.24,
+    stroke: '#f59e0b',
+    strokeOpacity: 0.84,
+    strokeWidth: 1.05,
+  },
+  {
+    name: 'fill_line_low_teeth_1',
+    anchorNames: ['L6D', 'L6M'],
+    order: TOOTH_TEMPLATE_DATA.lowerMolarOrder,
+    templatePoints: TOOTH_TEMPLATE_DATA.lowerMolarTemplate,
+    fill: '#fde68a',
+    fillOpacity: 0.24,
+    stroke: '#f59e0b',
+    strokeOpacity: 0.84,
+    strokeWidth: 1.05,
+  },
+].map((template) => ({
+  ...template,
+  templateLookup: new Map(template.templatePoints.map((point) => [point.landmark, point])),
+}));
 
 function printHelp() {
   console.log(`Usage:
@@ -1111,6 +1161,97 @@ function buildSmoothPath(points, closePath = false) {
   return generator(points) || '';
 }
 
+class SimilarityTransform {
+  constructor(scaleReal, scaleImaginary, translateX, translateY) {
+    this.scaleReal = scaleReal;
+    this.scaleImaginary = scaleImaginary;
+    this.translateX = translateX;
+    this.translateY = translateY;
+  }
+
+  transformPoint(point) {
+    return {
+      landmark: point.landmark,
+      x: round1(this.scaleReal * point.x - this.scaleImaginary * point.y + this.translateX),
+      y: round1(this.scaleImaginary * point.x + this.scaleReal * point.y + this.translateY),
+    };
+  }
+}
+
+function buildSimilarityTransform(sourcePoints, targetPoints) {
+  const count = Math.min(sourcePoints.length, targetPoints.length);
+  if (count < 2) {
+    return null;
+  }
+
+  let sourceXSum = 0;
+  let sourceYSum = 0;
+  let targetXSum = 0;
+  let targetYSum = 0;
+  let sourceSquaredSum = 0;
+  let sourceYSquaredSum = 0;
+  let sourceTargetXDot = 0;
+  let sourceTargetYDot = 0;
+  let sourceTargetXX = 0;
+  let sourceTargetYY = 0;
+
+  for (let index = 0; index < count; index += 1) {
+    const sourcePoint = sourcePoints[index];
+    const targetPoint = targetPoints[index];
+    sourceXSum += sourcePoint.x;
+    sourceYSum += sourcePoint.y;
+    targetXSum += targetPoint.x;
+    targetYSum += targetPoint.y;
+    sourceSquaredSum += sourcePoint.x * sourcePoint.x;
+    sourceYSquaredSum += sourcePoint.y * sourcePoint.y;
+    sourceTargetXDot += sourcePoint.x * targetPoint.y;
+    sourceTargetYDot += sourcePoint.y * targetPoint.x;
+    sourceTargetXX += sourcePoint.x * targetPoint.x;
+    sourceTargetYY += sourcePoint.y * targetPoint.y;
+  }
+
+  const denominator = count * sourceSquaredSum + count * sourceYSquaredSum - sourceXSum * sourceXSum - sourceYSum * sourceYSum;
+  if (Math.abs(denominator) < 1e-8) {
+    return null;
+  }
+
+  const scaleReal = (count * (sourceTargetXX + sourceTargetYY) - sourceXSum * targetXSum - sourceYSum * targetYSum) / denominator;
+  const scaleImaginary = (count * (sourceTargetXDot - sourceTargetYDot) + sourceYSum * targetXSum - sourceXSum * targetYSum) / denominator;
+  const translateX = (-sourceXSum * (sourceTargetXX + sourceTargetYY) + sourceYSum * (sourceTargetXDot - sourceTargetYDot) + sourceSquaredSum * targetXSum + sourceYSquaredSum * targetXSum) / denominator;
+  const translateY = (-sourceYSum * (sourceTargetXX + sourceTargetYY) - sourceXSum * (sourceTargetXDot - sourceTargetYDot) + sourceSquaredSum * targetYSum + sourceYSquaredSum * targetYSum) / denominator;
+
+  return new SimilarityTransform(scaleReal, scaleImaginary, translateX, translateY);
+}
+
+function buildToothFillShapes(pointLookup) {
+  return TOOTH_FILL_TEMPLATES
+    .map((template) => {
+      const sourceAnchors = template.anchorNames.map((landmark) => template.templateLookup.get(landmark));
+      const targetAnchors = template.anchorNames.map((landmark) => pointLookup.get(landmark));
+      if (sourceAnchors.some((point) => !point) || targetAnchors.some((point) => !point)) {
+        return null;
+      }
+
+      const transform = buildSimilarityTransform(sourceAnchors, targetAnchors);
+      if (!transform) {
+        return null;
+      }
+
+      const points = template.order
+        .map((landmark) => template.templateLookup.get(landmark))
+        .filter(Boolean)
+        .map((point) => transform.transformPoint(point));
+
+      return points.length >= 3
+        ? {
+          ...template,
+          points,
+        }
+        : null;
+    })
+    .filter(Boolean);
+}
+
 function classifyHeadPoint(point) {
   if (PRIMARY_LANDMARK_KEYS.has(point.key)) {
     return 'primary';
@@ -1475,12 +1616,13 @@ function buildAnnotatedSvg({
   const spinePoints = spineSections.flatMap((section) => section.points);
   const overlayPoints = [...headPoints, ...rulerPoints, ...spinePoints];
   const pointLookup = buildPointLookup(overlayPoints);
+  const toothFillShapes = buildToothFillShapes(pointLookup);
   const panelLines = [
     `HYF Ceph`,
     `Risk: ${riskLabel}`,
     `Points: ${overlayPoints.length}`,
     `Confidence: ${confidenceText}`,
-    `Display: image / outline / key / aux`,
+    `Display: image / tooth fill / outline / key / aux`,
     '',
     ...metrics.map((metric) => `${metric.code}: ${metric.valueText}`),
   ];
@@ -1501,6 +1643,16 @@ function buildAnnotatedSvg({
       const dasharray = template.dasharray ? ` stroke-dasharray="${template.dasharray}"` : '';
       const opacity = template.opacity ?? 0.92;
       return `<path d="${pathData}" fill="none" stroke="${template.stroke}" stroke-width="${template.width}" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity}"${dasharray} />`;
+    })
+    .join('');
+
+  const toothFillElements = toothFillShapes
+    .map((shape) => {
+      const pathData = buildSmoothPath(shape.points, true);
+      if (!pathData) {
+        return '';
+      }
+      return `<path d="${pathData}" fill="${shape.fill}" fill-opacity="${shape.fillOpacity}" stroke="${shape.stroke}" stroke-opacity="${shape.strokeOpacity}" stroke-width="${shape.strokeWidth}" stroke-linecap="round" stroke-linejoin="round" />`;
     })
     .join('');
 
@@ -1550,6 +1702,7 @@ function buildAnnotatedSvg({
     `<rect width="${svgWidth}" height="${svgHeight}" fill="#0f172a" />`,
     `<image href="${imageDataUrl}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none" />`,
     `<rect x="${width}" y="0" width="${panelWidth}" height="${height}" fill="#111827" opacity="0.92" />`,
+    `<g>${toothFillElements}</g>`,
     `<g>${contourElements}</g>`,
     `<g>${headPointElements}${rulerPointElements}${spinePointElements}</g>`,
     `<g>${panelText}</g>`,
