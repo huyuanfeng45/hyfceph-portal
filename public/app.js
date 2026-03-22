@@ -15,6 +15,7 @@ const apiKeyOutput = document.querySelector('#api-key-output');
 const apiKeyExpiry = document.querySelector('#api-key-expiry');
 const measureImageInput = document.querySelector('#measure-image-input');
 const measureImageButton = document.querySelector('#measure-image-button');
+const measurePanel = document.querySelector('#measure-panel');
 const measureResult = document.querySelector('#measure-result');
 const measureRiskLabel = document.querySelector('#measure-risk-label');
 const measureInsight = document.querySelector('#measure-insight');
@@ -296,12 +297,17 @@ async function syncAuthUi() {
   const dashboardTab = document.querySelector('[data-tab="dashboard"]');
   dashboardTab.classList.toggle('hidden', !state.user);
   if (state.user) {
+    const isAdmin = state.user.role === 'admin';
     updateDashboard(state.user);
+    measurePanel.classList.toggle('hidden', !isAdmin);
+    operatorSyncPanel.classList.toggle('hidden', !isAdmin);
+    adminPanel.classList.toggle('hidden', !isAdmin);
     setActiveTab('dashboard');
     await loadOperatorSyncStatus();
     await loadAdminUsers();
   } else {
     renderOperatorSyncStatus(null);
+    measurePanel.classList.add('hidden');
     operatorSyncPanel.classList.add('hidden');
     adminPanel.classList.add('hidden');
     adminUsersBody.innerHTML = '<tr><td colspan="5" class="empty-cell">暂无数据</td></tr>';
