@@ -30,11 +30,14 @@ const STORE_BLOB_PATH = process.env.HYFCEPH_STORE_BLOB_PATH || 'hyfceph/users.js
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const MEASUREMENTS_DIR = path.join(DATA_DIR, 'measurements');
+const MEASUREMENT_BLOB_PREFIX = process.env.HYFCEPH_MEASUREMENT_BLOB_PREFIX || 'hyfceph/measurements';
 const SERVICE_RUNNER = path.join(__dirname, 'scripts', 'hyfceph-remote-runner.mjs');
 const LOCAL_CEPH_AUTOPOINT_RUNNER = process.env.HYFCEPH_LOCAL_IMAGE_RUNNER
   || path.join(__dirname, 'engines', 'ceph-autopoint', 'scripts', 'run-ceph-autopoint.cjs');
 const MAX_MEASURE_BUFFER_BYTES = 24 * 1024 * 1024;
 const MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
+const MAX_MEASUREMENT_HISTORY = Number(process.env.HYFCEPH_MAX_MEASUREMENT_HISTORY || '80');
 
 let blobSdkPromise = null;
 let resvgPromise = null;
@@ -183,6 +186,47 @@ function isBridgeStateActive(bridgeState) {
   return new Date(bridgeState.expiresAt).getTime() > Date.now();
 }
 
+function normalizeMeasurementSummary(entry) {
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+
+  const metricValues = entry.metricValues && typeof entry.metricValues === 'object'
+    ? Object.fromEntries(
+        Object.entries(entry.metricValues)
+          .filter(([, value]) => Number.isFinite(Number(value)))
+          .map(([key, value]) => [key, Number(value)]),
+      )
+    : {};
+
+  return {
+    id: String(entry.id || randomBytes(10).toString('hex')),
+    imageName: String(entry.imageName || 'ceph-image').trim(),
+    mode: typeof entry.mode === 'string' && entry.mode.trim() ? entry.mode.trim() : 'image',
+    createdAt: isIsoDate(entry.createdAt) ? new Date(entry.createdAt).toISOString() : nowIso(),
+    updatedAt: isIsoDate(entry.updatedAt) ? new Date(entry.updatedAt).toISOString() : nowIso(),
+    riskLabel: typeof entry.riskLabel === 'string' && entry.riskLabel.trim() ? entry.riskLabel.trim() : null,
+    insightPreview: typeof entry.insightPreview === 'string' && entry.insightPreview.trim() ? entry.insightPreview.trim() : null,
+    metricValues,
+  };
+}
+
+function publicMeasurementSummary(entry) {
+  if (!entry) {
+    return null;
+  }
+  return {
+    id: entry.id,
+    imageName: entry.imageName,
+    mode: entry.mode,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    riskLabel: entry.riskLabel,
+    insightPreview: entry.insightPreview,
+    metricValues: entry.metricValues,
+  };
+}
+
 function publicUser(user) {
   return {
     id: user.id,
@@ -197,6 +241,7 @@ function publicUser(user) {
     apiKey: user.apiKey || null,
     apiKeyExpiresAt: user.apiKeyExpiresAt || null,
     apiKeyActive: isApiKeyActive(user),
+    measurementCount: Array.isArray(user.measurementHistory) ? user.measurementHistory.length : 0,
   };
 }
 
@@ -215,6 +260,11 @@ function normalizeUserRecord(user) {
     updatedAt: isIsoDate(user?.updatedAt) ? new Date(user.updatedAt).toISOString() : nowIso(),
     lastLoginAt: isIsoDate(user?.lastLoginAt) ? new Date(user.lastLoginAt).toISOString() : null,
     currentCaseBridge: normalizeBridgeState(user?.currentCaseBridge),
+    measurementHistory: Array.isArray(user?.measurementHistory)
+      ? user.measurementHistory.map(normalizeMeasurementSummary).filter(Boolean)
+        .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+        .slice(0, MAX_MEASUREMENT_HISTORY)
+      : [],
   };
 }
 
@@ -472,6 +522,75 @@ async function writeStore(store) {
   return writeStoreToFile(store);
 }
 
+function measurementBlobPath(measurementId) {
+  return `${MEASUREMENT_BLOB_PREFIX}/${measurementId}.json`;
+}
+
+function measurementFilePath(measurementId) {
+  return path.join(MEASUREMENTS_DIR, `${measurementId}.json`);
+}
+
+async function writeMeasurementRecord(record) {
+  const measurementId = String(record?.id || '').trim();
+  if (!measurementId) {
+    throw new Error('缺少测量记录 ID。');
+  }
+  const serialized = JSON.stringify(record, null, 2);
+  if (shouldUseBlobStore()) {
+    if (!process.env.BLOB_READ_WRITE_TOKEN) {
+      throw new Error('BLOB_READ_WRITE_TOKEN 未配置，无法写入测量记录。');
+    }
+    const { put } = await loadBlobSdk();
+    await put(measurementBlobPath(measurementId), serialized, {
+      access: 'private',
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      contentType: 'application/json',
+    });
+    return;
+  }
+
+  await fs.mkdir(MEASUREMENTS_DIR, { recursive: true });
+  await fs.writeFile(measurementFilePath(measurementId), serialized, 'utf8');
+}
+
+async function readMeasurementRecord(measurementId) {
+  const id = String(measurementId || '').trim();
+  if (!id) {
+    return null;
+  }
+
+  if (shouldUseBlobStore()) {
+    if (!process.env.BLOB_READ_WRITE_TOKEN) {
+      return null;
+    }
+    const { get, BlobNotFoundError } = await loadBlobSdk();
+    try {
+      const result = await get(measurementBlobPath(id), {
+        access: 'private',
+        useCache: false,
+      });
+      if (!result || result.statusCode !== 200 || !result.stream) {
+        return null;
+      }
+      const raw = await new Response(result.stream).text();
+      return raw.trim() ? JSON.parse(raw) : null;
+    } catch (error) {
+      if (error instanceof BlobNotFoundError || error?.name === 'BlobNotFoundError') {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  try {
+    const raw = await fs.readFile(measurementFilePath(id), 'utf8');
+    return raw.trim() ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
 function ensureAdminUser(store) {
   let changed = false;
   const normalizedStore = normalizeStoreRecord(store);
@@ -562,6 +681,32 @@ async function getSessionUser(request) {
   }
   const store = await readStore();
   return store.users.find((item) => item.id === session.userId) || null;
+}
+
+async function requirePortalUser(request, response) {
+  const sessionUser = await getSessionUser(request);
+  if (sessionUser) {
+    const store = await readStore();
+    const user = store.users.find((item) => item.id === sessionUser.id) || null;
+    if (!user) {
+      sendJson(response, 404, { error: '用户不存在。' });
+      return null;
+    }
+    return { store, user, authSource: 'session' };
+  }
+
+  const apiKey = String(request.headers['x-api-key'] || '').trim();
+  if (!apiKey) {
+    sendJson(response, 401, { error: '请先登录。' });
+    return null;
+  }
+
+  const { store, user } = await requireActiveApiKeyUser(apiKey);
+  if (!user) {
+    sendJson(response, 401, { error: 'API Key 无效或已过期。' });
+    return null;
+  }
+  return { store, user, authSource: 'api-key' };
 }
 
 async function requireAdmin(request, response) {
@@ -682,6 +827,67 @@ async function buildMeasurementResponseArtifacts({ output, annotatedSvgPath, ann
       annotatedSvgBase64: svgText ? Buffer.from(svgText, 'utf8').toString('base64') : null,
       annotatedSvgMimeType: svgText ? 'image/svg+xml' : null,
     },
+  };
+}
+
+function buildMeasurementSummaryFromResult({ measurementId, imageName, mode, result }) {
+  const metrics = Array.isArray(result?.metrics) ? result.metrics : [];
+  const metricValues = Object.fromEntries(
+    metrics
+      .filter((item) => item?.code && Number.isFinite(Number(item.value)))
+      .map((item) => [item.code, Number(item.value)]),
+  );
+
+  return normalizeMeasurementSummary({
+    id: measurementId,
+    imageName,
+    mode,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    riskLabel: result?.analysis?.riskLabel || result?.summary?.riskLabel || null,
+    insightPreview: typeof result?.analysis?.insight === 'string'
+      ? result.analysis.insight.slice(0, 120)
+      : null,
+    metricValues,
+  });
+}
+
+async function persistUserMeasurement({ store, user, imageName, mode, result }) {
+  const measurementId = randomBytes(12).toString('hex');
+  const summary = buildMeasurementSummaryFromResult({
+    measurementId,
+    imageName,
+    mode,
+    result,
+  });
+
+  const record = {
+    id: measurementId,
+    userId: user.id,
+    imageName: summary.imageName,
+    mode: summary.mode,
+    createdAt: summary.createdAt,
+    updatedAt: summary.updatedAt,
+    analysis: result.analysis || null,
+    analysisError: result.analysisError || null,
+    annotationError: result.annotationError || null,
+    summary: result.summary || null,
+    metrics: Array.isArray(result.metrics) ? result.metrics : [],
+    taskId: result.taskId || null,
+    resultUrl: result.resultUrl || null,
+    artifacts: result.artifacts || null,
+  };
+
+  await writeMeasurementRecord(record);
+  user.measurementHistory = [
+    summary,
+    ...(Array.isArray(user.measurementHistory) ? user.measurementHistory : []),
+  ].slice(0, MAX_MEASUREMENT_HISTORY);
+  user.updatedAt = nowIso();
+  await writeStore(store);
+  return {
+    measurement: publicMeasurementSummary(summary),
+    record,
   };
 }
 
@@ -940,6 +1146,46 @@ async function handleCurrentUser(request, response) {
     return sendJson(response, 401, { error: '未登录。' });
   }
   return sendJson(response, 200, { user: publicUser(user) });
+}
+
+async function handleMeasurementList(request, response) {
+  const portalAuth = await requirePortalUser(request, response);
+  if (!portalAuth) {
+    return;
+  }
+  const { user } = portalAuth;
+  return sendJson(response, 200, {
+    measurements: (Array.isArray(user.measurementHistory) ? user.measurementHistory : []).map(publicMeasurementSummary),
+  });
+}
+
+async function handleMeasurementDetail(request, response, measurementId) {
+  const portalAuth = await requirePortalUser(request, response);
+  if (!portalAuth) {
+    return;
+  }
+  const { user } = portalAuth;
+  const summary = (Array.isArray(user.measurementHistory) ? user.measurementHistory : []).find((item) => item.id === measurementId);
+  if (!summary) {
+    return sendJson(response, 404, { error: '测量记录不存在。' });
+  }
+  const record = await readMeasurementRecord(measurementId);
+  if (!record || record.userId !== user.id) {
+    return sendJson(response, 404, { error: '测量记录不存在。' });
+  }
+  return sendJson(response, 200, {
+    measurement: publicMeasurementSummary(summary),
+    result: {
+      analysis: record.analysis || null,
+      analysisError: record.analysisError || null,
+      annotationError: record.annotationError || null,
+      summary: record.summary || null,
+      metrics: Array.isArray(record.metrics) ? record.metrics : [],
+      taskId: record.taskId || null,
+      resultUrl: record.resultUrl || null,
+      artifacts: record.artifacts || null,
+    },
+  });
 }
 
 async function handleGenerateApiKey(request, response) {
@@ -1234,15 +1480,11 @@ async function handleMeasureCurrentCase(request, response) {
 
 async function handleMeasureImage(request, response) {
   const payload = await readRequestJson(request);
-  const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
-  if (!apiKey) {
-    return sendJson(response, 400, { error: '缺少 API Key。' });
+  const portalAuth = await requirePortalUser(request, response);
+  if (!portalAuth) {
+    return;
   }
-
-  const { store, user } = await requireActiveApiKeyUser(apiKey);
-  if (!user) {
-    return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
-  }
+  const { store, user } = portalAuth;
 
   let upload;
   try {
@@ -1274,11 +1516,19 @@ async function handleMeasureImage(request, response) {
       imagePath: resolvedImagePath,
       operatorSession,
     });
+    const persisted = await persistUserMeasurement({
+      store,
+      user,
+      imageName: upload.fileName,
+      mode: 'image',
+      result,
+    });
     await sendBarkPush('HYFCeph 图片测量', `用户：${user.name}\n单位：${user.organization || '-'}\n图片：${path.basename(resolvedImagePath)}`);
     return sendJson(response, 200, {
       ok: true,
       mode: 'image',
       result,
+      measurement: persisted.measurement,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -1440,6 +1690,13 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'GET' && url.pathname === '/api/me') {
       return await handleCurrentUser(request, response);
+    }
+    if (request.method === 'GET' && url.pathname === '/api/measurements') {
+      return await handleMeasurementList(request, response);
+    }
+    if (request.method === 'GET' && url.pathname.startsWith('/api/measurements/')) {
+      const measurementId = decodeURIComponent(url.pathname.split('/').slice(3).join('/'));
+      return await handleMeasurementDetail(request, response, measurementId);
     }
     if (request.method === 'POST' && url.pathname === '/api/api-key/generate') {
       return await handleGenerateApiKey(request, response);
