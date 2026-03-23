@@ -404,6 +404,107 @@ body.dashboard-mode {
   align-items: start;
 }
 
+.entry-panel,
+.entry-card,
+.entry-item,
+.auth-highlight {
+  border: 1px solid rgba(88, 76, 183, 0.1);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.entry-panel {
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+  border-radius: 18px;
+}
+
+.entry-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.entry-card {
+  display: grid;
+  gap: 10px;
+  padding: 20px;
+  border-radius: 16px;
+}
+
+.entry-card h3,
+.auth-title {
+  margin: 0;
+  font-size: clamp(34px, 4vw, 48px);
+  line-height: 1.02;
+  letter-spacing: -0.05em;
+}
+
+.entry-card p,
+.entry-item span,
+.auth-text,
+.auth-highlight span {
+  color: var(--ink-soft);
+  line-height: 1.72;
+}
+
+.entry-list,
+.auth-highlights {
+  display: grid;
+  gap: 12px;
+}
+
+.entry-item,
+.auth-highlight {
+  display: grid;
+  gap: 6px;
+  padding: 16px 18px;
+  border-radius: 14px;
+}
+
+.entry-item strong,
+.auth-highlight strong {
+  font-size: 15px;
+}
+
+.entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.auth-screen .shell {
+  width: min(1360px, calc(100vw - 40px));
+}
+
+.auth-hero {
+  display: grid;
+  grid-template-columns: minmax(340px, 0.9fr) minmax(0, 1.1fr);
+  gap: 24px;
+  padding-top: 40px;
+  align-items: start;
+}
+
+.auth-copy {
+  display: grid;
+  gap: 18px;
+  padding-top: 26px;
+}
+
+.auth-title {
+  max-width: 10ch;
+}
+
+.auth-text {
+  max-width: 620px;
+  font-size: 18px;
+}
+
+.auth-panel-standalone {
+  position: static;
+}
+
 .sample-card,
 .auth-panel,
 .dashboard-card,
@@ -971,11 +1072,20 @@ body.dashboard-mode .auth-panel {
   margin-top: 0;
 }
 
+body.auth-screen.dashboard-mode .auth-hero {
+  grid-template-columns: 1fr;
+}
+
+body.auth-screen.dashboard-mode .auth-copy {
+  display: none;
+}
+
 @media (max-width: 1180px) {
   .workspace-layout,
   .feature-grid,
   .workflow-grid,
-  .dashboard-layout {
+  .dashboard-layout,
+  .auth-hero {
     grid-template-columns: 1fr;
   }
 
@@ -998,6 +1108,7 @@ body.dashboard-mode .auth-panel {
   .hero-tags,
   .api-actions,
   .admin-actions,
+  .entry-actions,
   .api-header,
   .admin-header,
   .dashboard-row,

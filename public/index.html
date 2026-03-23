@@ -20,21 +20,21 @@
           <div class="brand-copy">HYFCeph</div>
         </a>
 
-        <nav class="nav-links landing-only">
+        <nav class="nav-links">
           <a href="#hero">首页</a>
-          <a href="#portal-auth">API 控制台</a>
+          <a href="#portal-entry">认证中心</a>
           <a href="#feature-grid">功能</a>
           <a href="#workflow">流程</a>
         </nav>
 
         <div class="header-actions">
-          <button class="icon-button landing-only" type="button" aria-label="语言">文</button>
-          <button class="icon-button landing-only" type="button" aria-label="主题">◌</button>
-          <a class="header-login" href="#portal-auth">登录</a>
+          <button class="icon-button" type="button" aria-label="语言">文</button>
+          <button class="icon-button" type="button" aria-label="主题">◌</button>
+          <a class="header-login" href="/auth.html">登录</a>
         </div>
       </header>
 
-      <section class="hero-landing landing-only" id="hero">
+      <section class="hero-landing" id="hero">
         <div class="hero-illustration" aria-hidden="true"></div>
         <h1 class="hero-title">
           <span class="hero-title-top">HYFCeph</span>
@@ -45,8 +45,8 @@
         </p>
 
         <div class="hero-actions">
-          <a class="primary-button" href="#portal-auth">立即开始</a>
-          <a class="secondary-button" href="#portal-auth">查看示例</a>
+          <a class="primary-button" href="/auth.html">立即开始</a>
+          <a class="secondary-button" href="#portal-entry">查看示例</a>
         </div>
 
         <div class="hero-tags">
@@ -56,25 +56,25 @@
         </div>
       </section>
 
-      <section class="workspace-section" id="portal-auth">
-        <div class="section-heading landing-only">
+      <section class="workspace-section" id="portal-entry">
+        <div class="section-heading">
           <h2>OpenClaw 安装 HYFCeph 技能</h2>
           <p>先下载 skill 直连，再在 OpenClaw 中安装此链接的技能。更详细教程已经整理在下方黑色说明区。</p>
         </div>
 
-        <div class="workspace-actions landing-only">
-          <a class="primary-button small-button" href="#portal-auth">登录 / 注册</a>
+        <div class="workspace-actions">
+          <a class="primary-button small-button" href="/auth.html">登录 / 注册</a>
           <a class="secondary-button small-button" href="#workflow">查看流程</a>
           <a class="secondary-button small-button" href="/downloads/HYFCeph-openclaw.zip">下载 Skill</a>
         </div>
 
-        <p class="download-note landing-only">
+        <p class="download-note">
           Skill 直连下载：
           <a href="/downloads/HYFCeph-openclaw.zip">/downloads/HYFCeph-openclaw.zip</a>
         </p>
 
         <div class="workspace-layout">
-          <article class="sample-card sample-code-card landing-only">
+          <article class="sample-card sample-code-card">
             <div class="sample-tabs">
               <button class="sample-tab active" type="button">OpenClaw</button>
               <button class="sample-tab" type="button">Skill 直连</button>
@@ -104,230 +104,67 @@
               <section class="install-block">
                 <div class="install-title">2. 在 OpenClaw 中安装</div>
                 <ol class="install-list">
-                  <li>打开 OpenClaw，进入技能或 Skill 管理页面。</li>
-                  <li>选择“通过链接安装 Skill”或“导入远程 Skill 包”。</li>
-                  <li>粘贴上面的直连地址，然后开始安装。</li>
-                  <li>安装完成后，在技能列表里确认已经出现 `HYFCeph`。</li>
+                  <li>打开 OpenClaw，进入对话框或技能安装入口。</li>
+                  <li>把上面的直连地址粘贴到 OpenClaw 对话框中。</li>
+                  <li>发送这条链接，OpenClaw 即可自动识别并安装 HYFCeph 技能。</li>
+                  <li>如果当前版本不支持自动安装，也可以先下载 zip 再手动导入。</li>
                 </ol>
               </section>
 
               <section class="install-block">
                 <div class="install-title">3. 首次使用前准备</div>
                 <ol class="install-list">
-                  <li>先在本门户注册并登录，生成个人 API Key。</li>
+                  <li>先进入认证中心注册并登录，生成个人 API Key。</li>
                   <li>回到 OpenClaw，触发 `HYFCeph` 技能。</li>
                   <li>按技能提示提供 API Key，然后直接发送侧位片即可。</li>
                 </ol>
               </section>
-
-              <section class="install-block install-block-muted">
-                <div class="install-title">补充说明</div>
-                <p>如果你的 OpenClaw 当前版本不支持“通过链接安装”，也可以先点击上方“下载 Skill”，再用本地 zip 导入。</p>
-              </section>
             </div>
           </article>
 
-          <aside class="auth-panel">
-            <div class="panel-header">
+          <aside class="entry-panel">
+            <div class="entry-panel-head">
               <div class="brand-mark panel-mark">H</div>
               <div>
-                <div class="panel-title">HYFCeph</div>
-                <div class="panel-subtitle">注册、登录与 API Key 控制台</div>
+                <div class="panel-title">认证中心</div>
+                <div class="panel-subtitle">注册、登录与 API Key 控制台已独立到新页面</div>
               </div>
             </div>
 
-            <div class="panel-banner">
-              <div class="panel-banner-title">统一入口</div>
-              <div class="panel-banner-text">
-                普通用户注册后即可生成个人 API Key。管理员登录后会看到完整会话与用户管理视图。
-              </div>
+            <div class="entry-card">
+              <div class="section-kicker">Auth Page</div>
+              <h3>登录和注册现在会跳转到独立页面。</h3>
+              <p>首页只负责展示产品信息、技能安装说明和下载入口。认证、控制台和管理员操作都在单独页面中完成。</p>
             </div>
 
-            <div class="tab-bar">
-              <button class="tab active" data-tab="register" type="button">注册</button>
-              <button class="tab" data-tab="login" type="button">登录</button>
-              <button class="tab hidden" data-tab="dashboard" type="button">控制台</button>
+            <div class="entry-list">
+              <article class="entry-item">
+                <strong>普通用户</strong>
+                <span>注册、登录、生成 API Key，然后回到 OpenClaw 使用技能。</span>
+              </article>
+              <article class="entry-item">
+                <strong>管理员</strong>
+                <span>在认证中心维护浏览器会话、用户列表、Key 有效期和删除操作。</span>
+              </article>
+              <article class="entry-item">
+                <strong>统一风格</strong>
+                <span>首页和认证中心使用同一套紫蓝配色与组件语言，视觉保持一致。</span>
+              </article>
             </div>
 
-            <div id="flash" class="flash hidden"></div>
-
-            <section class="tab-panel active" data-panel="register">
-              <form id="register-form" class="stack-form">
-                <label>
-                  <span>名字</span>
-                  <input name="name" type="text" placeholder="请输入姓名" required />
-                </label>
-                <label>
-                  <span>单位</span>
-                  <input name="organization" type="text" placeholder="请输入医院 / 机构 / 单位" required />
-                </label>
-                <label>
-                  <span>手机号</span>
-                  <input name="phone" type="tel" placeholder="请输入手机号" required />
-                </label>
-                <label>
-                  <span>密码</span>
-                  <input name="password" type="password" placeholder="至少 6 位" required minlength="6" />
-                </label>
-                <button class="primary-button wide-button" type="submit">注册并进入控制台</button>
-              </form>
-            </section>
-
-            <section class="tab-panel" data-panel="login">
-              <form id="login-form" class="stack-form">
-                <label>
-                  <span>账号或手机号</span>
-                  <input name="identifier" type="text" placeholder="管理员可用账号，普通用户可用手机号" required />
-                </label>
-                <label>
-                  <span>密码</span>
-                  <input name="password" type="password" placeholder="请输入密码" required />
-                </label>
-                <button class="primary-button wide-button" type="submit">登录</button>
-              </form>
-            </section>
-
-            <section class="tab-panel" data-panel="dashboard">
-              <div class="dashboard-layout">
-                <div class="dashboard-column">
-                  <div class="dashboard-card identity-card">
-                    <div class="section-kicker">User</div>
-                    <div class="identity-title">
-                      <strong id="user-name">-</strong>
-                      <span id="user-role">-</span>
-                    </div>
-                    <div class="dashboard-row">
-                      <span class="label">单位</span>
-                      <strong id="user-organization">-</strong>
-                    </div>
-                    <div class="dashboard-row">
-                      <span class="label">手机号</span>
-                      <strong id="user-phone">-</strong>
-                    </div>
-                  </div>
-
-                  <div class="dashboard-card api-card">
-                    <div class="api-header">
-                      <div>
-                        <div class="section-kicker">API Key</div>
-                        <div class="api-card-title">你的调用凭证</div>
-                        <div class="api-tip">注册后在这里生成并复制专属 Key，默认有效期 3 个月。</div>
-                      </div>
-                      <button id="logout-button" class="ghost-button" type="button">退出登录</button>
-                    </div>
-
-                    <textarea id="api-key-output" readonly placeholder="还没有 API Key，点击下方按钮生成。"></textarea>
-
-                    <div class="dashboard-row compact-row">
-                      <span class="label">到期时间</span>
-                      <strong id="api-key-expiry">-</strong>
-                    </div>
-
-                    <div class="api-actions">
-                      <button id="generate-key-button" class="primary-button" type="button">生成 API Key</button>
-                      <button id="copy-key-button" class="ghost-button" type="button">复制 API Key</button>
-                      <a class="secondary-button dashboard-download" href="/downloads/HYFCeph-openclaw.zip">下载 Skill</a>
-                    </div>
-
-                    <p class="api-note">重新生成后，旧 Key 会立即失效。仅在需要轮换时再重新生成。</p>
-                  </div>
-                </div>
-
-                <div class="dashboard-column dashboard-column-wide">
-                  <div id="measure-panel" class="dashboard-card measure-card hidden">
-                    <div class="api-header">
-                      <div>
-                        <div class="section-kicker">Measure</div>
-                        <div class="api-card-title">图片测量</div>
-                        <div class="api-tip">直接上传侧位片即可。服务端会复用管理员浏览器保持在线的远程会话完成定点和测量，公开用户无需安装任何插件。</div>
-                      </div>
-                    </div>
-
-                    <label>
-                      <span>侧位片文件</span>
-                      <input id="measure-image-input" type="file" accept="image/png,image/jpeg,image/jpg,image/webp,image/bmp,image/tiff,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff" />
-                    </label>
-
-                    <div class="api-actions">
-                      <button id="measure-image-button" class="primary-button" type="button">上传图片并测量</button>
-                    </div>
-                    <p class="api-note">如果服务暂时不可用，通常表示管理员浏览器中的远程会话需要刷新。</p>
-
-                    <section id="measure-result" class="measure-result hidden">
-                      <div class="dashboard-row">
-                        <span class="label">分析结论</span>
-                        <strong id="measure-risk-label">-</strong>
-                      </div>
-                      <p id="measure-insight" class="measure-insight">-</p>
-                      <img id="measure-image" class="measure-image hidden" alt="HYFCeph 标注图" />
-                      <div id="measure-metrics" class="metric-grid"></div>
-                    </section>
-                  </div>
-
-                  <section id="operator-sync-panel" class="dashboard-card hidden">
-                    <div class="admin-header">
-                      <div>
-                        <div class="section-kicker">Bridge</div>
-                        <div class="api-card-title">浏览器同步状态</div>
-                        <div class="api-tip">仅管理员需要使用。请在你自己的 Chrome 中安装 HYFCeph Bridge 扩展，并填入当前管理员 API Key。</div>
-                      </div>
-                      <button id="refresh-operator-sync-button" class="ghost-button" type="button">刷新状态</button>
-                    </div>
-
-                    <div class="dashboard-row">
-                      <span class="label">当前状态</span>
-                      <strong id="operator-sync-status">未连接</strong>
-                    </div>
-
-                    <p id="operator-sync-detail" class="api-note">扩展开始同步后，这里会显示最近一次同步时间和操作者信息。</p>
-
-                    <div class="api-actions">
-                      <a class="primary-button" href="/bridge-install.html" target="_blank" rel="noreferrer">查看安装说明</a>
-                      <button id="clear-operator-sync-button" class="ghost-button" type="button">清除远程会话</button>
-                    </div>
-                  </section>
-
-                  <section id="admin-panel" class="dashboard-card hidden">
-                    <div class="admin-header">
-                      <div>
-                        <div class="section-kicker">Admin</div>
-                        <div class="api-card-title">管理员面板</div>
-                        <div class="api-tip">管理所有已生成的 API Key，可调整过期时间或删除。</div>
-                      </div>
-                      <button id="refresh-admin-button" class="ghost-button" type="button">刷新列表</button>
-                    </div>
-
-                    <div class="admin-table-wrap">
-                      <table class="admin-table">
-                        <thead>
-                          <tr>
-                            <th>用户</th>
-                            <th>单位 / 手机号</th>
-                            <th>API Key</th>
-                            <th>有效期</th>
-                            <th>操作</th>
-                          </tr>
-                        </thead>
-                        <tbody id="admin-users-body">
-                          <tr>
-                            <td colspan="5" class="empty-cell">暂无数据</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  </section>
-                </div>
-              </div>
-            </section>
+            <div class="entry-actions">
+              <a class="primary-button small-button" href="/auth.html">打开认证中心</a>
+              <a class="secondary-button small-button" href="/downloads/HYFCeph-openclaw.zip">下载 Skill</a>
+            </div>
           </aside>
         </div>
       </section>
 
-      <section class="feature-grid landing-only" id="feature-grid">
+      <section class="feature-grid" id="feature-grid">
         <article class="feature-card">
           <div class="feature-index">01</div>
           <h3>注册后直接生成 Key</h3>
-          <p>把注册、登录和 API Key 生成统一到同一控制台里，不需要来回切页面。</p>
+          <p>把注册、登录和 API Key 生成统一到认证中心页面里，不需要来回切页面。</p>
         </article>
         <article class="feature-card">
           <div class="feature-index">02</div>
@@ -356,14 +193,14 @@
         </article>
       </section>
 
-      <section class="workflow-section landing-only" id="workflow">
+      <section class="workflow-section" id="workflow">
         <h2>使用流程</h2>
         <p class="workflow-subtitle">从注册到开始调用，一共四步。</p>
         <div class="workflow-grid">
           <article class="workflow-step">
             <strong>01</strong>
-            <h3>注册账号</h3>
-            <p>填写名字、单位、手机号和密码，创建个人门户账号。</p>
+            <h3>进入认证中心</h3>
+            <p>点击首页的登录 / 注册，进入独立的认证中心页面。</p>
           </article>
           <article class="workflow-step">
             <strong>02</strong>
@@ -372,18 +209,18 @@
           </article>
           <article class="workflow-step">
             <strong>03</strong>
-            <h3>上传侧位片</h3>
-            <p>在技能端直接提交侧位片，由服务端完成统一测量调用。</p>
+            <h3>安装 Skill</h3>
+            <p>复制直链到 OpenClaw 对话框并发送，或下载 zip 后本地导入。</p>
           </article>
           <article class="workflow-step">
             <strong>04</strong>
-            <h3>查看结果</h3>
-            <p>接收 PNG 标注图、测量值与分析法结果，再继续选择分析法解读。</p>
+            <h3>提交侧位片</h3>
+            <p>回到 OpenClaw 触发 HYFCeph 技能，提供 API Key 后即可开始使用。</p>
           </article>
         </div>
       </section>
     </main>
 
-    <script type="module" src="/app.js"></script>
+    <script type="module" src="/landing.js"></script>
   </body>
 </html>
