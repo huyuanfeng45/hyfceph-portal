@@ -486,6 +486,31 @@ body.dashboard-mode {
   word-break: break-all;
 }
 
+.install-copy-row {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.copy-link-button {
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(143, 182, 255, 0.26);
+  background: rgba(143, 182, 255, 0.12);
+  color: #dce7ff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  transition: transform 180ms ease, background 180ms ease, border-color 180ms ease;
+}
+
+.copy-link-button:hover {
+  transform: translateY(-1px);
+  background: rgba(143, 182, 255, 0.18);
+  border-color: rgba(143, 182, 255, 0.36);
+}
+
 .install-block p {
   margin: 0;
   color: #b7bdd0;

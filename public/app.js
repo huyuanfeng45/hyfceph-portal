@@ -11,6 +11,7 @@ const loginForm = document.querySelector('#login-form');
 const logoutButton = document.querySelector('#logout-button');
 const generateKeyButton = document.querySelector('#generate-key-button');
 const copyKeyButton = document.querySelector('#copy-key-button');
+const copySkillLinkButton = document.querySelector('#copy-skill-link-button');
 const apiKeyOutput = document.querySelector('#api-key-output');
 const apiKeyExpiry = document.querySelector('#api-key-expiry');
 const measureImageInput = document.querySelector('#measure-image-input');
@@ -418,6 +419,21 @@ copyKeyButton.addEventListener('click', async () => {
     showFlash('API Key 已复制。');
   } catch {
     showFlash('复制失败，请手动复制。', 'error');
+  }
+});
+
+copySkillLinkButton?.addEventListener('click', async () => {
+  const value = String(copySkillLinkButton.dataset.copyText || '').trim();
+  if (!value) {
+    showFlash('当前没有可复制的 Skill 直链。', 'error');
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(value);
+    showFlash('Skill 直链已复制。把它粘贴到 OpenClaw 对话框中发送即可安装。');
+  } catch {
+    showFlash('复制失败，请手动复制直链。', 'error');
   }
 });
 
