@@ -230,14 +230,13 @@ export function buildOverlapRender({ baseOutput, compareOutput, alignMode = 'SN'
     .map((line, index) => {
       const y = legendY + 34 + index * lineHeight;
       const fontWeight = index === 0 ? 700 : 500;
-      return `<text x="${baseLegendX + 18}" y="${y}" font-family="Menlo, Consolas, monospace" font-size="16" font-weight="${fontWeight}" fill="#e5e7eb">${escapeXml(line)}</text>`;
+      return `<text x="${baseLegendX + 18}" y="${y}" font-family="Menlo, Consolas, monospace" font-size="16" font-weight="${fontWeight}" fill="#1f2340">${escapeXml(line)}</text>`;
     })
     .join('');
 
   const svgText = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
-    `<rect width="${width}" height="${height}" fill="#0b1220" />`,
-    `<rect x="${baseLegendX}" y="${legendY}" width="196" height="${lineHeight * legendLines.length + 34}" rx="16" fill="#111827" opacity="0.92" />`,
+    `<rect x="${baseLegendX}" y="${legendY}" width="196" height="${lineHeight * legendLines.length + 34}" rx="16" fill="#ffffff" fill-opacity="0.88" stroke="#d8dcf7" stroke-width="1" />`,
     `<line x1="${baseLegendX + 20}" y1="${legendY + 16}" x2="${baseLegendX + 64}" y2="${legendY + 16}" stroke="${baseStroke}" stroke-width="3.5" stroke-linecap="round" opacity="0.95" />`,
     `<line x1="${baseLegendX + 96}" y1="${legendY + 16}" x2="${baseLegendX + 140}" y2="${legendY + 16}" stroke="${compareStroke}" stroke-width="3.5" stroke-linecap="round" opacity="0.95" />`,
     `<g>${baseToothFillElements}</g>`,
