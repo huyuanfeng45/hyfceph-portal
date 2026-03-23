@@ -70,6 +70,13 @@ body {
   background: #fbfdff;
 }
 
+.hint {
+  margin: -2px 0 12px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #6b8297;
+}
+
 .field textarea {
   resize: vertical;
   min-height: 70px;

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "HYFCeph Bridge",
-  "version": "1.0.2",
-  "description": "Sync the owner's active ceph browser session to HYFCeph so public users can submit images without handling upstream links or tokens.",
+  "version": "1.0.3",
+  "description": "Sync the owner's active ceph browser session to HYFCeph and auto re-login after timed logout.",
   "permissions": [
     "storage",
     "tabs",

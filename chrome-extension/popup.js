@@ -1,5 +1,7 @@
 const portalBaseUrlInput = document.getElementById('portalBaseUrl');
 const operatorApiKeyInput = document.getElementById('operatorApiKey');
+const upstreamUsernameInput = document.getElementById('upstreamUsername');
+const upstreamPasswordInput = document.getElementById('upstreamPassword');
 const autoRefreshEnabledInput = document.getElementById('autoRefreshEnabled');
 const autoRefreshMinutesInput = document.getElementById('autoRefreshMinutes');
 const saveBtn = document.getElementById('saveBtn');
@@ -7,6 +9,7 @@ const syncBtn = document.getElementById('syncBtn');
 const pageStateEl = document.getElementById('pageState');
 const syncStateEl = document.getElementById('syncState');
 const refreshStateEl = document.getElementById('refreshState');
+const loginStateEl = document.getElementById('loginState');
 const detailEl = document.getElementById('detail');
 
 function sendMessage(message) {
@@ -32,12 +35,16 @@ function renderStatus(payload) {
   const lastSyncedTab = payload?.lastSyncedTab || null;
   const autoRefreshEnabled = payload?.autoRefreshEnabled !== false;
   const autoRefreshMinutes = Number(payload?.autoRefreshMinutes || 10);
+  const autoLoginConfigured = Boolean(payload?.upstreamUsername && payload?.upstreamPassword);
 
   pageStateEl.textContent = activeTab.supported ? '已就绪' : '未就绪';
-  syncStateEl.textContent = lastStatus?.ok ? '在线' : (lastStatus ? '异常' : '未同步');
+  syncStateEl.textContent = lastStatus?.ok
+    ? '在线'
+    : (lastStatus?.pendingLogin ? '自动登录中' : (lastStatus ? '异常' : '未同步'));
   refreshStateEl.textContent = autoRefreshEnabled
     ? `已开启 / ${autoRefreshMinutes} 分钟 / ${lastSyncedTab?.title ? '已绑定' : '未绑定'}`
     : '未开启';
+  loginStateEl.textContent = autoLoginConfigured ? '已配置' : '未配置';
 
   if (!activeTab.supported) {
     setDetail(activeTab.label || '请先打开侧位片网页。');
@@ -66,6 +73,8 @@ async function loadState() {
 
   portalBaseUrlInput.value = response.portalBaseUrl || '';
   operatorApiKeyInput.value = response.operatorApiKey || '';
+  upstreamUsernameInput.value = response.upstreamUsername || '';
+  upstreamPasswordInput.value = response.upstreamPassword || '';
   autoRefreshEnabledInput.checked = response.autoRefreshEnabled !== false;
   autoRefreshMinutesInput.value = String(response.autoRefreshMinutes || 10);
   autoRefreshMinutesInput.disabled = !autoRefreshEnabledInput.checked;
@@ -77,6 +86,8 @@ async function saveConfig() {
     type: 'hyfceph:save-config',
     portalBaseUrl: portalBaseUrlInput.value.trim(),
     operatorApiKey: operatorApiKeyInput.value.trim(),
+    upstreamUsername: upstreamUsernameInput.value.trim(),
+    upstreamPassword: upstreamPasswordInput.value,
     autoRefreshEnabled: autoRefreshEnabledInput.checked,
     autoRefreshMinutes: Number(autoRefreshMinutesInput.value || 10),
   });

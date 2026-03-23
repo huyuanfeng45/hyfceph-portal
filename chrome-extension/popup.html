@@ -25,6 +25,15 @@
           <span>管理员 API Key</span>
           <textarea id="operatorApiKey" rows="3" placeholder="请填写管理员账号生成的 API Key"></textarea>
         </label>
+        <label class="field">
+          <span>上游登录账号</span>
+          <input id="upstreamUsername" type="text" placeholder="用于登出后自动重新登录" />
+        </label>
+        <label class="field">
+          <span>上游登录密码</span>
+          <input id="upstreamPassword" type="password" placeholder="只保存在这台浏览器扩展本地" />
+        </label>
+        <p class="hint">账号密码只保存在这台 Chrome 扩展本地，用于自动重登，不会上传到门户。</p>
         <div class="inline-settings">
           <label class="switch-field">
             <input id="autoRefreshEnabled" type="checkbox" />
@@ -53,6 +62,10 @@
         <div class="row">
           <span class="label">自动刷新</span>
           <strong id="refreshState">未开启</strong>
+        </div>
+        <div class="row">
+          <span class="label">自动登录</span>
+          <strong id="loginState">未配置</strong>
         </div>
         <p id="detail" class="detail">请先打开侧位片网页，并在这里保存管理员 API Key。</p>
       </section>

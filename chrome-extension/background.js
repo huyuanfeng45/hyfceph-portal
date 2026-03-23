@@ -13,6 +13,8 @@ const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
 const STORAGE_KEYS = {
   portalBaseUrl: 'hyfceph_portal_base_url',
   operatorApiKey: 'hyfceph_operator_api_key',
+  upstreamUsername: 'hyfceph_upstream_username',
+  upstreamPassword: 'hyfceph_upstream_password',
   autoRefreshEnabled: 'hyfceph_auto_refresh_enabled',
   autoRefreshMinutes: 'hyfceph_auto_refresh_minutes',
   lastStatus: 'hyfceph_last_status',
@@ -45,6 +47,8 @@ async function getStoredConfig() {
   const stored = await chrome.storage.local.get([
     STORAGE_KEYS.portalBaseUrl,
     STORAGE_KEYS.operatorApiKey,
+    STORAGE_KEYS.upstreamUsername,
+    STORAGE_KEYS.upstreamPassword,
     STORAGE_KEYS.autoRefreshEnabled,
     STORAGE_KEYS.autoRefreshMinutes,
     STORAGE_KEYS.lastStatus,
@@ -54,6 +58,8 @@ async function getStoredConfig() {
   return {
     portalBaseUrl: ensureTrailingSlash(String(stored[STORAGE_KEYS.portalBaseUrl] || DEFAULT_PORTAL_BASE_URL).trim() || DEFAULT_PORTAL_BASE_URL),
     operatorApiKey: String(stored[STORAGE_KEYS.operatorApiKey] || '').trim(),
+    upstreamUsername: String(stored[STORAGE_KEYS.upstreamUsername] || '').trim(),
+    upstreamPassword: String(stored[STORAGE_KEYS.upstreamPassword] || ''),
     autoRefreshEnabled: stored[STORAGE_KEYS.autoRefreshEnabled] !== false,
     autoRefreshMinutes: normalizeAutoRefreshMinutes(stored[STORAGE_KEYS.autoRefreshMinutes]),
     lastStatus: stored[STORAGE_KEYS.lastStatus] || null,
@@ -76,12 +82,16 @@ async function ensureAutoRefreshAlarm(config = null) {
 async function saveStoredConfig({
   portalBaseUrl,
   operatorApiKey,
+  upstreamUsername,
+  upstreamPassword,
   autoRefreshEnabled,
   autoRefreshMinutes,
 }) {
   const nextConfig = {
     portalBaseUrl: ensureTrailingSlash(String(portalBaseUrl || DEFAULT_PORTAL_BASE_URL).trim() || DEFAULT_PORTAL_BASE_URL),
     operatorApiKey: String(operatorApiKey || '').trim(),
+    upstreamUsername: String(upstreamUsername || '').trim(),
+    upstreamPassword: String(upstreamPassword || ''),
     autoRefreshEnabled: Boolean(autoRefreshEnabled),
     autoRefreshMinutes: normalizeAutoRefreshMinutes(autoRefreshMinutes),
   };
@@ -89,6 +99,8 @@ async function saveStoredConfig({
   await chrome.storage.local.set({
     [STORAGE_KEYS.portalBaseUrl]: nextConfig.portalBaseUrl,
     [STORAGE_KEYS.operatorApiKey]: nextConfig.operatorApiKey,
+    [STORAGE_KEYS.upstreamUsername]: nextConfig.upstreamUsername,
+    [STORAGE_KEYS.upstreamPassword]: nextConfig.upstreamPassword,
     [STORAGE_KEYS.autoRefreshEnabled]: nextConfig.autoRefreshEnabled,
     [STORAGE_KEYS.autoRefreshMinutes]: nextConfig.autoRefreshMinutes,
   });
@@ -98,9 +110,12 @@ async function saveStoredConfig({
 
 async function setBridgeBadge(status) {
   const ok = Boolean(status?.ok);
-  await chrome.action.setBadgeText({ text: ok ? 'ON' : (status ? 'ERR' : '') });
+  const pendingLogin = Boolean(status?.pendingLogin);
+  await chrome.action.setBadgeText({ text: ok ? 'ON' : (pendingLogin ? 'LOG' : (status ? 'ERR' : '')) });
   if (status) {
-    await chrome.action.setBadgeBackgroundColor({ color: ok ? '#166534' : '#991b1b' });
+    await chrome.action.setBadgeBackgroundColor({
+      color: ok ? '#166534' : (pendingLogin ? '#b45309' : '#991b1b'),
+    });
   }
 }
 
@@ -297,6 +312,36 @@ async function syncOperatorSession(payload, reason = 'capture', sourceTab = null
   return status;
 }
 
+async function handleAutoLoginStatus(payload = {}, sourceTab = null) {
+  const config = await getStoredConfig();
+  const stage = String(payload.stage || '').trim();
+  const message = String(payload.message || '自动登录状态已更新。').trim();
+  const status = {
+    ok: false,
+    pendingLogin: stage === 'triggered' || stage === 'waiting',
+    reason: payload.reason || 'auto-login',
+    message,
+    syncedAt: null,
+    operatorSession: config.lastStatus?.operatorSession || null,
+    autoLogin: {
+      stage: stage || 'unknown',
+      updatedAt: new Date().toISOString(),
+    },
+  };
+
+  await persistStatus(status);
+
+  if (stage === 'missing-credentials' || stage === 'failed' || stage === 'captcha') {
+    await sendBarkAlert({
+      title: 'HYFCeph Bridge 自动登录异常',
+      body: `${message}\n页面：${sourceTab?.url || payload?.href || payload?.pageUrl || '-'}`,
+      fingerprint: `auto-login:${stage}:${message}:${sourceTab?.url || payload?.pageUrl || ''}`,
+    });
+  }
+
+  return status;
+}
+
 async function getActiveTabSummary() {
   const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const tab = tabs[0];
@@ -349,6 +394,9 @@ async function requestTabSyncById(tabId, {
         } catch {
           // Ignore tab lookup failure after a successful sync.
         }
+        return response;
+      }
+      if (response?.pendingLogin) {
         return response;
       }
       lastErrorMessage = response?.error || '同步失败。';
@@ -474,6 +522,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         ok: true,
         portalBaseUrl: config.portalBaseUrl,
         operatorApiKey: config.operatorApiKey,
+        upstreamUsername: config.upstreamUsername,
+        upstreamPassword: config.upstreamPassword,
         autoRefreshEnabled: config.autoRefreshEnabled,
         autoRefreshMinutes: config.autoRefreshMinutes,
         lastStatus: config.lastStatus,
@@ -486,6 +536,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       await saveStoredConfig({
         portalBaseUrl: message.portalBaseUrl,
         operatorApiKey: message.operatorApiKey,
+        upstreamUsername: message.upstreamUsername,
+        upstreamPassword: message.upstreamPassword,
         autoRefreshEnabled: message.autoRefreshEnabled,
         autoRefreshMinutes: message.autoRefreshMinutes,
       });
@@ -494,6 +546,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         ok: true,
         portalBaseUrl: config.portalBaseUrl,
         operatorApiKey: config.operatorApiKey,
+        upstreamUsername: config.upstreamUsername,
+        upstreamPassword: config.upstreamPassword,
         autoRefreshEnabled: config.autoRefreshEnabled,
         autoRefreshMinutes: config.autoRefreshMinutes,
       };
@@ -502,9 +556,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === 'hyfceph:force-sync') {
       const response = await requestTabSync();
       return {
-        ok: true,
+        ok: response?.ok || response?.pendingLogin || false,
+        pendingLogin: Boolean(response?.pendingLogin),
+        error: response?.error || null,
         status: response.status || null,
       };
+    }
+
+    if (message.type === 'hyfceph:auto-login-status') {
+      const status = await handleAutoLoginStatus(message.payload || {}, _sender?.tab || null);
+      return { ok: true, status };
     }
 
     return { ok: false, error: 'Unsupported message.' };
