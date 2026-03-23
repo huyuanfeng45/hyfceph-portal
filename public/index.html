@@ -58,8 +58,8 @@
 
       <section class="workspace-section" id="portal-auth">
         <div class="section-heading landing-only">
-          <h2>HYFCeph API 调用示例</h2>
-          <p>通过下方示例了解如何获取 API Key、上传侧位片并接收标注图与分析数据。</p>
+          <h2>OpenClaw 安装 HYFCeph 技能</h2>
+          <p>先下载 skill 直连，再在 OpenClaw 中安装此链接的技能。更详细教程已经整理在下方黑色说明区。</p>
         </div>
 
         <div class="workspace-actions landing-only">
@@ -76,18 +76,41 @@
         <div class="workspace-layout">
           <article class="sample-card sample-code-card landing-only">
             <div class="sample-tabs">
-              <button class="sample-tab active" type="button">Curl</button>
-              <button class="sample-tab" type="button">Javascript</button>
-              <button class="sample-tab" type="button">Python</button>
+              <button class="sample-tab active" type="button">OpenClaw</button>
+              <button class="sample-tab" type="button">Skill 直连</button>
+              <button class="sample-tab" type="button">使用前准备</button>
             </div>
-            <pre class="code-block"><code>curl -X POST https://hyfceph.52ortho.com/api/measure/image \
-  -H "x-api-key: YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "fileName": "lateral.jpg",
-    "mimeType": "image/jpeg",
-    "imageBase64": "&lt;base64&gt;"
-  }'</code></pre>
+            <div class="install-guide">
+              <section class="install-block">
+                <div class="install-title">1. 下载 Skill 直连</div>
+                <div class="install-link-box">https://hyfceph.52ortho.com/downloads/HYFCeph-openclaw.zip</div>
+                <p>把这条链接作为技能安装地址使用。门户每次更新 skill 后，都会覆盖到同一个固定链接。</p>
+              </section>
+
+              <section class="install-block">
+                <div class="install-title">2. 在 OpenClaw 中安装</div>
+                <ol class="install-list">
+                  <li>打开 OpenClaw，进入技能或 Skill 管理页面。</li>
+                  <li>选择“通过链接安装 Skill”或“导入远程 Skill 包”。</li>
+                  <li>粘贴上面的直连地址，然后开始安装。</li>
+                  <li>安装完成后，在技能列表里确认已经出现 `HYFCeph`。</li>
+                </ol>
+              </section>
+
+              <section class="install-block">
+                <div class="install-title">3. 首次使用前准备</div>
+                <ol class="install-list">
+                  <li>先在本门户注册并登录，生成个人 API Key。</li>
+                  <li>回到 OpenClaw，触发 `HYFCeph` 技能。</li>
+                  <li>按技能提示提供 API Key，然后直接发送侧位片即可。</li>
+                </ol>
+              </section>
+
+              <section class="install-block install-block-muted">
+                <div class="install-title">补充说明</div>
+                <p>如果你的 OpenClaw 当前版本不支持“通过链接安装”，也可以先点击上方“下载 Skill”，再用本地 zip 导入。</p>
+              </section>
+            </div>
           </article>
 
           <aside class="auth-panel">
