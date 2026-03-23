@@ -1101,8 +1101,6 @@ body.auth-screen.dashboard-mode .auth-copy {
   }
 
   .site-header,
-  .nav-links,
-  .header-actions,
   .workspace-actions,
   .hero-actions,
   .hero-tags,
@@ -1119,10 +1117,43 @@ body.auth-screen.dashboard-mode .auth-copy {
 
   .site-header {
     padding: 14px 0 20px;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    row-gap: 12px;
   }
 
   .nav-links {
+    order: 3;
+    width: 100%;
     gap: 8px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .nav-links::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav-links a {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 8px 10px;
+  }
+
+  .header-actions {
+    flex-direction: row;
+    align-items: center;
+    margin-left: auto;
+  }
+
+  .workspace-actions {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
   }
 
   .hero-landing {
