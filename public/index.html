@@ -12,101 +12,63 @@
   <body>
     <div class="page-bg"></div>
     <div class="page-grain"></div>
+
     <main class="shell">
-      <header class="masthead">
-        <div class="brand-cluster">
+      <header class="site-header">
+        <a class="brand-link" href="/">
           <div class="brand-mark">H</div>
           <div class="brand-copy">
             <strong>HYFCeph</strong>
             <span>Portal</span>
           </div>
-        </div>
-        <div class="masthead-pills">
+        </a>
+
+        <nav class="nav-links landing-only">
+          <a href="#hero">首页</a>
+          <a href="#api-demo">调用示例</a>
+          <a href="#feature-grid">功能</a>
+          <a href="#workflow">流程</a>
+        </nav>
+
+        <div class="nav-actions">
           <span class="mini-pill">API Key</span>
-          <span class="mini-pill">Remote Measure</span>
-          <span class="mini-pill">Operator Bridge</span>
+          <span class="mini-pill landing-only">Remote Measure</span>
         </div>
       </header>
 
-      <section class="hero-grid">
-        <section class="hero-stage landing-only">
+      <section class="hero-section" id="hero">
+        <section class="hero-copy landing-only">
           <div class="eyebrow">HYFCeph Access Platform</div>
-          <h1>把侧位片自动测量入口整理成更克制、更清晰的一套门户体验。</h1>
+          <h1>侧位片自动定点与测量的统一调用入口。</h1>
           <p class="hero-text">
-            这是一个为 HYFCeph 远程调用准备的统一入口。用户注册后即可生成个人 API Key，
-            随后在技能端上传侧位片并接收标志点图、测量值与分析法结果。管理员则在同一控制台内维护会话与 Key。
+            用户注册后即可生成个人 API Key，在技能端上传侧位片并接收标注图、测量值与分析法结果。
+            管理员则在同一控制台中管理会话同步、用户与 Key。
           </p>
 
           <div class="hero-actions">
             <a class="primary-button" href="#portal-auth">立即注册</a>
-            <a class="ghost-button" href="#workflow">查看使用流程</a>
+            <a class="ghost-button" href="#api-demo">查看 API 示例</a>
           </div>
 
-          <div class="stat-strip">
-            <article class="stat-card">
-              <div class="stat-value">8</div>
-              <div class="stat-label">分析法支持</div>
+          <div class="hero-stats">
+            <article class="hero-stat">
+              <strong>8 套</strong>
+              <span>分析法支持</span>
             </article>
-            <article class="stat-card">
-              <div class="stat-value">PNG</div>
-              <div class="stat-label">标注图返回</div>
+            <article class="hero-stat">
+              <strong>PNG</strong>
+              <span>标注图返送</span>
             </article>
-            <article class="stat-card">
-              <div class="stat-value">API</div>
-              <div class="stat-label">按用户独立鉴权</div>
+            <article class="hero-stat">
+              <strong>API</strong>
+              <span>按用户独立管理</span>
             </article>
           </div>
-
-          <article class="showcase-card">
-            <div class="showcase-head">
-              <div>
-                <div class="section-kicker">Portal Overview</div>
-                <h2>一个轻量但完整的侧位片调用链路</h2>
-              </div>
-              <div class="showcase-badge">Always On</div>
-            </div>
-
-            <div class="showcase-grid">
-              <section class="showcase-panel">
-                <div class="panel-label">用户侧</div>
-                <h3>注册、生成 Key、在技能端提交侧位片。</h3>
-                <ul class="plain-list">
-                  <li>无需理解远程平台认证细节</li>
-                  <li>按注册用户独立管理 API Key</li>
-                  <li>直接拿回 PNG 标注图与分析数据</li>
-                </ul>
-              </section>
-
-              <section class="showcase-panel showcase-panel-accent">
-                <div class="panel-label">输出层</div>
-                <div class="chip-cloud">
-                  <span>关键点</span>
-                  <span>辅助点</span>
-                  <span>轮廓线</span>
-                  <span>牙齿填充</span>
-                  <span>Downs</span>
-                  <span>Steiner</span>
-                  <span>Ricketts</span>
-                  <span>Jarabak</span>
-                </div>
-                <div class="mini-stack">
-                  <article class="mini-card">
-                    <strong>管理员</strong>
-                    <span>维护浏览器会话、管理用户与 Key。</span>
-                  </article>
-                  <article class="mini-card">
-                    <strong>普通用户</strong>
-                    <span>只看到用户信息与 API Key，不暴露管理项。</span>
-                  </article>
-                </div>
-              </section>
-            </div>
-          </article>
         </section>
 
         <aside class="auth-panel" id="portal-auth">
           <div class="panel-header">
-            <div class="brand-mark auth-mark">H</div>
+            <div class="brand-mark panel-mark">H</div>
             <div>
               <div class="panel-title">HYFCeph</div>
               <div class="panel-subtitle">注册、登录与 API Key 控制台</div>
@@ -114,8 +76,10 @@
           </div>
 
           <div class="panel-banner">
-            <div class="panel-banner-title">面向公开调用的统一入口</div>
-            <div class="panel-banner-text">普通用户注册后即可生成个人 API Key。管理员登录后会看到完整会话与用户管理视图。</div>
+            <div class="panel-banner-title">统一入口</div>
+            <div class="panel-banner-text">
+              普通用户注册后即可生成个人 API Key。管理员登录后会看到完整会话与用户管理视图。
+            </div>
           </div>
 
           <div class="tab-bar">
@@ -296,30 +260,82 @@
         </aside>
       </section>
 
-      <section class="capability-band landing-only">
-        <article class="capability-card">
+      <section class="api-demo landing-only" id="api-demo">
+        <div class="section-heading">
+          <div class="section-kicker">API Demo</div>
+          <h2>通过一个示例了解 HYFCeph 的调用方式。</h2>
+          <p>先注册获取 API Key，再由技能端上传侧位片。门户负责管理权限与统一返回结果。</p>
+        </div>
+
+        <div class="api-demo-layout">
+          <article class="sample-card sample-code-card">
+            <div class="sample-tabs">
+              <span class="sample-tab active">Curl</span>
+              <span class="sample-tab">Javascript</span>
+              <span class="sample-tab">Skill</span>
+            </div>
+            <pre class="code-block"><code>curl -X POST https://hyfceph.52ortho.com/api/measure/image \
+  -H "x-api-key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fileName": "lateral.jpg",
+    "mimeType": "image/jpeg",
+    "imageBase64": "&lt;base64&gt;"
+  }'</code></pre>
+          </article>
+
+          <article class="sample-card sample-side-card">
+            <div class="panel-label">输出内容</div>
+            <h3>返回 PNG 标注图、关键测量值与分析法原始项目。</h3>
+            <ul class="plain-list">
+              <li>关键点、辅助点、轮廓线、牙齿填充</li>
+              <li>Downs、Steiner、北大分析法、ABO</li>
+              <li>Ricketts、Tweed、McNamara、Jarabak</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="feature-grid landing-only" id="feature-grid">
+        <article class="feature-card">
           <div class="section-kicker">01</div>
-          <h2>普通用户路径更短</h2>
-          <p>注册、登录、生成 API Key，然后直接在技能端提交侧位片，不需要理解远程认证细节。</p>
+          <h3>注册后立即生成 Key</h3>
+          <p>把注册、登录与 API Key 生成收敛在同一控制台里，不需要再切页面找入口。</p>
         </article>
-        <article class="capability-card">
+        <article class="feature-card">
           <div class="section-kicker">02</div>
-          <h2>管理员视图独立</h2>
-          <p>普通用户仅看到用户信息与 API Key。会话同步、用户表格和 Key 管理仅对管理员开放。</p>
+          <h3>普通用户界面收口</h3>
+          <p>普通用户只显示用户信息和 API Key，不暴露管理员同步和管理能力。</p>
         </article>
-        <article class="capability-card">
+        <article class="feature-card">
           <div class="section-kicker">03</div>
-          <h2>结果按产品化交付</h2>
-          <p>统一返回 PNG 标注图、测量值和分析法原始项目，适合技能端直接展示和继续解读。</p>
+          <h3>管理员集中维护</h3>
+          <p>管理员可管理浏览器会话、用户列表、Key 有效期与删除操作。</p>
+        </article>
+        <article class="feature-card">
+          <div class="section-kicker">04</div>
+          <h3>统一返送标注图</h3>
+          <p>服务端统一生成 PNG 标注图，技能端直接展示，不再依赖前端手工拼装。</p>
+        </article>
+        <article class="feature-card">
+          <div class="section-kicker">05</div>
+          <h3>多分析法详细输出</h3>
+          <p>返回每套分析法的完整项目原始数值，而不是只保留少量精选指标。</p>
+        </article>
+        <article class="feature-card">
+          <div class="section-kicker">06</div>
+          <h3>适合技能公开分发</h3>
+          <p>公开用户不需要理解远程会话与桥接逻辑，只需要注册、拿 Key、提交侧位片。</p>
         </article>
       </section>
 
-      <section class="workflow-card landing-only" id="workflow">
-        <div class="workflow-intro">
+      <section class="workflow-section landing-only" id="workflow">
+        <div class="section-heading">
           <div class="section-kicker">Workflow</div>
-          <h2>从注册到开始使用，一共四步。</h2>
-          <p>界面不再堆信息，而是把每个角色最需要的动作放在最前面。</p>
+          <h2>从注册到开始调用，一共四步。</h2>
+          <p>这部分也按参考站那种分块节奏整理成更直接的阅读顺序。</p>
         </div>
+
         <div class="workflow-grid">
           <article class="workflow-step">
             <strong>01</strong>
@@ -328,18 +344,18 @@
           </article>
           <article class="workflow-step">
             <strong>02</strong>
-            <h3>生成 Key</h3>
-            <p>登录后在控制台生成个人 API Key，作为技能端调用凭证。</p>
+            <h3>生成 API Key</h3>
+            <p>登录控制台后生成个人 Key，作为技能端的调用凭证。</p>
           </article>
           <article class="workflow-step">
             <strong>03</strong>
             <h3>提交侧位片</h3>
-            <p>在技能端直接上传侧位片，由服务端统一完成远程调用。</p>
+            <p>在技能端直接上传侧位片，门户统一完成测量调用和结果组织。</p>
           </article>
           <article class="workflow-step">
             <strong>04</strong>
             <h3>查看结果</h3>
-            <p>获取 PNG 标注图、测量值和多套分析法数据，继续解读。</p>
+            <p>接收 PNG 标注图、测量值与分析法数据，再继续选择分析法解读。</p>
           </article>
         </div>
       </section>
