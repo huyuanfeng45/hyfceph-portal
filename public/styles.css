@@ -475,6 +475,8 @@ body.dashboard-mode {
 }
 
 .install-link-box {
+  display: grid;
+  gap: 6px;
   padding: 14px 16px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -484,6 +486,17 @@ body.dashboard-mode {
   font-size: 13px;
   line-height: 1.7;
   word-break: break-all;
+}
+
+.install-link-box span {
+  color: #d7dbea;
+  font-family: "Outfit", "Noto Sans SC", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.install-link-box strong {
+  font-weight: 700;
 }
 
 .install-copy-row {
