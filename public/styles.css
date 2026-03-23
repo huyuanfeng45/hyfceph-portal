@@ -374,12 +374,26 @@ body.dashboard-mode {
 .workspace-actions {
   justify-content: center;
   margin-top: 28px;
+  flex-wrap: wrap;
 }
 
 .small-button {
   min-width: 118px;
   min-height: 40px;
   font-size: 15px;
+}
+
+.download-note {
+  margin: 14px 0 0;
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.download-note a {
+  color: var(--brand);
+  text-decoration: none;
+  font-weight: 700;
 }
 
 .workspace-layout {
@@ -662,6 +676,10 @@ textarea {
   margin-top: 8px;
   font-size: 24px;
   line-height: 1.08;
+}
+
+.dashboard-download {
+  min-width: 132px;
 }
 
 .api-tip,
