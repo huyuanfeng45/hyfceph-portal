@@ -6,6 +6,9 @@ const state = {
 const flash = document.querySelector('#flash');
 const tabs = Array.from(document.querySelectorAll('.tab'));
 const panels = Array.from(document.querySelectorAll('.tab-panel'));
+const registerTab = document.querySelector('[data-tab="register"]');
+const loginTab = document.querySelector('[data-tab="login"]');
+const dashboardTab = document.querySelector('[data-tab="dashboard"]');
 const registerForm = document.querySelector('#register-form');
 const loginForm = document.querySelector('#login-form');
 const logoutButton = document.querySelector('#logout-button');
@@ -297,10 +300,11 @@ async function loadOperatorSyncStatus() {
 async function syncAuthUi() {
   document.body.classList.toggle('dashboard-mode', Boolean(state.user));
   document.body.classList.toggle('admin-mode', state.user?.role === 'admin');
-  const dashboardTab = document.querySelector('[data-tab="dashboard"]');
   dashboardTab.classList.toggle('hidden', !state.user);
   if (state.user) {
     const isAdmin = state.user.role === 'admin';
+    registerTab.classList.add('hidden');
+    loginTab.classList.add('hidden');
     updateDashboard(state.user);
     measurePanel.classList.toggle('hidden', !isAdmin);
     operatorSyncPanel.classList.toggle('hidden', !isAdmin);
@@ -314,6 +318,8 @@ async function syncAuthUi() {
     operatorSyncPanel.classList.add('hidden');
     adminPanel.classList.add('hidden');
     adminUsersBody.innerHTML = '<tr><td colspan="5" class="empty-cell">暂无数据</td></tr>';
+    registerTab.classList.remove('hidden');
+    loginTab.classList.remove('hidden');
     setActiveTab('register');
   }
 }

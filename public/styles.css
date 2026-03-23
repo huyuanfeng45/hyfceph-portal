@@ -808,16 +808,21 @@ textarea {
   display: grid;
   grid-template-columns: minmax(280px, 330px) minmax(0, 1fr);
   gap: 16px;
+  align-items: start;
 }
 
 .dashboard-column {
   display: grid;
   gap: 16px;
+  align-content: start;
+  align-self: start;
+  grid-auto-rows: min-content;
 }
 
 .dashboard-card {
   padding: 20px;
   border-radius: 16px;
+  align-content: start;
 }
 
 .identity-title {
