@@ -805,18 +805,29 @@ textarea {
 }
 
 .dashboard-layout {
-  display: grid;
-  grid-template-columns: minmax(280px, 330px) minmax(0, 1fr);
+  display: flex;
   gap: 16px;
   align-items: start;
 }
 
 .dashboard-column {
+  flex: 0 0 330px;
+  min-width: 0;
   display: grid;
   gap: 16px;
   align-content: start;
   align-self: start;
   grid-auto-rows: min-content;
+}
+
+.dashboard-column-wide {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.dashboard-column > * {
+  align-self: start;
+  height: auto;
 }
 
 .dashboard-card {
@@ -856,6 +867,12 @@ textarea {
   border-bottom: 0;
 }
 
+.dashboard-row strong {
+  margin-left: auto;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
 .compact-row {
   padding: 0;
   border-bottom: 0;
@@ -877,6 +894,21 @@ textarea {
 
 .dashboard-download {
   min-width: 132px;
+}
+
+.api-card .api-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.api-card .api-actions > * {
+  min-width: 0;
+  width: 100%;
+}
+
+.api-card .api-actions > .primary-button {
+  grid-column: 1 / -1;
 }
 
 .api-tip,
@@ -1089,9 +1121,18 @@ body.auth-screen.dashboard-mode .auth-copy {
   .workspace-layout,
   .feature-grid,
   .workflow-grid,
-  .dashboard-layout,
   .auth-hero {
     grid-template-columns: 1fr;
+  }
+
+  .dashboard-layout {
+    flex-direction: column;
+  }
+
+  .dashboard-column,
+  .dashboard-column-wide {
+    flex: 1 1 auto;
+    width: 100%;
   }
 
   .hero-illustration {
