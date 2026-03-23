@@ -1102,8 +1102,6 @@ body.auth-screen.dashboard-mode .auth-copy {
 
   .site-header,
   .workspace-actions,
-  .hero-actions,
-  .hero-tags,
   .api-actions,
   .admin-actions,
   .entry-actions,
@@ -1156,6 +1154,33 @@ body.auth-screen.dashboard-mode .auth-copy {
     justify-content: center;
   }
 
+  .hero-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 10px;
+    width: min(100%, 360px);
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .hero-actions .primary-button,
+  .hero-actions .secondary-button {
+    min-width: 0;
+    width: 100%;
+    padding-inline: 10px;
+  }
+
+  .hero-tags {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: min(100%, 340px);
+    margin-left: auto;
+    margin-right: auto;
+  }
+
   .hero-landing {
     padding-top: 44px;
   }
@@ -1191,5 +1216,16 @@ body.auth-screen.dashboard-mode .auth-copy {
 
   .admin-expiry-input {
     min-width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .hero-actions {
+    grid-template-columns: 1fr;
+    width: min(100%, 300px);
+  }
+
+  .hero-tags {
+    width: min(100%, 260px);
   }
 }
