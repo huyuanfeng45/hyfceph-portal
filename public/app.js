@@ -294,6 +294,8 @@ async function loadOperatorSyncStatus() {
 }
 
 async function syncAuthUi() {
+  document.body.classList.toggle('dashboard-mode', Boolean(state.user));
+  document.body.classList.toggle('admin-mode', state.user?.role === 'admin');
   const dashboardTab = document.querySelector('[data-tab="dashboard"]');
   dashboardTab.classList.toggle('hidden', !state.user);
   if (state.user) {
