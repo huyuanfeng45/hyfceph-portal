@@ -9,7 +9,7 @@ copySkillLinkButton?.addEventListener('click', async () => {
   const originalText = copySkillLinkButton.textContent;
   try {
     await navigator.clipboard.writeText(value);
-    copySkillLinkButton.textContent = '已复制';
+    copySkillLinkButton.textContent = '已复制技能名';
     window.setTimeout(() => {
       copySkillLinkButton.textContent = originalText;
     }, 1600);
