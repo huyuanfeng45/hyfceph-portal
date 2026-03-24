@@ -661,11 +661,18 @@ async function convertSvgTextToPngBuffer(svgText) {
   return Buffer.from(resvg.render().asPng());
 }
 
-function buildMeasurementResponseArtifactsFromBuffers({ output, svgText, pngBuffer }) {
+function buildMeasurementResponseArtifactsFromBuffers({
+  output,
+  svgText,
+  pngBuffer,
+  contourSvgText = null,
+  contourPngBuffer = null,
+}) {
   return {
     analysis: output.analysis || null,
     analysisError: output.analysisError || null,
     annotationError: pngBuffer ? null : (output.annotationError || null),
+    contourError: contourPngBuffer ? null : (output.contourError || null),
     summary: output.summary || null,
     metrics: output.analysis?.metrics || [],
     taskId: output.taskId || null,
@@ -675,13 +682,25 @@ function buildMeasurementResponseArtifactsFromBuffers({ output, svgText, pngBuff
       annotatedPngMimeType: pngBuffer ? 'image/png' : null,
       annotatedSvgBase64: svgText ? Buffer.from(svgText, 'utf8').toString('base64') : null,
       annotatedSvgMimeType: svgText ? 'image/svg+xml' : null,
+      contourPngBase64: contourPngBuffer ? contourPngBuffer.toString('base64') : null,
+      contourPngMimeType: contourPngBuffer ? 'image/png' : null,
+      contourSvgBase64: contourSvgText ? Buffer.from(contourSvgText, 'utf8').toString('base64') : null,
+      contourSvgMimeType: contourSvgText ? 'image/svg+xml' : null,
     },
   };
 }
 
-async function buildMeasurementResponseArtifacts({ output, annotatedSvgPath, annotatedPngPath }) {
+async function buildMeasurementResponseArtifacts({
+  output,
+  annotatedSvgPath,
+  annotatedPngPath,
+  contourSvgPath = null,
+  contourPngPath = null,
+}) {
   const svgText = annotatedSvgPath ? await readFileIfExists(annotatedSvgPath, 'utf8') : null;
   let pngBuffer = annotatedPngPath ? await readFileIfExists(annotatedPngPath) : null;
+  const contourSvgText = contourSvgPath ? await readFileIfExists(contourSvgPath, 'utf8') : null;
+  let contourPngBuffer = contourPngPath ? await readFileIfExists(contourPngPath) : null;
 
   if (!pngBuffer && svgText) {
     try {
@@ -691,10 +710,20 @@ async function buildMeasurementResponseArtifacts({ output, annotatedSvgPath, ann
     }
   }
 
+  if (!contourPngBuffer && contourSvgText) {
+    try {
+      contourPngBuffer = await convertSvgTextToPngBuffer(contourSvgText);
+    } catch {
+      contourPngBuffer = null;
+    }
+  }
+
   return buildMeasurementResponseArtifactsFromBuffers({
     output,
     svgText,
     pngBuffer,
+    contourSvgText,
+    contourPngBuffer,
   });
 }
 
@@ -727,6 +756,7 @@ async function buildLocalImageMeasurementArtifacts(localOutput) {
     },
     analysisError: null,
     annotationError: annotatedPng ? null : '未生成 PNG 标注图。',
+    contourError: null,
     summary: {
       headPoints: Array.isArray(localOutput?.landmarks) ? localOutput.landmarks.length : 0,
       rulerPoints: 0,
@@ -745,6 +775,10 @@ async function buildLocalImageMeasurementArtifacts(localOutput) {
       annotatedPngMimeType: annotatedPng ? 'image/png' : null,
       annotatedSvgBase64: null,
       annotatedSvgMimeType: null,
+      contourPngBase64: null,
+      contourPngMimeType: null,
+      contourSvgBase64: null,
+      contourSvgMimeType: null,
     },
   };
 }
@@ -760,6 +794,8 @@ async function executeRunnerMeasurement({
   const outputPath = path.join(tempDir, 'result.json');
   const annotatedSvgPath = path.join(tempDir, 'annotated.svg');
   const annotatedPngPath = path.join(tempDir, 'annotated.png');
+  const contourSvgPath = path.join(tempDir, 'contour.svg');
+  const contourPngPath = path.join(tempDir, 'contour.png');
   const downloadedImagePath = path.join(tempDir, 'input');
   const bridgeFilePath = path.join(tempDir, 'bridge-state.json');
   const args = [
@@ -772,6 +808,10 @@ async function executeRunnerMeasurement({
     annotatedSvgPath,
     '--annotated-png-output',
     annotatedPngPath,
+    '--contour-output',
+    contourSvgPath,
+    '--contour-png-output',
+    contourPngPath,
     '--downloaded-image-output',
     downloadedImagePath,
   ];
@@ -809,8 +849,12 @@ async function executeRunnerMeasurement({
     const output = JSON.parse(rawOutput);
     const resolvedSvgPath = output.annotatedSvgPath || annotatedSvgPath;
     const resolvedPngPath = output.annotatedPngPath || annotatedPngPath;
+    const resolvedContourSvgPath = output.contourSvgPath || contourSvgPath;
+    const resolvedContourPngPath = output.contourPngPath || contourPngPath;
     const svgText = annotate ? await readFileIfExists(resolvedSvgPath, 'utf8') : null;
     let pngBuffer = annotate ? await readFileIfExists(resolvedPngPath) : null;
+    const contourSvgText = annotate ? await readFileIfExists(resolvedContourSvgPath, 'utf8') : null;
+    let contourPngBuffer = annotate ? await readFileIfExists(resolvedContourPngPath) : null;
 
     if (annotate && !pngBuffer && svgText) {
       try {
@@ -820,10 +864,20 @@ async function executeRunnerMeasurement({
       }
     }
 
+    if (annotate && !contourPngBuffer && contourSvgText) {
+      try {
+        contourPngBuffer = await convertSvgTextToPngBuffer(contourSvgText);
+      } catch {
+        contourPngBuffer = null;
+      }
+    }
+
     return {
       output,
       svgText,
       pngBuffer,
+      contourSvgText,
+      contourPngBuffer,
     };
   } catch (error) {
     const stderr = String(error?.stderr || '').trim();
@@ -853,6 +907,8 @@ async function runServerSideMeasurement({
     output: measurement.output,
     svgText: measurement.svgText,
     pngBuffer: measurement.pngBuffer,
+    contourSvgText: measurement.contourSvgText,
+    contourPngBuffer: measurement.contourPngBuffer,
   });
 }
 
@@ -886,6 +942,7 @@ async function runServerSideOverlapMeasurement({
     analysis: overlap.analysis,
     analysisError: null,
     annotationError: pngBuffer ? null : '未生成 PNG 重叠图。',
+    contourError: null,
     summary: overlap.summary,
     metrics: overlap.metrics,
     taskId: null,
@@ -895,6 +952,10 @@ async function runServerSideOverlapMeasurement({
       annotatedPngMimeType: pngBuffer ? 'image/png' : null,
       annotatedSvgBase64: Buffer.from(overlap.svgText, 'utf8').toString('base64'),
       annotatedSvgMimeType: 'image/svg+xml',
+      contourPngBase64: null,
+      contourPngMimeType: null,
+      contourSvgBase64: null,
+      contourSvgMimeType: null,
     },
   };
 }

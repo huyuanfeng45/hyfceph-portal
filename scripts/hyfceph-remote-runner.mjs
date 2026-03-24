@@ -571,6 +571,16 @@ function defaultAnnotatedPngPath(imagePath) {
   return path.join(parsed.dir, `${parsed.name}.ceph_keypoints.annotated.png`);
 }
 
+function defaultContourSvgPath(imagePath) {
+  const parsed = path.parse(imagePath);
+  return path.join(parsed.dir, `${parsed.name}.ceph_keypoints.contour.svg`);
+}
+
+function defaultContourPngPath(imagePath) {
+  const parsed = path.parse(imagePath);
+  return path.join(parsed.dir, `${parsed.name}.ceph_keypoints.contour.png`);
+}
+
 function defaultSessionFile() {
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
   return path.join(codexHome, 'state', 'latera-ceph-remote-session.json');
@@ -2393,24 +2403,25 @@ function fallbackDimensionsFromLandmarks(landmarks) {
   };
 }
 
-function buildAnnotatedSvg({
-  imageDataUrl,
-  width,
-  height,
-  landmarks,
-  overlayData,
-  analysis,
-  analysisError,
-}) {
-  const pointRadius = clamp(Math.round(Math.min(width, height) / 220), 3, 6);
+function buildOverlayGeometry({ landmarks, overlayData }) {
   const headPoints = overlayData?.headPoints?.length ? overlayData.headPoints : landmarks;
   const rulerPoints = overlayData?.rulerPoints || [];
   const spineSections = overlayData?.spineSections || [];
   const spinePoints = spineSections.flatMap((section) => section.points);
   const overlayPoints = [...headPoints, ...rulerPoints, ...spinePoints];
   const pointLookup = buildPointLookup(overlayPoints);
-  const toothFillShapes = buildToothFillShapes(pointLookup);
+  return {
+    headPoints,
+    rulerPoints,
+    spineSections,
+    spinePoints,
+    overlayPoints,
+    pointLookup,
+    toothFillShapes: buildToothFillShapes(pointLookup),
+  };
+}
 
+function buildContourElements(pointLookup) {
   const contourElements = WEBPAGE_LINE_TEMPLATES
     .flatMap((template) => buildTemplateSegments(template, pointLookup).map((points) => ({ template, points })))
     .map(({ template, points }) => {
@@ -2423,7 +2434,10 @@ function buildAnnotatedSvg({
       return `<path d="${pathData}" fill="none" stroke="${template.stroke}" stroke-width="${template.width}" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity}"${dasharray} />`;
     })
     .join('');
+  return contourElements;
+}
 
+function buildToothFillElements(toothFillShapes) {
   const toothFillElements = toothFillShapes
     .map((shape) => {
       const pathData = buildSmoothPath(shape.points, true);
@@ -2433,6 +2447,27 @@ function buildAnnotatedSvg({
       return `<path d="${pathData}" fill="${shape.fill}" fill-opacity="${shape.fillOpacity}" stroke="${shape.stroke}" stroke-opacity="${shape.strokeOpacity}" stroke-width="${shape.strokeWidth}" stroke-linecap="round" stroke-linejoin="round" />`;
     })
     .join('');
+  return toothFillElements;
+}
+
+function buildAnnotatedSvg({
+  imageDataUrl,
+  width,
+  height,
+  landmarks,
+  overlayData,
+}) {
+  const pointRadius = clamp(Math.round(Math.min(width, height) / 220), 3, 6);
+  const {
+    headPoints,
+    rulerPoints,
+    spineSections,
+    pointLookup,
+    toothFillShapes,
+  } = buildOverlayGeometry({ landmarks, overlayData });
+
+  const contourElements = buildContourElements(pointLookup);
+  const toothFillElements = buildToothFillElements(toothFillShapes);
 
   const headPointElements = headPoints.map((point) => {
     const pointType = classifyHeadPoint(point);
@@ -2482,6 +2517,29 @@ function buildAnnotatedSvg({
   ].join('');
 }
 
+function buildContourSvg({
+  width,
+  height,
+  landmarks,
+  overlayData,
+}) {
+  const {
+    pointLookup,
+    toothFillShapes,
+  } = buildOverlayGeometry({ landmarks, overlayData });
+
+  const contourElements = buildContourElements(pointLookup);
+  const toothFillElements = buildToothFillElements(toothFillShapes);
+
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    `<rect width="${width}" height="${height}" fill="#ffffff" />`,
+    `<g>${toothFillElements}</g>`,
+    `<g>${contourElements}</g>`,
+    `</svg>`,
+  ].join('');
+}
+
 async function writeAnnotatedSvg({
   imagePath,
   imageBuffer,
@@ -2503,6 +2561,27 @@ async function writeAnnotatedSvg({
     overlayData,
     analysis,
     analysisError,
+  });
+
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await fs.writeFile(outputPath, svg, 'utf8');
+  return path.resolve(outputPath);
+}
+
+async function writeContourSvg({
+  imageBuffer,
+  imageMimeType,
+  landmarks,
+  overlayData,
+  outputPath,
+}) {
+  const inferredDimensions = inferImageDimensions(imageBuffer, imageMimeType);
+  const { width, height } = inferredDimensions || fallbackDimensionsFromLandmarks(landmarks);
+  const svg = buildContourSvg({
+    width,
+    height,
+    landmarks,
+    overlayData,
   });
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
@@ -2565,6 +2644,8 @@ async function main() {
       'no-session-cache': { type: 'boolean', default: false },
       'annotated-output': { type: 'string' },
       'annotated-png-output': { type: 'string' },
+      'contour-output': { type: 'string' },
+      'contour-png-output': { type: 'string' },
       'api-key': { type: 'string' },
       'portal-base-url': { type: 'string' },
       'skip-portal-validation': { type: 'boolean', default: false },
@@ -2871,6 +2952,9 @@ async function main() {
   let annotatedSvgPath = null;
   let annotatedPngPath = null;
   let annotationError = null;
+  let contourSvgPath = null;
+  let contourPngPath = null;
+  let contourError = null;
   const overlayData = collectOverlayData(resolvedResult?.payload);
   const landmarks = analysis?.landmarks || collectLateraLandmarks(resolvedResult?.payload);
   if (!values['no-annotated-svg'] && landmarks.length) {
@@ -2892,6 +2976,22 @@ async function main() {
     } catch (error) {
       annotationError = error instanceof Error ? error.message : String(error);
     }
+
+    try {
+      contourSvgPath = await writeContourSvg({
+        imageBuffer: fileBuffer,
+        imageMimeType,
+        landmarks,
+        overlayData,
+        outputPath: path.resolve(values['contour-output'] || defaultContourSvgPath(resolvedImagePath)),
+      });
+      contourPngPath = await convertSvgToPng(
+        contourSvgPath,
+        path.resolve(values['contour-png-output'] || defaultContourPngPath(resolvedImagePath)),
+      );
+    } catch (error) {
+      contourError = error instanceof Error ? error.message : String(error);
+    }
   }
   const outputPath = path.resolve(values.output || defaultOutputPath(resolvedImagePath));
   const output = {
@@ -2908,8 +3008,11 @@ async function main() {
     resultPayload: resolvedResult?.payload || null,
     analysisError,
     annotationError,
+    contourError,
     annotatedSvgPath,
     annotatedPngPath,
+    contourSvgPath,
+    contourPngPath,
     landmarks,
     analysis: analysis ? {
       recognition: analysis.recognition,
@@ -2934,10 +3037,13 @@ async function main() {
     outputPath,
     annotatedSvgPath,
     annotatedPngPath,
+    contourSvgPath,
+    contourPngPath,
     taskId,
     resultUrl: output.resultUrl,
     analysisError,
     annotationError,
+    contourError,
     summary: output.summary,
     metrics: output.analysis?.metrics || [],
   }, null, 2));
@@ -2951,6 +3057,7 @@ export {
   buildSmoothPath,
   buildSimilarityTransform,
   buildToothFillShapes,
+  buildContourSvg,
 };
 
 function isDirectCliRun() {
