@@ -2402,15 +2402,7 @@ function buildAnnotatedSvg({
   analysis,
   analysisError,
 }) {
-  const panelWidth = 360;
-  const svgWidth = width + panelWidth;
-  const svgHeight = height;
   const pointRadius = clamp(Math.round(Math.min(width, height) / 220), 3, 6);
-  const riskLabel = analysis?.riskLabel || '未生成测量结论';
-  const metrics = analysis?.metrics || [];
-  const confidenceText = analysis?.recognition?.confidence == null
-    ? 'N/A'
-    : `${analysis.recognition.confidence}%`;
   const headPoints = overlayData?.headPoints?.length ? overlayData.headPoints : landmarks;
   const rulerPoints = overlayData?.rulerPoints || [];
   const spineSections = overlayData?.spineSections || [];
@@ -2418,21 +2410,6 @@ function buildAnnotatedSvg({
   const overlayPoints = [...headPoints, ...rulerPoints, ...spinePoints];
   const pointLookup = buildPointLookup(overlayPoints);
   const toothFillShapes = buildToothFillShapes(pointLookup);
-  const panelLines = [
-    `HYF Ceph`,
-    `Risk: ${riskLabel}`,
-    `Points: ${overlayPoints.length}`,
-    `Confidence: ${confidenceText}`,
-    `Display: image / tooth fill / outline / key / aux`,
-    '',
-    ...metrics.map((metric) => `${metric.code}: ${metric.valueText}`),
-  ];
-
-  if (analysisError) {
-    panelLines.push('', `Metric error: ${analysisError}`);
-  } else if (analysis?.unsupportedMetricCodes?.length) {
-    panelLines.push('', `Unsupported: ${analysis.unsupportedMetricCodes.join(', ')}`);
-  }
 
   const contourElements = WEBPAGE_LINE_TEMPLATES
     .flatMap((template) => buildTemplateSegments(template, pointLookup).map((points) => ({ template, points })))
@@ -2489,24 +2466,18 @@ function buildAnnotatedSvg({
     }))
     .join('');
 
-  const panelText = panelLines
-    .map((line, index) => {
-      const safeLine = escapeXml(line);
-      const y = 42 + index * 24;
-      const fontWeight = index === 0 ? '700' : '500';
-      return `<text x="${width + 20}" y="${y}" font-family="Menlo, Consolas, monospace" font-size="16" font-weight="${fontWeight}" fill="#e5e7eb">${safeLine}</text>`;
-    })
-    .join('');
+  const cornerBadge = [
+    `<rect x="18" y="18" width="170" height="36" rx="10" fill="#ffffff" fill-opacity="0.84" stroke="#1f2340" stroke-opacity="0.18" stroke-width="1" />`,
+    `<text x="34" y="41" font-family="Menlo, Consolas, monospace" font-size="16" font-weight="700" fill="#1f2340">skill/hyfceph</text>`,
+  ].join('');
 
   return [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}" viewBox="0 0 ${svgWidth} ${svgHeight}">`,
-    `<rect width="${svgWidth}" height="${svgHeight}" fill="#0f172a" />`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
     `<image href="${imageDataUrl}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none" />`,
-    `<rect x="${width}" y="0" width="${panelWidth}" height="${height}" fill="#111827" opacity="0.92" />`,
     `<g>${toothFillElements}</g>`,
     `<g>${contourElements}</g>`,
     `<g>${headPointElements}${rulerPointElements}${spinePointElements}</g>`,
-    `<g>${panelText}</g>`,
+    `<g>${cornerBadge}</g>`,
     `</svg>`,
   ].join('');
 }
