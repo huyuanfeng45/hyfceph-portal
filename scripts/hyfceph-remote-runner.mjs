@@ -831,12 +831,33 @@ async function readJsonResponse(response) {
   return data;
 }
 
+function formatFetchStage(label, url) {
+  const stage = String(label || '').trim() || 'request';
+  return stage;
+}
+
+function extractFetchReason(error) {
+  const direct = error instanceof Error ? error.message : String(error);
+  const cause = error && typeof error === 'object' ? error.cause : null;
+  const causeCode = cause && typeof cause === 'object' && cause.code ? String(cause.code) : '';
+  const causeMessage = cause instanceof Error
+    ? cause.message
+    : cause && typeof cause === 'object' && cause.message
+      ? String(cause.message)
+      : '';
+  const details = [direct, causeCode, causeMessage]
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+  return details.join(' | ') || 'unknown fetch error';
+}
+
 async function requestJson(url, {
   method = 'GET',
   headers = {},
   query,
   body,
   expectStatus = 200,
+  label,
 } = {}) {
   const requestUrl = new URL(url);
   if (query) {
@@ -853,33 +874,49 @@ async function requestJson(url, {
     finalHeaders['Content-Type'] ??= 'application/json';
   }
 
-  const response = await fetch(requestUrl, {
-    method,
-    headers: finalHeaders,
-    body: method === 'GET' || method === 'HEAD' ? undefined : payload,
-  });
+  let response;
+  try {
+    response = await fetch(requestUrl, {
+      method,
+      headers: finalHeaders,
+      body: method === 'GET' || method === 'HEAD' ? undefined : payload,
+    });
+  } catch (error) {
+    throw new Error(`${formatFetchStage(label, requestUrl)} request failed: ${extractFetchReason(error)}`);
+  }
 
   if (expectStatus && response.status !== expectStatus) {
     const fallbackText = await response.text();
-    throw new Error(`HTTP ${response.status} ${response.statusText}: ${fallbackText.slice(0, 500)}`);
+    throw new Error(`${formatFetchStage(label, requestUrl)} returned HTTP ${response.status} ${response.statusText}: ${fallbackText.slice(0, 500)}`);
   }
 
-  return readJsonResponse(response);
+  try {
+    return await readJsonResponse(response);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`${formatFetchStage(label, requestUrl)} returned invalid JSON: ${reason}`);
+  }
 }
 
 async function requestRaw(url, {
   method = 'GET',
   headers = {},
   body,
+  label,
 } = {}) {
-  const response = await fetch(url, {
-    method,
-    headers,
-    body: method === 'GET' || method === 'HEAD' ? undefined : body,
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers,
+      body: method === 'GET' || method === 'HEAD' ? undefined : body,
+    });
+  } catch (error) {
+    throw new Error(`${formatFetchStage(label, url)} request failed: ${extractFetchReason(error)}`);
+  }
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`HTTP ${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
+    throw new Error(`${formatFetchStage(label, url)} returned HTTP ${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
   }
   return response;
 }
@@ -888,6 +925,7 @@ async function validatePortalApiKey({ portalBaseUrl, apiKey }) {
   const result = await requestJson(new URL('api/validate-key', portalBaseUrl).toString(), {
     method: 'POST',
     body: { apiKey },
+    label: 'portal api key validation',
   });
   if (!result?.valid) {
     throw new Error(result?.error || 'HYFCeph API Key 校验失败');
@@ -896,12 +934,18 @@ async function validatePortalApiKey({ portalBaseUrl, apiKey }) {
 }
 
 async function fetchPortalBridgeCurrentCase({ portalBaseUrl, apiKey }) {
-  const response = await fetch(new URL('api/bridge/current-case', portalBaseUrl), {
-    method: 'GET',
-    headers: {
-      'x-api-key': apiKey,
-    },
-  });
+  const requestUrl = new URL('api/bridge/current-case', portalBaseUrl);
+  let response;
+  try {
+    response = await fetch(requestUrl, {
+      method: 'GET',
+      headers: {
+        'x-api-key': apiKey,
+      },
+    });
+  } catch (error) {
+    throw new Error(`${formatFetchStage('portal bridge lookup', requestUrl)} request failed: ${extractFetchReason(error)}`);
+  }
 
   if (response.status === 404) {
     return null;
@@ -909,10 +953,15 @@ async function fetchPortalBridgeCurrentCase({ portalBaseUrl, apiKey }) {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`HYFCeph cloud bridge lookup failed: HTTP ${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
+    throw new Error(`${formatFetchStage('portal bridge lookup', requestUrl)} returned HTTP ${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
   }
 
-  return readJsonResponse(response);
+  try {
+    return await readJsonResponse(response);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`${formatFetchStage('portal bridge lookup', requestUrl)} returned invalid JSON: ${reason}`);
+  }
 }
 
 async function notifyPortalSkillEvent({
@@ -931,6 +980,7 @@ async function notifyPortalSkillEvent({
         imageName,
         imageSource,
       },
+      label: 'portal skill event notify',
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
@@ -977,7 +1027,7 @@ function buildCallbackUrl(pageUrl) {
 async function fetchAppSettings(pageUrl) {
   const settingsUrl = new URL('custom/appSetting.js?v=0.0.1', pageUrl).toString();
   try {
-    const response = await requestRaw(settingsUrl);
+    const response = await requestRaw(settingsUrl, { label: 'app settings' });
     const script = await response.text();
     const clientId = script.match(/window\.clientId\s*=\s*'([^']+)'/)?.[1] || DEFAULT_CLIENT_ID;
     const xAppKey = script.match(/window\.xAppKey\s*=\s*'([^']+)'/)?.[1] || DEFAULT_X_APP_KEY;
@@ -1022,6 +1072,7 @@ async function loginDoctor({ apiBase, clientId, xAppKey, username, password, mgr
     method: 'POST',
     headers: buildAppHeaders({ clientId, xAppKey }),
     body: payload,
+    label: mgr ? 'manager login' : 'doctor login',
   });
 
   return extractTokenFromLogin(unwrapApiResult(result, 'login'));
@@ -1031,6 +1082,7 @@ async function getAlgorithmAccess({ apiBase, clientId, xAppKey, xiaoliutoken, fo
   const result = await requestJson(new URL('design/algorithm/getAccessToken', apiBase).toString(), {
     headers: buildAppHeaders({ clientId, xAppKey, token: xiaoliutoken }),
     query: { force: force ? 'true' : 'false' },
+    label: 'algorithm access token',
   });
 
   const payload = unwrapApiResult(result, 'getAccessToken').data || result.data || result;
@@ -1069,6 +1121,7 @@ async function fetchSharedLateralImageUrl({
       ptId,
       ptVersion,
     },
+    label: 'shared lateral image url',
   });
 
   const payload = unwrapApiResult(result, 'lateral image').data ?? result.data ?? result;
@@ -1079,7 +1132,7 @@ async function fetchSharedLateralImageUrl({
 }
 
 async function downloadRemoteImage(url, outputPath) {
-  const response = await requestRaw(url);
+  const response = await requestRaw(url, { label: 'download lateral image' });
   const mimeType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() || '';
   let resolvedPath = path.resolve(outputPath);
   if (!path.extname(resolvedPath)) {
@@ -1100,6 +1153,7 @@ async function fetchUploadSignature({ algorithmBase, algorithmToken, algorithmNa
   const result = await requestJson(new URL('file_signature/direct_upload/', algorithmBase).toString(), {
     headers: buildAlgorithmHeaders(algorithmToken),
     query: { name: algorithmName },
+    label: 'direct upload signature',
   });
 
   const payload = unwrapApiResult(result, 'direct upload signature').data || result.data;
@@ -1123,6 +1177,7 @@ async function uploadImageToOss({ uploadSignature, fileBlob, fileName, algorithm
     method: 'POST',
     headers: { Authorization: algorithmToken },
     body: form,
+    label: 'oss direct upload',
   });
 
   return {
@@ -1145,6 +1200,7 @@ async function createTask({ algorithmBase, algorithmToken, algorithmName, taskId
       },
       priority: 0,
     },
+    label: 'algorithm task creation',
   });
 
   return unwrapApiResult(result, 'task creation');
@@ -1157,6 +1213,7 @@ async function pollTaskResult({ algorithmBase, algorithmToken, taskId, pollMs, t
   while (Date.now() < deadline) {
     const result = await requestJson(url, {
       headers: buildAlgorithmHeaders(algorithmToken),
+      label: 'algorithm task polling',
     });
 
     const status = result?.data?.status;
@@ -1181,7 +1238,7 @@ async function resolveResultPayload(resultIndex) {
     return null;
   }
 
-  const response = await requestRaw(firstUrl);
+  const response = await requestRaw(firstUrl, { label: 'algorithm result payload' });
   return {
     url: firstUrl,
     payload: await readJsonResponse(response),
