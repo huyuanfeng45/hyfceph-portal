@@ -9,6 +9,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import OSS from 'ali-oss';
 import { buildOverlapRender, listSupportedAlignModes } from './scripts/hyfceph-overlap-renderer.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -36,9 +37,19 @@ const LOCAL_CEPH_AUTOPOINT_RUNNER = process.env.HYFCEPH_LOCAL_IMAGE_RUNNER
   || path.join(__dirname, 'engines', 'ceph-autopoint', 'scripts', 'run-ceph-autopoint.cjs');
 const MAX_MEASURE_BUFFER_BYTES = 24 * 1024 * 1024;
 const MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
+const PDF_OSS_ACCESS_KEY_ID = process.env.HYFCEPH_PDF_OSS_ACCESS_KEY_ID || '';
+const PDF_OSS_ACCESS_KEY_SECRET = process.env.HYFCEPH_PDF_OSS_ACCESS_KEY_SECRET || '';
+const PDF_OSS_REGION = process.env.HYFCEPH_PDF_OSS_REGION || '';
+const PDF_OSS_BUCKET = process.env.HYFCEPH_PDF_OSS_BUCKET || '';
+const PDF_OSS_PREFIX = process.env.HYFCEPH_PDF_OSS_PREFIX || 'hyfceph-pdf';
+const PDF_OSS_UPLOAD_EXPIRES_SECONDS = Number(process.env.HYFCEPH_PDF_OSS_UPLOAD_EXPIRES_SECONDS || '900');
+const PDF_OSS_DOWNLOAD_EXPIRES_SECONDS = Number(process.env.HYFCEPH_PDF_OSS_DOWNLOAD_EXPIRES_SECONDS || String(60 * 60 * 24 * 7));
+const PDF_OSS_PUBLIC_READ = /^(1|true|yes)$/i.test(String(process.env.HYFCEPH_PDF_OSS_PUBLIC_READ || 'false'));
+const OSS_V4_MAX_EXPIRES_SECONDS = 60 * 60 * 24 * 7;
 
 let blobSdkPromise = null;
 let resvgPromise = null;
+let pdfOssClientPromise = null;
 const execFileAsync = promisify(execFile);
 
 const MIME_TYPES = new Map([
@@ -92,6 +103,107 @@ function coerceOptionalNumber(value) {
 function sanitizeFileStem(value) {
   const cleaned = String(value || '').trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
   return cleaned || 'ceph-image';
+}
+
+function isPdfOssConfigured() {
+  return Boolean(PDF_OSS_ACCESS_KEY_ID && PDF_OSS_ACCESS_KEY_SECRET && PDF_OSS_REGION && PDF_OSS_BUCKET);
+}
+
+function safePositiveInteger(value, fallback) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : fallback;
+}
+
+function buildPdfOssObjectKey({ user, fileName, patientName, reportType }) {
+  const now = new Date();
+  const year = String(now.getUTCFullYear());
+  const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const stem = sanitizeFileStem(path.basename(fileName || 'hyfceph-report.pdf', path.extname(fileName || 'hyfceph-report.pdf')));
+  const patientStem = sanitizeFileStem(patientName || 'patient');
+  const typeStem = sanitizeFileStem(reportType || 'report');
+  const userStem = sanitizeFileStem(user?.id || user?.username || user?.phone || 'user');
+  const timestamp = nowIso().replace(/[:.]/g, '-');
+  return `${PDF_OSS_PREFIX}/${year}/${month}/${userStem}/${timestamp}-${patientStem}-${typeStem}-${stem}.pdf`;
+}
+
+function buildOssPublicUrl(objectKey) {
+  const encodedPath = String(objectKey || '')
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  return `https://${PDF_OSS_BUCKET}.${PDF_OSS_REGION}.aliyuncs.com/${encodedPath}`;
+}
+
+function normalizeOssSignedUrl(url) {
+  return String(url || '').replace(/^http:\/\//i, 'https://');
+}
+
+async function getPdfOssClient() {
+  if (!isPdfOssConfigured()) {
+    throw new Error('PDF OSS 上传服务未配置。');
+  }
+  if (!pdfOssClientPromise) {
+    pdfOssClientPromise = Promise.resolve(new OSS({
+      region: PDF_OSS_REGION,
+      bucket: PDF_OSS_BUCKET,
+      accessKeyId: PDF_OSS_ACCESS_KEY_ID,
+      accessKeySecret: PDF_OSS_ACCESS_KEY_SECRET,
+      authorizationV4: true,
+    }));
+  }
+  return pdfOssClientPromise;
+}
+
+async function createPdfUploadTicket({ user, fileName, mimeType, patientName, reportType }) {
+  const client = await getPdfOssClient();
+  const objectKey = buildPdfOssObjectKey({
+    user,
+    fileName,
+    patientName,
+    reportType,
+  });
+  const contentType = String(mimeType || 'application/pdf').trim() || 'application/pdf';
+  const uploadExpiresIn = safePositiveInteger(PDF_OSS_UPLOAD_EXPIRES_SECONDS, 900);
+  const downloadExpiresIn = Math.min(
+    safePositiveInteger(PDF_OSS_DOWNLOAD_EXPIRES_SECONDS, 60 * 60 * 24 * 7),
+    OSS_V4_MAX_EXPIRES_SECONDS,
+  );
+  const uploadHeaders = {
+    'Content-Type': contentType,
+  };
+  const additionalHeaders = [];
+  if (PDF_OSS_PUBLIC_READ) {
+    uploadHeaders['x-oss-object-acl'] = 'public-read';
+    additionalHeaders.push('x-oss-object-acl');
+  }
+
+  const uploadUrl = normalizeOssSignedUrl(await client.signatureUrlV4(
+    'PUT',
+    uploadExpiresIn,
+    {
+      headers: uploadHeaders,
+    },
+    objectKey,
+    additionalHeaders,
+  ));
+
+  const publicUrl = buildOssPublicUrl(objectKey);
+  const downloadUrl = PDF_OSS_PUBLIC_READ
+    ? publicUrl
+    : normalizeOssSignedUrl(await client.signatureUrlV4('GET', downloadExpiresIn, undefined, objectKey));
+
+  return {
+    objectKey,
+    bucket: PDF_OSS_BUCKET,
+    region: PDF_OSS_REGION,
+    accessMode: PDF_OSS_PUBLIC_READ ? 'public-read' : 'signed-get',
+    uploadUrl,
+    uploadHeaders,
+    uploadExpiresAt: new Date(Date.now() + uploadExpiresIn * 1000).toISOString(),
+    publicUrl,
+    downloadUrl,
+    downloadExpiresAt: PDF_OSS_PUBLIC_READ ? null : new Date(Date.now() + downloadExpiresIn * 1000).toISOString(),
+  };
 }
 
 function extensionFromUpload({ fileName, mimeType }) {
@@ -1301,6 +1413,45 @@ async function handleAdminOperatorSessionDelete(request, response) {
   return sendJson(response, 200, { ok: true });
 }
 
+async function handlePdfUploadTicket(request, response) {
+  const payload = await readRequestJson(request);
+  const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
+  if (!apiKey) {
+    return sendJson(response, 400, { error: '缺少 API Key。' });
+  }
+
+  const { user } = await requireActiveApiKeyUser(apiKey);
+  if (!user) {
+    return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
+  }
+
+  if (!isPdfOssConfigured()) {
+    return sendJson(response, 503, { error: 'PDF 上传服务暂未配置。' });
+  }
+
+  const fileName = String(payload.fileName || 'hyfceph-report.pdf').trim() || 'hyfceph-report.pdf';
+  const mimeType = String(payload.mimeType || 'application/pdf').trim() || 'application/pdf';
+  const patientName = String(payload.patientName || '').trim();
+  const reportType = String(payload.reportType || '').trim() || 'report';
+
+  try {
+    const ticket = await createPdfUploadTicket({
+      user,
+      fileName,
+      mimeType,
+      patientName,
+      reportType,
+    });
+    return sendJson(response, 200, {
+      ok: true,
+      upload: ticket,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return sendJson(response, 502, { error: message || 'PDF 上传票据生成失败。' });
+  }
+}
+
 async function handleMeasureShareUrl(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
@@ -1676,6 +1827,7 @@ export async function handleNodeRequest(request, response) {
         barkConfigured: Boolean(BARK_DEVICE_KEY),
         storeBackend: STORE_BACKEND,
         operatorSessionActive: isOperatorSessionActive(store.operatorSession),
+        pdfOssConfigured: isPdfOssConfigured(),
       });
     }
     if (request.method === 'POST' && url.pathname === '/api/register') {
@@ -1695,6 +1847,9 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'POST' && url.pathname === '/api/validate-key') {
       return await handleValidateApiKey(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/pdf/upload-ticket') {
+      return await handlePdfUploadTicket(request, response);
     }
     if (request.method === 'GET' && url.pathname === '/api/bridge/current-case') {
       return await handleBridgeCurrentCaseGet(request, response);
