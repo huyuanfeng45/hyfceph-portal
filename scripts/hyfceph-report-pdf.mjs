@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { PDFDocument } from 'pdf-lib';
 import { Resvg } from '@resvg/resvg-js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const PAGE_WIDTH = 1240;
 const PAGE_HEIGHT = 1754;
 const MARGIN_X = 72;
@@ -15,6 +17,11 @@ const MARGIN_Y = 72;
 const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_X * 2;
 const MAX_PAGE_IMAGE_WIDTH = CONTENT_WIDTH;
 const SECTION_GAP = 26;
+const EMBEDDED_FONT_FILES = [
+  path.join(__dirname, '..', 'node_modules', 'node-source-han-sans-sc', 'SourceHanSansSC-Regular.otf'),
+  path.join(__dirname, '..', 'node_modules', 'node-source-han-sans-sc', 'SourceHanSansSC-Normal.otf'),
+  path.join(__dirname, '..', 'node_modules', 'node-source-han-sans-sc', 'SourceHanSansSC-Bold.otf'),
+].filter(Boolean);
 function escapeXml(value) {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -153,6 +160,12 @@ function normalizeFrameworkEntries(frameworkReports, preferredOrder = []) {
 
 function htmlText(value) {
   return escapeXml(value).replace(/\n/g, '<br />');
+}
+
+function normalizeSvgFontFamilies(svgText) {
+  return String(svgText)
+    .replaceAll('PingFang SC, Noto Sans SC, sans-serif', 'Source Han Sans SC')
+    .replaceAll('Menlo, Consolas, monospace', 'Source Han Sans SC');
 }
 
 function toneLabel(tone, status) {
@@ -1663,9 +1676,14 @@ function makeSvgPage(page) {
 async function renderPagesToPdf(svgPages, outputPath) {
   const pdfDoc = await PDFDocument.create();
   for (const svgText of svgPages) {
-    const resvg = new Resvg(svgText, {
+    const resvg = new Resvg(normalizeSvgFontFamilies(svgText), {
       fitTo: {
         mode: 'original',
+      },
+      font: {
+        fontFiles: EMBEDDED_FONT_FILES,
+        loadSystemFonts: false,
+        defaultFontFamily: 'Source Han Sans SC',
       },
     });
     const pngBuffer = Buffer.from(resvg.render().asPng());

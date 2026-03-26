@@ -14,10 +14,12 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@fontsource/noto-sans-sc": "^5.0.20",
     "@resvg/resvg-js": "^2.6.2",
     "@vercel/blob": "^2.3.1",
     "ali-oss": "^6.23.0",
     "d3-shape": "^3.2.0",
+    "node-source-han-sans-sc": "^1.1.0-2.001R",
     "pdf-lib": "^1.17.1"
   }
 }
