@@ -42,6 +42,7 @@ const PDF_OSS_ACCESS_KEY_ID = process.env.HYFCEPH_PDF_OSS_ACCESS_KEY_ID || '';
 const PDF_OSS_ACCESS_KEY_SECRET = process.env.HYFCEPH_PDF_OSS_ACCESS_KEY_SECRET || '';
 const PDF_OSS_REGION = process.env.HYFCEPH_PDF_OSS_REGION || '';
 const PDF_OSS_BUCKET = process.env.HYFCEPH_PDF_OSS_BUCKET || '';
+const PDF_OSS_CUSTOM_DOMAIN = (process.env.HYFCEPH_PDF_OSS_CUSTOM_DOMAIN || '').replace(/^https?:\/\//i, '').replace(/\/+$/, '');
 const PDF_OSS_PREFIX = process.env.HYFCEPH_PDF_OSS_PREFIX || 'hyfceph-pdf';
 const PDF_OSS_UPLOAD_EXPIRES_SECONDS = Number(process.env.HYFCEPH_PDF_OSS_UPLOAD_EXPIRES_SECONDS || '900');
 const PDF_OSS_DOWNLOAD_EXPIRES_SECONDS = Number(process.env.HYFCEPH_PDF_OSS_DOWNLOAD_EXPIRES_SECONDS || String(60 * 60 * 24 * 7));
@@ -132,7 +133,8 @@ function buildOssPublicUrl(objectKey) {
     .split('/')
     .map((segment) => encodeURIComponent(segment))
     .join('/');
-  return `https://${PDF_OSS_BUCKET}.${PDF_OSS_REGION}.aliyuncs.com/${encodedPath}`;
+  const host = PDF_OSS_CUSTOM_DOMAIN || `${PDF_OSS_BUCKET}.${PDF_OSS_REGION}.aliyuncs.com`;
+  return `https://${host}/${encodedPath}`;
 }
 
 function normalizeOssSignedUrl(url) {
@@ -147,6 +149,8 @@ async function getPdfOssClient() {
     pdfOssClientPromise = Promise.resolve(new OSS({
       region: PDF_OSS_REGION,
       bucket: PDF_OSS_BUCKET,
+      endpoint: PDF_OSS_CUSTOM_DOMAIN ? `https://${PDF_OSS_CUSTOM_DOMAIN}` : undefined,
+      cname: Boolean(PDF_OSS_CUSTOM_DOMAIN),
       accessKeyId: PDF_OSS_ACCESS_KEY_ID,
       accessKeySecret: PDF_OSS_ACCESS_KEY_SECRET,
       authorizationV4: true,
@@ -1932,6 +1936,7 @@ export async function handleNodeRequest(request, response) {
         storeBackend: STORE_BACKEND,
         operatorSessionActive: isOperatorSessionActive(store.operatorSession),
         pdfOssConfigured: isPdfOssConfigured(),
+        pdfOssCustomDomain: PDF_OSS_CUSTOM_DOMAIN ? `https://${PDF_OSS_CUSTOM_DOMAIN}` : null,
       });
     }
     if (request.method === 'POST' && url.pathname === '/api/register') {
