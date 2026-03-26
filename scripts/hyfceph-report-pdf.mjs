@@ -1146,16 +1146,21 @@ function baseFrameworkSummary(framework) {
   return `${formatFrameworkStatus(framework.status)}，共 ${ensureArray(framework.items).length} 项`;
 }
 
-function renderImageAppendixPage(title, imageDataUri, caption) {
-  if (!imageDataUri) return '';
+function renderImageAppendixPage(title, imageItems) {
+  const items = ensureArray(imageItems).filter((item) => item?.src);
+  if (!items.length) return '';
   return `
     <section class="page appendix-page">
       <div class="main-title">${htmlText(title)}</div>
       <div class="main-divider"></div>
-      <figure class="image-frame large-frame">
-        <img src="${imageDataUri}" alt="${htmlText(caption)}" />
-        <figcaption>${htmlText(caption)}</figcaption>
-      </figure>
+      <div class="appendix-grid">
+        ${items.map((item) => `
+          <figure class="image-frame large-frame">
+            <img src="${item.src}" alt="${htmlText(item.caption || title)}" />
+            <figcaption>${htmlText(item.caption || title)}</figcaption>
+          </figure>
+        `).join('')}
+      </div>
     </section>
   `;
 }
@@ -1218,6 +1223,7 @@ async function buildPrettyHyfcephHtmlReport(payload) {
   const reportTitle = mode === 'overlap' ? 'HYFCeph 治疗前后重叠深度分析报告' : 'HYFCeph 数字化头影测量深度分析报告';
   const generatedAt = formatDateTime(new Date().toISOString());
   const imageDataUri = await imageToDataUri(payload.annotatedPngPath || payload.annotatedSvgPath);
+  const contourDataUri = await imageToDataUri(payload.contourPngPath || payload.contourSvgPath);
   const frameworkChoices = payload.frameworkChoices || payload.analysis?.frameworkChoices || payload.summary?.frameworkChoices || [];
   const patientName = String(payload.patientName || '').trim() || '未提供';
 
@@ -1366,17 +1372,33 @@ async function buildPrettyHyfcephHtmlReport(payload) {
     `;
   }
 
-  const appendix = imageDataUri ? `
+  const appendixItems = [
+    imageDataUri ? {
+      src: imageDataUri,
+      title: mode === 'overlap' ? '治疗前后重叠图' : '自动定点标注图',
+    } : null,
+    contourDataUri ? {
+      src: contourDataUri,
+      title: '白底轮廓图',
+    } : null,
+  ].filter(Boolean);
+
+  const appendix = appendixItems.length ? `
     <section class="fancy-block fancy-image">
       <div class="fancy-block-head">
         <div>
           <div class="fancy-mini-label">Tracing</div>
-          <h2>${mode === 'overlap' ? '治疗前后重叠图' : '自动定点标注图'}</h2>
+          <h2>图像附页</h2>
         </div>
       </div>
-      <figure class="fancy-image-frame">
-        <img src="${imageDataUri}" alt="${mode === 'overlap' ? '治疗前后重叠图' : '自动定点标注图'}" />
-      </figure>
+      <div class="fancy-image-grid">
+        ${appendixItems.map((item) => `
+          <figure class="fancy-image-frame">
+            <img src="${item.src}" alt="${htmlText(item.title)}" />
+            <figcaption class="fancy-image-caption">${htmlText(item.title)}</figcaption>
+          </figure>
+        `).join('')}
+      </div>
     </section>
   ` : '';
 
@@ -1644,10 +1666,23 @@ async function buildPrettyHyfcephHtmlReport(payload) {
           border: 1px solid rgba(226,232,240,0.9);
           background: #fff;
         }
+        .fancy-image-grid {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 18px;
+        }
         .fancy-image-frame img {
           display: block;
           width: 100%;
           height: auto;
+        }
+        .fancy-image-caption {
+          margin: 0;
+          padding: 12px 14px 14px;
+          color: #475569;
+          font-size: 13px;
+          border-top: 1px solid rgba(226,232,240,0.9);
+          background: rgba(248,250,252,0.9);
         }
         @media (max-width: 900px) {
           .hero-top { flex-direction: column; }
@@ -1692,6 +1727,7 @@ async function buildStandardHyfcephHtmlReport(payload) {
   const reportTitle = mode === 'overlap' ? 'HYFCeph 治疗前后重叠深度分析报告' : 'HYFCeph 数字化头影测量深度分析报告';
   const generatedAt = formatDateTime(new Date().toISOString());
   const imageDataUri = await imageToDataUri(payload.annotatedPngPath || payload.annotatedSvgPath);
+  const contourDataUri = await imageToDataUri(payload.contourPngPath || payload.contourSvgPath);
   const frameworkChoices = payload.frameworkChoices || payload.analysis?.frameworkChoices || payload.summary?.frameworkChoices || [];
   const patientName = String(payload.patientName || '').trim();
 
@@ -1760,7 +1796,10 @@ async function buildStandardHyfcephHtmlReport(payload) {
       </section>
     `;
 
-    bodySections += renderImageAppendixPage('治疗前后重叠图', imageDataUri, '治疗前后重叠图');
+    bodySections += renderImageAppendixPage('图像附页', [
+      imageDataUri ? { src: imageDataUri, caption: '治疗前后重叠图' } : null,
+      contourDataUri ? { src: contourDataUri, caption: '白底轮廓图' } : null,
+    ]);
   } else {
     const singleBundle = buildMeasurementBundle({
       metrics: payload.metrics || payload.analysis?.metrics || [],
@@ -1811,7 +1850,10 @@ async function buildStandardHyfcephHtmlReport(payload) {
       </section>
     `;
 
-    bodySections += renderImageAppendixPage('标注图附页', imageDataUri, '自动定点标注图');
+    bodySections += renderImageAppendixPage('图像附页', [
+      imageDataUri ? { src: imageDataUri, caption: '自动定点标注图' } : null,
+      contourDataUri ? { src: contourDataUri, caption: '白底轮廓图' } : null,
+    ]);
   }
 
   return `<!doctype html>
@@ -2033,6 +2075,11 @@ async function buildStandardHyfcephHtmlReport(payload) {
         .image-frame {
           margin: 18px 0 0;
           text-align: center;
+        }
+        .appendix-grid {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 18px;
         }
         .large-frame img {
           display: block;
