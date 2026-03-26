@@ -125,6 +125,11 @@ function defaultPdfPath(inputPath) {
   return path.join(parsed.dir, `${parsed.name}.report.pdf`);
 }
 
+function defaultHtmlPath(inputPath) {
+  const parsed = path.parse(inputPath);
+  return path.join(parsed.dir, `${parsed.name}.report.html`);
+}
+
 function toneColor(tone) {
   if (tone === 'success') return '#13805f';
   if (tone === 'danger') return '#bd3f2f';
@@ -1155,9 +1160,9 @@ function renderImageAppendixPage(title, imageDataUri, caption) {
   `;
 }
 
-async function buildHtmlReport(payload) {
+export async function buildHyfcephHtmlReport(payload) {
   const mode = String(payload.mode || payload.analysis?.type || 'image').trim();
-  const reportTitle = mode === 'overlap' ? 'HYFCeph 重叠对比报告' : 'HYFCeph 侧位片测量报告';
+  const reportTitle = mode === 'overlap' ? 'HYFCeph 治疗前后重叠深度分析报告' : 'HYFCeph 数字化头影测量深度分析报告';
   const generatedAt = formatDateTime(new Date().toISOString());
   const imageDataUri = await imageToDataUri(payload.annotatedPngPath || payload.annotatedSvgPath);
   const frameworkChoices = payload.frameworkChoices || payload.analysis?.frameworkChoices || payload.summary?.frameworkChoices || [];
@@ -1939,6 +1944,19 @@ export async function generateHyfcephPdfReport({ inputPath, outputPath, patientN
     inputPath: resolvedInputPath,
     outputPath: resolvedOutputPath,
   });
+}
+
+export async function generateHyfcephHtmlReport({ inputPath, outputPath, patientName }) {
+  const resolvedInputPath = path.resolve(inputPath);
+  const resolvedOutputPath = path.resolve(outputPath || defaultHtmlPath(resolvedInputPath));
+  const payload = JSON.parse(await fs.readFile(resolvedInputPath, 'utf8'));
+  if (patientName) {
+    payload.patientName = patientName;
+  }
+  const html = await buildHyfcephHtmlReport(payload);
+  await fs.mkdir(path.dirname(resolvedOutputPath), { recursive: true });
+  await fs.writeFile(resolvedOutputPath, html, 'utf8');
+  return path.resolve(resolvedOutputPath);
 }
 
 async function main() {

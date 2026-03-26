@@ -11,7 +11,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import OSS from 'ali-oss';
 import { buildOverlapRender, listSupportedAlignModes } from './scripts/hyfceph-overlap-renderer.mjs';
-import { generateHyfcephPdfReport } from './scripts/hyfceph-report-pdf.mjs';
+import { generateHyfcephHtmlReport, generateHyfcephPdfReport } from './scripts/hyfceph-report-pdf.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,11 +44,13 @@ const PDF_OSS_REGION = process.env.HYFCEPH_PDF_OSS_REGION || '';
 const PDF_OSS_BUCKET = process.env.HYFCEPH_PDF_OSS_BUCKET || '';
 const PDF_OSS_CUSTOM_DOMAIN = (process.env.HYFCEPH_PDF_OSS_CUSTOM_DOMAIN || '').replace(/^https?:\/\//i, '').replace(/\/+$/, '');
 const PDF_OSS_PREFIX = process.env.HYFCEPH_PDF_OSS_PREFIX || 'hyfceph-pdf';
+const REPORT_OSS_PREFIX = process.env.HYFCEPH_REPORT_OSS_PREFIX || 'hyfceph-report';
 const PDF_OSS_UPLOAD_EXPIRES_SECONDS = Number(process.env.HYFCEPH_PDF_OSS_UPLOAD_EXPIRES_SECONDS || '900');
 const PDF_OSS_DOWNLOAD_EXPIRES_SECONDS = Number(process.env.HYFCEPH_PDF_OSS_DOWNLOAD_EXPIRES_SECONDS || String(60 * 60 * 24 * 7));
 const PDF_OSS_PUBLIC_READ = /^(1|true|yes)$/i.test(String(process.env.HYFCEPH_PDF_OSS_PUBLIC_READ || 'false'));
 const OSS_V4_MAX_EXPIRES_SECONDS = 60 * 60 * 24 * 7;
 const PDF_SHORT_LINK_TTL_DAYS = Number(process.env.HYFCEPH_PDF_SHORT_LINK_TTL_DAYS || '365');
+const REPORT_SHORT_LINK_TTL_DAYS = Number(process.env.HYFCEPH_REPORT_SHORT_LINK_TTL_DAYS || '365');
 
 let blobSdkPromise = null;
 let resvgPromise = null;
@@ -128,6 +130,18 @@ function buildPdfOssObjectKey({ user, fileName, patientName, reportType }) {
   const userStem = sanitizeFileStem(user?.id || user?.username || user?.phone || 'user');
   const timestamp = nowIso().replace(/[:.]/g, '-');
   return `${PDF_OSS_PREFIX}/${year}/${month}/${userStem}/${timestamp}-${patientStem}-${typeStem}-${stem}.pdf`;
+}
+
+function buildHtmlReportObjectKey({ user, fileName, patientName, reportType }) {
+  const now = new Date();
+  const year = String(now.getUTCFullYear());
+  const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const stem = sanitizeFileStem(path.basename(fileName || 'hyfceph-report.html', path.extname(fileName || 'hyfceph-report.html')));
+  const patientStem = sanitizeFileStem(patientName || 'patient');
+  const typeStem = sanitizeFileStem(reportType || 'report');
+  const userStem = sanitizeFileStem(user?.id || user?.username || user?.phone || 'user');
+  const timestamp = nowIso().replace(/[:.]/g, '-');
+  return `${REPORT_OSS_PREFIX}/${year}/${month}/${userStem}/${timestamp}-${patientStem}-${typeStem}-${stem}.html`;
 }
 
 function buildOssPublicUrl(objectKey) {
@@ -300,6 +314,52 @@ async function uploadPdfFileToOss({ user, pdfPath, patientName, reportType, requ
   };
 }
 
+async function uploadHtmlReportToOss({ user, htmlPath, patientName, reportType, request = null }) {
+  if (!isPdfOssConfigured()) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'pdf-oss-not-configured',
+    };
+  }
+
+  const client = await getPdfOssClient();
+  const fileName = path.basename(String(htmlPath || '').trim() || 'hyfceph-report.html');
+  const objectKey = buildHtmlReportObjectKey({
+    user,
+    fileName,
+    patientName,
+    reportType,
+  });
+  const headers = {
+    'Content-Type': 'text/html; charset=utf-8',
+  };
+  if (PDF_OSS_PUBLIC_READ) {
+    headers['x-oss-object-acl'] = 'public-read';
+  }
+
+  await client.put(objectKey, htmlPath, { headers });
+  const publicUrl = buildOssPublicUrl(objectKey);
+  const shortLink = await issueReportShortLink({
+    user,
+    objectKey,
+    patientName,
+    reportType,
+    request,
+  });
+
+  return {
+    ok: true,
+    objectKey,
+    bucket: PDF_OSS_BUCKET,
+    region: PDF_OSS_REGION,
+    accessMode: PDF_OSS_PUBLIC_READ ? 'public-read' : 'signed-get',
+    reportShareUrl: shortLink.shortUrl,
+    reportPublicUrl: publicUrl,
+    reportShortCode: shortLink.code,
+  };
+}
+
 async function generateAndUploadPdfReport({ user, resultPayload, patientName, reportType, request = null }) {
   if (!isPdfOssConfigured()) {
     return {
@@ -323,6 +383,44 @@ async function generateAndUploadPdfReport({ user, resultPayload, patientName, re
     return await uploadPdfFileToOss({
       user,
       pdfPath: pdfOutputPath,
+      patientName,
+      reportType,
+      request,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function generateAndUploadHtmlReport({ user, resultPayload, patientName, reportType, request = null }) {
+  if (!isPdfOssConfigured()) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'pdf-oss-not-configured',
+    };
+  }
+
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hyfceph-server-report-'));
+  const resultJsonPath = path.join(tempDir, 'result.json');
+  const htmlOutputPath = path.join(tempDir, 'report.html');
+
+  try {
+    await fs.writeFile(resultJsonPath, JSON.stringify(resultPayload, null, 2), 'utf8');
+    await generateHyfcephHtmlReport({
+      inputPath: resultJsonPath,
+      outputPath: htmlOutputPath,
+      patientName: patientName || undefined,
+    });
+    return await uploadHtmlReportToOss({
+      user,
+      htmlPath: htmlOutputPath,
       patientName,
       reportType,
       request,
@@ -575,6 +673,7 @@ function normalizeStoreRecord(store) {
     users: Array.isArray(source.users) ? source.users.map(normalizeUserRecord) : [],
     operatorSession: normalizeOperatorSession(source.operatorSession),
     pdfLinks: normalizePdfLinkMap(source.pdfLinks),
+    reportLinks: normalizeReportLinkMap(source.reportLinks),
   };
 }
 
@@ -612,6 +711,40 @@ function normalizePdfLinkMap(value) {
   return out;
 }
 
+function normalizeReportLinkRecord(code, record) {
+  if (!record || typeof record !== 'object') {
+    return null;
+  }
+  const normalizedCode = String(code || '').trim();
+  const objectKey = String(record.objectKey || '').trim();
+  if (!normalizedCode || !objectKey) {
+    return null;
+  }
+  return {
+    code: normalizedCode,
+    objectKey,
+    userId: typeof record.userId === 'string' && record.userId.trim() ? record.userId.trim() : null,
+    patientName: typeof record.patientName === 'string' && record.patientName.trim() ? record.patientName.trim() : null,
+    reportType: typeof record.reportType === 'string' && record.reportType.trim() ? record.reportType.trim() : 'report',
+    createdAt: isIsoDate(record.createdAt) ? new Date(record.createdAt).toISOString() : nowIso(),
+    updatedAt: isIsoDate(record.updatedAt) ? new Date(record.updatedAt).toISOString() : nowIso(),
+    expiresAt: isIsoDate(record.expiresAt) ? new Date(record.expiresAt).toISOString() : addDaysIso(REPORT_SHORT_LINK_TTL_DAYS),
+    lastAccessedAt: isIsoDate(record.lastAccessedAt) ? new Date(record.lastAccessedAt).toISOString() : null,
+  };
+}
+
+function normalizeReportLinkMap(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const out = {};
+  for (const [code, record] of Object.entries(source)) {
+    const normalized = normalizeReportLinkRecord(code, record);
+    if (normalized) {
+      out[normalized.code] = normalized;
+    }
+  }
+  return out;
+}
+
 function createPdfShortCode() {
   return randomBytes(6).toString('base64url').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 8);
 }
@@ -633,7 +766,16 @@ function buildPdfShortUrl(code, request = null) {
   return `${buildPortalOrigin(request)}/pdf/${encodeURIComponent(code)}`;
 }
 
+function buildReportShortUrl(code, request = null) {
+  return `${buildPortalOrigin(request)}/report/${encodeURIComponent(code)}`;
+}
+
 function isPdfLinkExpired(record) {
+  if (!record?.expiresAt) return false;
+  return new Date(record.expiresAt).getTime() <= Date.now();
+}
+
+function isReportLinkExpired(record) {
   if (!record?.expiresAt) return false;
   return new Date(record.expiresAt).getTime() <= Date.now();
 }
@@ -682,6 +824,53 @@ async function issuePdfShortLink({ user, objectKey, patientName, reportType, req
   return {
     code: created.code,
     shortUrl: buildPdfShortUrl(created.code, request),
+  };
+}
+
+async function createReportShortLinkRecord({ store, user, objectKey, patientName, reportType }) {
+  const normalizedStore = normalizeStoreRecord(store);
+  const reportLinks = { ...(normalizedStore.reportLinks || {}) };
+  let code = '';
+  do {
+    code = createPdfShortCode();
+  } while (reportLinks[code]);
+
+  reportLinks[code] = {
+    code,
+    objectKey,
+    userId: user?.id || null,
+    patientName: patientName || null,
+    reportType: reportType || 'report',
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    expiresAt: addDaysIso(REPORT_SHORT_LINK_TTL_DAYS),
+    lastAccessedAt: null,
+  };
+
+  const nextStore = {
+    ...normalizedStore,
+    reportLinks,
+  };
+  await writeStore(nextStore);
+  return {
+    store: nextStore,
+    code,
+    shortUrl: buildReportShortUrl(code),
+  };
+}
+
+async function issueReportShortLink({ user, objectKey, patientName, reportType, request = null }) {
+  const store = await readStore();
+  const created = await createReportShortLinkRecord({
+    store,
+    user,
+    objectKey,
+    patientName,
+    reportType,
+  });
+  return {
+    code: created.code,
+    shortUrl: buildReportShortUrl(created.code, request),
   };
 }
 
@@ -1735,6 +1924,54 @@ async function handlePdfShortLink(request, response, code) {
   response.end();
 }
 
+async function handleReportShortLink(request, response, code) {
+  const normalizedCode = String(code || '').trim();
+  if (!normalizedCode) {
+    return sendText(response, 404, 'Not Found');
+  }
+
+  const store = await readStore();
+  const record = normalizeReportLinkRecord(normalizedCode, store.reportLinks?.[normalizedCode]);
+  if (!record) {
+    return sendText(response, 404, 'Report link not found.');
+  }
+  if (isReportLinkExpired(record)) {
+    return sendText(response, 410, 'Report link expired.');
+  }
+
+  let location = '';
+  if (PDF_OSS_PUBLIC_READ) {
+    location = buildOssPublicUrl(record.objectKey);
+  } else {
+    const downloadClient = await getPdfOssDownloadClient();
+    const downloadExpiresIn = Math.min(
+      safePositiveInteger(PDF_OSS_DOWNLOAD_EXPIRES_SECONDS, 60 * 60 * 24 * 7),
+      OSS_V4_MAX_EXPIRES_SECONDS,
+    );
+    location = normalizeOssSignedUrl(await downloadClient.signatureUrlV4('GET', downloadExpiresIn, undefined, record.objectKey));
+  }
+
+  const upstream = await fetch(location);
+  if (!upstream.ok) {
+    return sendText(response, 502, 'Report fetch failed.');
+  }
+
+  const html = await upstream.text();
+  record.lastAccessedAt = nowIso();
+  record.updatedAt = nowIso();
+  store.reportLinks = {
+    ...(store.reportLinks || {}),
+    [record.code]: record,
+  };
+  await writeStore(store);
+
+  response.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store',
+  });
+  response.end(html);
+}
+
 async function handleMeasureShareUrl(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
@@ -1825,7 +2062,7 @@ async function handleMeasureCurrentCase(request, response) {
 async function handleMeasureImage(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
-  const shouldGeneratePdf = payload.generatePdf !== false;
+  const shouldGenerateReport = payload.generateReport !== false && payload.generatePdf !== false;
   const patientName = String(payload.patientName || '').trim();
   if (!apiKey) {
     return sendJson(response, 400, { error: '缺少 API Key。' });
@@ -1866,8 +2103,8 @@ async function handleMeasureImage(request, response) {
       imagePath: resolvedImagePath,
       operatorSession,
     });
-    if (shouldGeneratePdf) {
-      result.pdf = await generateAndUploadPdfReport({
+    if (shouldGenerateReport) {
+      result.report = await generateAndUploadHtmlReport({
         user,
         resultPayload: result,
         patientName,
@@ -1897,7 +2134,7 @@ async function handleMeasureImage(request, response) {
 async function handleMeasureOverlap(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
-  const shouldGeneratePdf = Boolean(payload.generatePdf);
+  const shouldGenerateReport = Boolean(payload.generateReport || payload.generatePdf);
   const patientName = String(payload.patientName || '').trim();
   if (!apiKey) {
     return sendJson(response, 400, { error: '缺少 API Key。' });
@@ -1956,8 +2193,8 @@ async function handleMeasureOverlap(request, response) {
       operatorSession,
       alignMode,
     });
-    if (shouldGeneratePdf) {
-      result.pdf = await generateAndUploadPdfReport({
+    if (shouldGenerateReport) {
+      result.report = await generateAndUploadHtmlReport({
         user,
         resultPayload: result,
         patientName,
@@ -2156,6 +2393,11 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'POST' && url.pathname === '/api/pdf/upload-ticket') {
       return await handlePdfUploadTicket(request, response);
+    }
+    if (request.method === 'GET' && (url.pathname.startsWith('/report/') || url.pathname.startsWith('/api/report/'))) {
+      const prefix = url.pathname.startsWith('/api/report/') ? '/api/report/' : '/report/';
+      const code = decodeURIComponent(url.pathname.slice(prefix.length));
+      return await handleReportShortLink(request, response, code);
     }
     if (request.method === 'GET' && (url.pathname.startsWith('/pdf/') || url.pathname.startsWith('/api/pdf/'))) {
       const prefix = url.pathname.startsWith('/api/pdf/') ? '/api/pdf/' : '/pdf/';
