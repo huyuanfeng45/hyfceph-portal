@@ -310,7 +310,7 @@ function buildMeasurementBundle({ metrics, frameworkReports, riskLabel = '', ins
     insight,
     frameworks: frameworkReports || {},
     ANB: pick('ANB'),
-    Wits: pick('wits'),
+    Wits: pick('wits', 'AO-BO(mm)', 'AO-BO'),
     FMA: pick('FMA', 'mandibularPlaneAngle', 'mandibularPlane'),
     GoGnSN: pick('GoGn-SN', 'goGnToSN'),
     JarabakRatio: pick('posteriorAnteriorRatio', 'Posterior / Anterior Facial Height'),
@@ -513,6 +513,123 @@ function buildOverlapInterpretation(baseBundle, compareBundle) {
   };
 }
 
+function buildDerivedWitsMetric(bundle) {
+  const item = bundle?.Wits;
+  if (!item) return null;
+  return {
+    ...item,
+    code: 'Wits',
+    label: 'Wits 指数',
+    unit: item.unit || 'mm',
+    valueText: item.valueText || (Number.isFinite(item.value) ? `${item.value} mm` : '-'),
+  };
+}
+
+function augmentMetricsWithDerived(metrics, bundle) {
+  const list = ensureArray(metrics).map((item) => ({ ...item }));
+  const hasWits = list.some((item) => String(item?.code || '').toLowerCase() === 'wits');
+  const derivedWits = hasWits ? null : buildDerivedWitsMetric(bundle);
+  if (!derivedWits) {
+    return list;
+  }
+  const insertAfterAnb = list.findIndex((item) => String(item?.code || '').toUpperCase() === 'ANB');
+  if (insertAfterAnb >= 0) {
+    list.splice(insertAfterAnb + 1, 0, derivedWits);
+  } else {
+    list.push(derivedWits);
+  }
+  return list;
+}
+
+function buildSingleFrameworkSynthesisItems(frameworks) {
+  return ensureArray(frameworks).map((framework) => `${framework.label}：${buildFrameworkComprehensiveJudgment(framework)}`);
+}
+
+function buildOverlapFrameworkSynthesisItems(baseFrameworks, compareFrameworkMap) {
+  return ensureArray(baseFrameworks).map((framework) => (
+    `${framework.label}：${buildOverlapFrameworkComprehensiveJudgment(framework, compareFrameworkMap.get(framework.code))}`
+  ));
+}
+
+function buildSingleClinicalMeaningItems(bundle, interpretation, frameworks) {
+  const items = [
+    `骨性关系方面，${interpretation.sagittal.detail}`,
+    `垂直向方面，${interpretation.vertical.detail}`,
+    `生长型方面，当前更倾向“${interpretation.vertical.label}”，并表现为“${interpretation.vertical.rotation}”。`,
+  ];
+  const dental = describeDentalCompensation(bundle);
+  if (dental.length) {
+    items.push(`牙性代偿方面，${dental.join('')}`);
+  }
+  if (frameworks.length) {
+    items.push(`综合 ${frameworks.length} 套分析法结果，当前结论来自多套分析法在前后向、垂直向和牙性倾斜三方面的共同支持。`);
+  }
+  return items;
+}
+
+function buildOverlapClinicalMeaningItems(baseBundle, compareBundle, interpretation, baseFrameworks) {
+  return [
+    `治疗前后整体骨性关系由“${classifySagittal(baseBundle).label}”变化为“${classifySagittal(compareBundle).label}”。${interpretation.overallChange}`,
+    `垂直向与生长型由“${classifyVertical(baseBundle).label}”变化为“${classifyVertical(compareBundle).label}”。${interpretation.growthChange}`,
+    `面部高度与旋转模式方面，${interpretation.faceHeightChange}`,
+    `综合 ${baseFrameworks.length} 套分析法前后对比，本次变化既要看数值是否改变，也要看是否更接近稳定、可维持的骨性与牙性平衡。`,
+  ];
+}
+
+function buildSingleTreatmentSuggestionItems(bundle, interpretation) {
+  const sagittal = interpretation.sagittal.label;
+  const vertical = interpretation.vertical.label;
+  const items = [];
+
+  if (sagittal.includes('III')) {
+    items.push('前后向关系偏 III 类时，建议优先评估骨性来源与牙性代偿范围，再决定掩饰性治疗还是进一步外科评估。');
+  } else if (sagittal.includes('II')) {
+    items.push('前后向关系偏 II 类时，建议重点判断上颌前突、下颌后缩或两者并存，再选择相应的支抗与矫治设计。');
+  } else {
+    items.push('当前前后向关系总体接近 I 类，可把治疗重点更多放在牙列协调、咬合精细化与面型优化。');
+  }
+
+  if (vertical.includes('高角')) {
+    items.push('高角 / 垂直生长型病例应把垂直控制放在前列，尽量避免后牙过度伸长和面下 1/3 进一步增加。');
+  } else if (vertical.includes('低角')) {
+    items.push('低角 / 水平生长型病例治疗时通常垂直稳定性较好，但仍需注意避免前牙过度内收或覆盖加深。');
+  } else {
+    items.push('均衡生长型病例整体垂直向相对稳定，可将重点放在前后向协调与牙弓形态重建。');
+  }
+
+  if (describeDentalCompensation(bundle).length) {
+    items.push('当前存在一定牙性代偿，建议在前牙转矩与内收/外展设计时同时关注牙槽骨边界与软组织侧貌。');
+  }
+
+  items.push('所有方案建议仍需结合临床检查、模型或口扫、软组织目标及医生治疗策略综合确定。');
+  return items;
+}
+
+function buildOverlapTreatmentSuggestionItems(baseBundle, compareBundle, interpretation) {
+  const baseSagittal = classifySagittal(baseBundle).label;
+  const compareSagittal = classifySagittal(compareBundle).label;
+  const baseVertical = classifyVertical(baseBundle).label;
+  const compareVertical = classifyVertical(compareBundle).label;
+  const items = [];
+
+  if (baseSagittal !== compareSagittal) {
+    items.push(`前后向骨性分类已由“${baseSagittal}”变化为“${compareSagittal}”，后续方案应围绕新的骨性关系重新评估支抗与治疗目标。`);
+  } else {
+    items.push(`前后向骨性分类仍为“${compareSagittal}”，说明治疗更多改变的是程度而非类型，后续应继续围绕该类问题精细调整。`);
+  }
+
+  if (baseVertical !== compareVertical) {
+    items.push(`垂直向模式由“${baseVertical}”变化为“${compareVertical}”，提示后续需要重新评估垂直控制和下颌旋转管理。`);
+  } else {
+    items.push(`垂直向模式仍为“${compareVertical}”，后续重点应放在保持现有垂直控制效果并降低复发风险。`);
+  }
+
+  items.push(`结合关键变化：${ensureArray(interpretation.keyChanges).slice(0, 2).join('')}`);
+  items.push('若治疗后前牙代偿仍明显，应在后续阶段重点关注转矩、覆盖覆盖关系及保持期稳定性。');
+  items.push('前后对比结论应与临床照片、咬合关系和治疗阶段目标联合判断，避免单凭单个指标决定最终方案。');
+  return items;
+}
+
 function renderAnalysisParagraph(title, body) {
   return `
     <div class="subsection">
@@ -601,6 +718,8 @@ const CLINICAL_MEANING_MAP = {
   snb: '用于评估下颌相对前颅底的前后位置。',
   anb: '用于判断上下颌骨前后关系与骨性分类。',
   wits: '用于补充判断上下颌骨前后差异，减少颅底角干扰。',
+  aobomm: '即 Wits 指数，用于补充判断上下颌骨前后差异，减少颅底角干扰。',
+  aobo: '即 Wits 指数，用于补充判断上下颌骨前后差异，减少颅底角干扰。',
   fma: '用于判断垂直生长型与下颌平面陡峭程度。',
   'gogn-sn': '用于判断下颌平面与前颅底的垂直关系。',
   gogntosn: '用于判断下颌平面与前颅底的垂直关系。',
@@ -852,7 +971,7 @@ function renderSingleMetricsTable(metrics) {
             <td><span class="mono">${htmlText(metric.code || '-')}</span></td>
             <td class="${toneClass(metric.tone, metric.status)}">${htmlText(safeMetricValue(metric))}</td>
             <td>${htmlText(metric.reference || '-')}</td>
-            <td>${htmlText(metric.label || '-')}</td>
+            <td class="clinical-cell">${htmlText(buildClinicalMeaning(metric))}</td>
           </tr>
         `).join('')}
       </tbody>
@@ -881,7 +1000,7 @@ function renderOverlapMetricsTable(rows) {
             <td class="${toneClass(row.compare?.tone, row.compare?.status)}">${htmlText(safeMetricValue(row.compare))}</td>
             <td>${htmlText(formatDeltaValue(row.base, row.compare))}</td>
             <td>${htmlText(row.compare?.reference || row.base?.reference || '-')}</td>
-            <td>${htmlText(row.compare?.label || row.base?.label || '-')}</td>
+            <td class="clinical-cell">${htmlText(buildOverlapClinicalMeaning(row.base, row.compare))}</td>
           </tr>
         `).join('')}
       </tbody>
@@ -1047,7 +1166,6 @@ async function buildHtmlReport(payload) {
   let bodySections = '';
 
   if (mode === 'overlap') {
-    const metricRows = buildMetricComparisonRows(payload.analysis?.base?.metrics, payload.analysis?.compare?.metrics);
     const baseBundle = buildMeasurementBundle({
       metrics: payload.analysis?.base?.metrics,
       frameworkReports: payload.analysis?.base?.frameworkReports,
@@ -1060,6 +1178,9 @@ async function buildHtmlReport(payload) {
       riskLabel: payload.analysis?.compare?.riskLabel,
       insight: payload.analysis?.compare?.insight,
     });
+    const baseMetrics = augmentMetricsWithDerived(payload.analysis?.base?.metrics, baseBundle);
+    const compareMetrics = augmentMetricsWithDerived(payload.analysis?.compare?.metrics, compareBundle);
+    const metricRows = buildMetricComparisonRows(baseMetrics, compareMetrics);
     const overlapInterpretation = buildOverlapInterpretation(baseBundle, compareBundle);
     const baseFrameworks = normalizeFrameworkEntries(payload.analysis?.base?.frameworkReports, frameworkChoices);
     const compareFrameworkMap = new Map(
@@ -1098,15 +1219,24 @@ async function buildHtmlReport(payload) {
       `;
     });
 
+    bodySections += `
+      <section class="page report-page">
+        <div class="section-heading"><span class="bar"></span><h2>${chineseSectionNumber(baseFrameworks.length + 2)}、全部分析法综合结论</h2></div>
+        ${renderAnalysisList('末页.1 所有分析法综合分析', buildOverlapFrameworkSynthesisItems(baseFrameworks, compareFrameworkMap))}
+        ${renderAnalysisList('末页.2 临床意义', buildOverlapClinicalMeaningItems(baseBundle, compareBundle, overlapInterpretation, baseFrameworks))}
+        ${renderAnalysisList('末页.3 方案建议', buildOverlapTreatmentSuggestionItems(baseBundle, compareBundle, overlapInterpretation))}
+      </section>
+    `;
+
     bodySections += renderImageAppendixPage('治疗前后重叠图', imageDataUri, '治疗前后重叠图');
   } else {
-    const singleMetrics = payload.metrics || payload.analysis?.metrics || [];
     const singleBundle = buildMeasurementBundle({
-      metrics: singleMetrics,
+      metrics: payload.metrics || payload.analysis?.metrics || [],
       frameworkReports: payload.analysis?.frameworkReports,
       riskLabel: payload.analysis?.riskLabel,
       insight: payload.analysis?.insight,
     });
+    const singleMetrics = augmentMetricsWithDerived(payload.metrics || payload.analysis?.metrics || [], singleBundle);
     const singleInterpretation = buildSingleInterpretation(singleBundle);
     const frameworks = normalizeFrameworkEntries(payload.analysis?.frameworkReports, frameworkChoices);
 
@@ -1139,6 +1269,15 @@ async function buildHtmlReport(payload) {
         </section>
       `;
     });
+
+    bodySections += `
+      <section class="page report-page">
+        <div class="section-heading"><span class="bar"></span><h2>${chineseSectionNumber(frameworks.length + 2)}、全部分析法综合结论</h2></div>
+        ${renderAnalysisList('末页.1 所有分析法综合分析', buildSingleFrameworkSynthesisItems(frameworks))}
+        ${renderAnalysisList('末页.2 临床意义', buildSingleClinicalMeaningItems(singleBundle, singleInterpretation, frameworks))}
+        ${renderAnalysisList('末页.3 方案建议', buildSingleTreatmentSuggestionItems(singleBundle, singleInterpretation))}
+      </section>
+    `;
 
     bodySections += renderImageAppendixPage('标注图附页', imageDataUri, '自动定点标注图');
   }
