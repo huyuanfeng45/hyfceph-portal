@@ -1160,7 +1160,534 @@ function renderImageAppendixPage(title, imageDataUri, caption) {
   `;
 }
 
-export async function buildHyfcephHtmlReport(payload) {
+function pickPreferredMetric(metrics, codes) {
+  const items = ensureArray(metrics);
+  for (const code of ensureArray(codes)) {
+    const found = items.find((item) => String(item?.code || '').toLowerCase() === String(code).toLowerCase());
+    if (found) return found;
+  }
+  return null;
+}
+
+function renderFancyFrameworkCards(frameworks, mode, compareFrameworkMap = new Map()) {
+  return ensureArray(frameworks).map((framework) => {
+    const compareFramework = compareFrameworkMap.get(framework.code);
+    const summary = mode === 'overlap'
+      ? buildOverlapFrameworkComprehensiveJudgment(framework, compareFramework)
+      : buildFrameworkComprehensiveJudgment(framework);
+    const interpretation = mode === 'overlap'
+      ? buildOverlapFrameworkMeasurementInterpretation(framework, compareFramework)
+      : buildFrameworkMeasurementInterpretation(framework);
+    const table = mode === 'overlap'
+      ? renderOverlapFrameworkTable(framework.label, framework, compareFramework)
+      : renderSingleFrameworkTable(framework);
+    const badge = mode === 'overlap'
+      ? `${baseFrameworkSummary(framework)} / ${baseFrameworkSummary(compareFramework)}`
+      : `${formatFrameworkStatus(framework?.status)} · ${ensureArray(framework?.items).length} 项`;
+
+    return `
+      <section class="fancy-block fancy-framework">
+        <div class="fancy-block-head">
+          <div>
+            <div class="fancy-mini-label">Framework</div>
+            <h3>${htmlText(framework.label || '分析法')}</h3>
+          </div>
+          <span class="fancy-chip">${htmlText(badge)}</span>
+        </div>
+        <div class="fancy-framework-intro">${htmlText(framework.note || '完整保留该分析法的原始数据、临床意义和综合判断。')}</div>
+        <div class="fancy-framework-grid">
+          <div class="fancy-callout">
+            <h4>测量值分析解读</h4>
+            <p>${htmlText(interpretation)}</p>
+          </div>
+          <div class="fancy-callout">
+            <h4>综合判断</h4>
+            <p>${htmlText(summary)}</p>
+          </div>
+        </div>
+        <div class="fancy-table-wrap">
+          ${table}
+        </div>
+      </section>
+    `;
+  }).join('');
+}
+
+async function buildPrettyHyfcephHtmlReport(payload) {
+  const mode = String(payload.mode || payload.analysis?.type || 'image').trim();
+  const reportTitle = mode === 'overlap' ? 'HYFCeph 治疗前后重叠深度分析报告' : 'HYFCeph 数字化头影测量深度分析报告';
+  const generatedAt = formatDateTime(new Date().toISOString());
+  const imageDataUri = await imageToDataUri(payload.annotatedPngPath || payload.annotatedSvgPath);
+  const frameworkChoices = payload.frameworkChoices || payload.analysis?.frameworkChoices || payload.summary?.frameworkChoices || [];
+  const patientName = String(payload.patientName || '').trim() || '未提供';
+
+  let heroPill = '';
+  let heroSummary = '';
+  let statCards = '';
+  let bodyBlocks = '';
+
+  if (mode === 'overlap') {
+    const baseBundle = buildMeasurementBundle({
+      metrics: payload.analysis?.base?.metrics,
+      frameworkReports: payload.analysis?.base?.frameworkReports,
+      riskLabel: payload.analysis?.base?.riskLabel,
+      insight: payload.analysis?.base?.insight,
+    });
+    const compareBundle = buildMeasurementBundle({
+      metrics: payload.analysis?.compare?.metrics,
+      frameworkReports: payload.analysis?.compare?.frameworkReports,
+      riskLabel: payload.analysis?.compare?.riskLabel,
+      insight: payload.analysis?.compare?.insight,
+    });
+    const baseMetrics = augmentMetricsWithDerived(payload.analysis?.base?.metrics, baseBundle);
+    const compareMetrics = augmentMetricsWithDerived(payload.analysis?.compare?.metrics, compareBundle);
+    const overlapInterpretation = buildOverlapInterpretation(baseBundle, compareBundle);
+    const baseFrameworks = normalizeFrameworkEntries(payload.analysis?.base?.frameworkReports, frameworkChoices);
+    const compareFrameworkMap = new Map(
+      normalizeFrameworkEntries(payload.analysis?.compare?.frameworkReports, frameworkChoices).map((item) => [item.code, item]),
+    );
+    const metricRows = buildMetricComparisonRows(baseMetrics, compareMetrics);
+
+    heroPill = payload.summary?.alignLabel || payload.alignMode || 'SN';
+    heroSummary = `治疗前后整体诊断由“${classifySagittal(baseBundle).label}、${classifyVertical(baseBundle).label}”变化为“${classifySagittal(compareBundle).label}、${classifyVertical(compareBundle).label}”。`;
+    statCards = `
+      <div class="fancy-stat"><span>对齐方式</span><strong>${htmlText(heroPill)}</strong><p>重叠图默认采用当前指定对齐方式，用于比较治疗前后轮廓与关键指标变化。</p></div>
+      <div class="fancy-stat"><span>整体变化</span><strong>${htmlText(classifySagittal(compareBundle).label)}</strong><p>${htmlText(overlapInterpretation.overallChange)}</p></div>
+      <div class="fancy-stat"><span>生长型</span><strong>${htmlText(classifyVertical(compareBundle).label)}</strong><p>${htmlText(overlapInterpretation.growthChange)}</p></div>
+    `;
+    bodyBlocks = `
+      <section class="fancy-block">
+        <div class="fancy-block-head">
+          <div>
+            <div class="fancy-mini-label">Comparison</div>
+            <h2>关键指标对比</h2>
+          </div>
+        </div>
+        <div class="fancy-table-wrap">
+          ${renderOverlapMetricsTable(metricRows)}
+        </div>
+      </section>
+      <section class="fancy-grid-2">
+        <div class="fancy-callout">
+          <h3>关键变化解读</h3>
+          <ul>${ensureArray(overlapInterpretation.keyChanges).map((item) => `<li>${htmlText(item)}</li>`).join('')}</ul>
+        </div>
+        <div class="fancy-callout">
+          <h3>面部高度与诊断变化</h3>
+          <p>${htmlText(overlapInterpretation.faceHeightChange)}</p>
+          <p>${htmlText(overlapInterpretation.overallChange)}</p>
+        </div>
+      </section>
+      ${renderFancyFrameworkCards(baseFrameworks, 'overlap', compareFrameworkMap)}
+      <section class="fancy-block">
+        <div class="fancy-block-head">
+          <div>
+            <div class="fancy-mini-label">Summary</div>
+            <h2>全部分析法综合结论</h2>
+          </div>
+        </div>
+        <div class="fancy-grid-2">
+          <div class="fancy-callout">
+            <h3>所有分析法综合分析</h3>
+            <ul>${buildOverlapFrameworkSynthesisItems(baseFrameworks, compareFrameworkMap).map((item) => `<li>${htmlText(item)}</li>`).join('')}</ul>
+          </div>
+          <div class="fancy-callout">
+            <h3>临床意义</h3>
+            <ul>${buildOverlapClinicalMeaningItems(baseBundle, compareBundle, overlapInterpretation, baseFrameworks).map((item) => `<li>${htmlText(item)}</li>`).join('')}</ul>
+          </div>
+        </div>
+        <div class="fancy-callout full">
+          <h3>方案建议</h3>
+          <ul>${buildOverlapTreatmentSuggestionItems(baseBundle, compareBundle, overlapInterpretation).map((item) => `<li>${htmlText(item)}</li>`).join('')}</ul>
+        </div>
+      </section>
+    `;
+  } else {
+    const singleBundle = buildMeasurementBundle({
+      metrics: payload.metrics || payload.analysis?.metrics || [],
+      frameworkReports: payload.analysis?.frameworkReports,
+      riskLabel: payload.analysis?.riskLabel,
+      insight: payload.analysis?.insight,
+    });
+    const singleMetrics = augmentMetricsWithDerived(payload.metrics || payload.analysis?.metrics || [], singleBundle);
+    const singleInterpretation = buildSingleInterpretation(singleBundle);
+    const frameworks = normalizeFrameworkEntries(payload.analysis?.frameworkReports, frameworkChoices);
+    const anbMetric = pickPreferredMetric(singleMetrics, ['ANB']);
+    const fmaMetric = pickPreferredMetric(singleMetrics, ['FMA']);
+    const impaMetric = pickPreferredMetric(singleMetrics, ['IMPA']);
+
+    heroPill = payload.analysis?.riskLabel || payload.summary?.riskLabel || '待复核';
+    heroSummary = payload.analysis?.insight || singleInterpretation.comprehensive;
+    statCards = `
+      <div class="fancy-stat"><span>骨性关系</span><strong>${htmlText(anbMetric?.valueText || '-')}</strong><p>${htmlText(anbMetric?.reference || 'ANB 未返回')}</p></div>
+      <div class="fancy-stat"><span>垂直向</span><strong>${htmlText(fmaMetric?.valueText || '-')}</strong><p>${htmlText(singleInterpretation.faceHeight)}</p></div>
+      <div class="fancy-stat"><span>牙性代偿</span><strong>${htmlText(impaMetric?.valueText || '-')}</strong><p>${htmlText(describeDentalCompensation(singleBundle).join('') || '未见特别突出的牙性代偿。')}</p></div>
+    `;
+    bodyBlocks = `
+      <section class="fancy-block">
+        <div class="fancy-block-head">
+          <div>
+            <div class="fancy-mini-label">Metrics</div>
+            <h2>基础测量数据总览</h2>
+          </div>
+        </div>
+        <div class="fancy-table-wrap">
+          ${renderSingleMetricsTable(singleMetrics)}
+        </div>
+      </section>
+      <section class="fancy-grid-3">
+        <div class="fancy-callout"><h3>面部高度分析</h3><p>${htmlText(singleInterpretation.faceHeight)}</p></div>
+        <div class="fancy-callout"><h3>综合判断</h3><p>${htmlText(singleInterpretation.comprehensive)}</p></div>
+        <div class="fancy-callout"><h3>生长型判断</h3><p>${htmlText(singleInterpretation.growthType)}</p></div>
+      </section>
+      ${renderFancyFrameworkCards(frameworks, 'single')}
+      <section class="fancy-block">
+        <div class="fancy-block-head">
+          <div>
+            <div class="fancy-mini-label">Summary</div>
+            <h2>全部分析法综合结论</h2>
+          </div>
+        </div>
+        <div class="fancy-grid-2">
+          <div class="fancy-callout">
+            <h3>所有分析法综合分析</h3>
+            <ul>${buildSingleFrameworkSynthesisItems(frameworks).map((item) => `<li>${htmlText(item)}</li>`).join('')}</ul>
+          </div>
+          <div class="fancy-callout">
+            <h3>临床意义</h3>
+            <ul>${buildSingleClinicalMeaningItems(singleBundle, singleInterpretation, frameworks).map((item) => `<li>${htmlText(item)}</li>`).join('')}</ul>
+          </div>
+        </div>
+        <div class="fancy-callout full">
+          <h3>方案建议</h3>
+          <ul>${buildSingleTreatmentSuggestionItems(singleBundle, singleInterpretation).map((item) => `<li>${htmlText(item)}</li>`).join('')}</ul>
+        </div>
+      </section>
+    `;
+  }
+
+  const appendix = imageDataUri ? `
+    <section class="fancy-block fancy-image">
+      <div class="fancy-block-head">
+        <div>
+          <div class="fancy-mini-label">Tracing</div>
+          <h2>${mode === 'overlap' ? '治疗前后重叠图' : '自动定点标注图'}</h2>
+        </div>
+      </div>
+      <figure class="fancy-image-frame">
+        <img src="${imageDataUri}" alt="${mode === 'overlap' ? '治疗前后重叠图' : '自动定点标注图'}" />
+      </figure>
+    </section>
+  ` : '';
+
+  return `<!doctype html>
+  <html lang="zh-CN">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>${htmlText(reportTitle)} - 美化版</title>
+      <style>
+        :root {
+          --bg: #eef2ff;
+          --ink: #0f172a;
+          --muted: #64748b;
+          --line: rgba(148, 163, 184, 0.28);
+          --card: rgba(255,255,255,0.86);
+          --hero: radial-gradient(circle at top left, rgba(45, 100, 255, 0.36), transparent 38%), linear-gradient(135deg, #090c24 0%, #171d46 52%, #0a1028 100%);
+          --chip: rgba(255,255,255,0.12);
+          --chip-border: rgba(255,255,255,0.18);
+        }
+        * { box-sizing: border-box; }
+        body {
+          margin: 0;
+          font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+          background:
+            radial-gradient(circle at top, rgba(59,130,246,0.10), transparent 34%),
+            linear-gradient(180deg, #f5f7ff 0%, #eef2ff 100%);
+          color: var(--ink);
+          line-height: 1.65;
+        }
+        .shell {
+          max-width: 1180px;
+          margin: 0 auto;
+          padding: 28px 18px 48px;
+        }
+        .hero {
+          background: var(--hero);
+          color: #fff;
+          border-radius: 32px;
+          padding: 36px 34px 30px;
+          box-shadow: 0 28px 80px rgba(15, 23, 42, 0.18);
+          position: relative;
+          overflow: hidden;
+        }
+        .hero::after {
+          content: "";
+          position: absolute;
+          right: -80px;
+          top: -80px;
+          width: 260px;
+          height: 260px;
+          background: radial-gradient(circle, rgba(255,255,255,0.18), transparent 65%);
+          filter: blur(8px);
+        }
+        .hero-top {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 24px;
+          position: relative;
+          z-index: 1;
+        }
+        .hero-kicker {
+          display: inline-flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 14px;
+          border-radius: 999px;
+          background: var(--chip);
+          border: 1px solid var(--chip-border);
+          font-size: 12px;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+        }
+        .hero h1 {
+          margin: 16px 0 10px;
+          font-size: clamp(34px, 5vw, 56px);
+          line-height: 1.05;
+          letter-spacing: -0.04em;
+        }
+        .hero-summary {
+          max-width: 820px;
+          font-size: 15px;
+          color: rgba(255,255,255,0.82);
+        }
+        .hero-meta {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 12px;
+          margin-top: 18px;
+        }
+        .hero-meta span,
+        .hero-pill {
+          display: inline-flex;
+          align-items: center;
+          padding: 8px 13px;
+          border-radius: 999px;
+          background: var(--chip);
+          border: 1px solid var(--chip-border);
+          color: rgba(255,255,255,0.9);
+          font-size: 13px;
+        }
+        .hero-pill {
+          font-weight: 700;
+          background: rgba(248,113,113,0.14);
+          border-color: rgba(248,113,113,0.25);
+        }
+        .stat-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 18px;
+          margin-top: 28px;
+          position: relative;
+          z-index: 1;
+        }
+        .fancy-stat {
+          background: rgba(255,255,255,0.08);
+          border: 1px solid rgba(255,255,255,0.12);
+          border-radius: 22px;
+          padding: 18px 18px 16px;
+          backdrop-filter: blur(12px);
+        }
+        .fancy-stat span {
+          display: block;
+          font-size: 12px;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          color: rgba(255,255,255,0.6);
+        }
+        .fancy-stat strong {
+          display: block;
+          margin-top: 8px;
+          font-size: 28px;
+          line-height: 1.1;
+          color: #fff;
+        }
+        .fancy-stat p {
+          margin: 10px 0 0;
+          font-size: 13px;
+          color: rgba(255,255,255,0.76);
+        }
+        .content {
+          margin-top: 26px;
+          display: grid;
+          gap: 22px;
+        }
+        .fancy-block {
+          background: var(--card);
+          border: 1px solid rgba(226, 232, 240, 0.82);
+          border-radius: 28px;
+          padding: 24px;
+          box-shadow: 0 18px 40px rgba(148, 163, 184, 0.14);
+          backdrop-filter: blur(10px);
+        }
+        .fancy-block-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 16px;
+          margin-bottom: 18px;
+        }
+        .fancy-mini-label {
+          font-size: 12px;
+          color: #7c3aed;
+          text-transform: uppercase;
+          letter-spacing: 0.12em;
+          font-weight: 700;
+        }
+        .fancy-block h2,
+        .fancy-block h3 {
+          margin: 4px 0 0;
+          letter-spacing: -0.03em;
+        }
+        .fancy-chip {
+          display: inline-flex;
+          align-items: center;
+          padding: 7px 12px;
+          border-radius: 999px;
+          background: linear-gradient(135deg, rgba(124,58,237,0.12), rgba(59,130,246,0.12));
+          color: #4338ca;
+          border: 1px solid rgba(99,102,241,0.18);
+          font-size: 12px;
+          font-weight: 700;
+        }
+        .fancy-grid-3,
+        .fancy-grid-2 {
+          display: grid;
+          gap: 18px;
+        }
+        .fancy-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .fancy-grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .fancy-callout {
+          background: rgba(255,255,255,0.72);
+          border: 1px solid rgba(226, 232, 240, 0.9);
+          border-radius: 22px;
+          padding: 18px 18px 16px;
+        }
+        .fancy-callout h3,
+        .fancy-callout h4 {
+          margin: 0 0 10px;
+          font-size: 15px;
+        }
+        .fancy-callout p,
+        .fancy-callout li,
+        .fancy-framework-intro {
+          color: #475569;
+          font-size: 14px;
+        }
+        .fancy-callout ul {
+          margin: 0;
+          padding-left: 18px;
+        }
+        .fancy-callout.full { margin-top: 18px; }
+        .fancy-framework-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 18px;
+          margin-bottom: 18px;
+        }
+        .fancy-table-wrap {
+          overflow-x: auto;
+        }
+        .framework-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 13px;
+        }
+        .framework-table th {
+          text-align: left;
+          padding: 12px 14px;
+          background: #f8fafc;
+          color: #475569;
+          border-bottom: 1px solid #e2e8f0;
+        }
+        .framework-table td {
+          padding: 13px 14px;
+          border-bottom: 1px solid #eef2f7;
+          vertical-align: top;
+        }
+        .mono { font-family: Menlo, Consolas, monospace; }
+        .row-success { background: #f3fbf6; }
+        .row-danger { background: #fff7f2; }
+        .row-warn { background: #fff8dc; }
+        .row-muted { background: #faf8fb; }
+        .row-normal { background: #eef9f0; }
+        .row-caution { background: #fff4e8; }
+        .row-risk { background: #fdeff3; }
+        .row-info { background: #eef5ff; }
+        .row-improved { background: #eef5ff; }
+        .row-worse { background: #fdeff3; }
+        .tone-success { color: #13805f; font-weight: 700; }
+        .tone-danger { color: #c2410c; font-weight: 700; }
+        .tone-warn { color: #a16207; font-weight: 700; }
+        .tone-default { color: #4338ca; font-weight: 700; }
+        .tone-muted { color: #8b6380; }
+        .clinical-cell {
+          min-width: 220px;
+          color: #64748b;
+          line-height: 1.55;
+        }
+        .fancy-image-frame {
+          margin: 0;
+          border-radius: 24px;
+          overflow: hidden;
+          border: 1px solid rgba(226,232,240,0.9);
+          background: #fff;
+        }
+        .fancy-image-frame img {
+          display: block;
+          width: 100%;
+          height: auto;
+        }
+        @media (max-width: 900px) {
+          .hero-top { flex-direction: column; }
+          .stat-grid,
+          .fancy-grid-3,
+          .fancy-grid-2,
+          .fancy-framework-grid { grid-template-columns: 1fr; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="shell">
+        <header class="hero">
+          <div class="hero-top">
+            <div>
+              <div class="hero-kicker">HYFCeph Advanced Report</div>
+              <h1>${htmlText(reportTitle)}</h1>
+              <div class="hero-summary">${htmlText(heroSummary)}</div>
+              <div class="hero-meta">
+                <span>患者姓名：${htmlText(patientName)}</span>
+                <span>检查日期：${htmlText(formatDateOnly(generatedAt))}</span>
+                <span>系统版本：HYFCeph Portal</span>
+              </div>
+            </div>
+            <div class="hero-pill">${htmlText(heroPill)}</div>
+          </div>
+          <div class="stat-grid">
+            ${statCards}
+          </div>
+        </header>
+        <main class="content">
+          ${bodyBlocks}
+          ${appendix}
+        </main>
+      </div>
+    </body>
+  </html>`;
+}
+
+async function buildStandardHyfcephHtmlReport(payload) {
   const mode = String(payload.mode || payload.analysis?.type || 'image').trim();
   const reportTitle = mode === 'overlap' ? 'HYFCeph 治疗前后重叠深度分析报告' : 'HYFCeph 数字化头影测量深度分析报告';
   const generatedAt = formatDateTime(new Date().toISOString());
@@ -1525,6 +2052,13 @@ export async function buildHyfcephHtmlReport(payload) {
       ${bodySections}
     </body>
   </html>`;
+}
+
+export async function buildHyfcephHtmlReport(payload, variant = 'standard') {
+  if (variant === 'pretty') {
+    return buildPrettyHyfcephHtmlReport(payload);
+  }
+  return buildStandardHyfcephHtmlReport(payload);
 }
 
 async function imageToDataUri(filePath) {
@@ -1946,14 +2480,14 @@ export async function generateHyfcephPdfReport({ inputPath, outputPath, patientN
   });
 }
 
-export async function generateHyfcephHtmlReport({ inputPath, outputPath, patientName }) {
+export async function generateHyfcephHtmlReport({ inputPath, outputPath, patientName, variant = 'standard' }) {
   const resolvedInputPath = path.resolve(inputPath);
   const resolvedOutputPath = path.resolve(outputPath || defaultHtmlPath(resolvedInputPath));
   const payload = JSON.parse(await fs.readFile(resolvedInputPath, 'utf8'));
   if (patientName) {
     payload.patientName = patientName;
   }
-  const html = await buildHyfcephHtmlReport(payload);
+  const html = await buildHyfcephHtmlReport(payload, variant);
   await fs.mkdir(path.dirname(resolvedOutputPath), { recursive: true });
   await fs.writeFile(resolvedOutputPath, html, 'utf8');
   return path.resolve(resolvedOutputPath);

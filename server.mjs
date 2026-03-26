@@ -132,7 +132,7 @@ function buildPdfOssObjectKey({ user, fileName, patientName, reportType }) {
   return `${PDF_OSS_PREFIX}/${year}/${month}/${userStem}/${timestamp}-${patientStem}-${typeStem}-${stem}.pdf`;
 }
 
-function buildHtmlReportObjectKey({ user, fileName, patientName, reportType }) {
+function buildHtmlReportObjectKey({ user, fileName, patientName, reportType, variant = 'standard' }) {
   const now = new Date();
   const year = String(now.getUTCFullYear());
   const month = String(now.getUTCMonth() + 1).padStart(2, '0');
@@ -141,7 +141,8 @@ function buildHtmlReportObjectKey({ user, fileName, patientName, reportType }) {
   const typeStem = sanitizeFileStem(reportType || 'report');
   const userStem = sanitizeFileStem(user?.id || user?.username || user?.phone || 'user');
   const timestamp = nowIso().replace(/[:.]/g, '-');
-  return `${REPORT_OSS_PREFIX}/${year}/${month}/${userStem}/${timestamp}-${patientStem}-${typeStem}-${stem}.html`;
+  const variantStem = sanitizeFileStem(variant || 'standard');
+  return `${REPORT_OSS_PREFIX}/${variantStem}/${year}/${month}/${userStem}/${timestamp}-${patientStem}-${typeStem}-${stem}.html`;
 }
 
 function buildOssPublicUrl(objectKey) {
@@ -314,7 +315,7 @@ async function uploadPdfFileToOss({ user, pdfPath, patientName, reportType, requ
   };
 }
 
-async function uploadHtmlReportToOss({ user, htmlPath, patientName, reportType, request = null }) {
+async function uploadHtmlReportToOss({ user, htmlPath, patientName, reportType, request = null, variant = 'standard' }) {
   if (!isPdfOssConfigured()) {
     return {
       ok: false,
@@ -330,6 +331,7 @@ async function uploadHtmlReportToOss({ user, htmlPath, patientName, reportType, 
     fileName,
     patientName,
     reportType,
+    variant,
   });
   const headers = {
     'Content-Type': 'text/html; charset=utf-8',
@@ -346,6 +348,7 @@ async function uploadHtmlReportToOss({ user, htmlPath, patientName, reportType, 
     patientName,
     reportType,
     request,
+    variant,
   });
 
   return {
@@ -357,6 +360,7 @@ async function uploadHtmlReportToOss({ user, htmlPath, patientName, reportType, 
     reportShareUrl: shortLink.shortUrl,
     reportPublicUrl: publicUrl,
     reportShortCode: shortLink.code,
+    variant,
   };
 }
 
@@ -398,7 +402,7 @@ async function generateAndUploadPdfReport({ user, resultPayload, patientName, re
   }
 }
 
-async function generateAndUploadHtmlReport({ user, resultPayload, patientName, reportType, request = null }) {
+async function generateAndUploadHtmlReport({ user, resultPayload, patientName, reportType, request = null, variant = 'standard' }) {
   if (!isPdfOssConfigured()) {
     return {
       ok: false,
@@ -409,7 +413,7 @@ async function generateAndUploadHtmlReport({ user, resultPayload, patientName, r
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hyfceph-server-report-'));
   const resultJsonPath = path.join(tempDir, 'result.json');
-  const htmlOutputPath = path.join(tempDir, 'report.html');
+  const htmlOutputPath = path.join(tempDir, `report-${sanitizeFileStem(variant)}.html`);
 
   try {
     await fs.writeFile(resultJsonPath, JSON.stringify(resultPayload, null, 2), 'utf8');
@@ -417,6 +421,7 @@ async function generateAndUploadHtmlReport({ user, resultPayload, patientName, r
       inputPath: resultJsonPath,
       outputPath: htmlOutputPath,
       patientName: patientName || undefined,
+      variant,
     });
     return await uploadHtmlReportToOss({
       user,
@@ -424,6 +429,7 @@ async function generateAndUploadHtmlReport({ user, resultPayload, patientName, r
       patientName,
       reportType,
       request,
+      variant,
     });
   } catch (error) {
     return {
@@ -692,6 +698,7 @@ function normalizePdfLinkRecord(code, record) {
     userId: typeof record.userId === 'string' && record.userId.trim() ? record.userId.trim() : null,
     patientName: typeof record.patientName === 'string' && record.patientName.trim() ? record.patientName.trim() : null,
     reportType: typeof record.reportType === 'string' && record.reportType.trim() ? record.reportType.trim() : 'report',
+    variant: typeof record.variant === 'string' && record.variant.trim() ? record.variant.trim() : 'standard',
     createdAt: isIsoDate(record.createdAt) ? new Date(record.createdAt).toISOString() : nowIso(),
     updatedAt: isIsoDate(record.updatedAt) ? new Date(record.updatedAt).toISOString() : nowIso(),
     expiresAt: isIsoDate(record.expiresAt) ? new Date(record.expiresAt).toISOString() : addDaysIso(PDF_SHORT_LINK_TTL_DAYS),
@@ -726,6 +733,7 @@ function normalizeReportLinkRecord(code, record) {
     userId: typeof record.userId === 'string' && record.userId.trim() ? record.userId.trim() : null,
     patientName: typeof record.patientName === 'string' && record.patientName.trim() ? record.patientName.trim() : null,
     reportType: typeof record.reportType === 'string' && record.reportType.trim() ? record.reportType.trim() : 'report',
+    variant: typeof record.variant === 'string' && record.variant.trim() ? record.variant.trim() : 'standard',
     createdAt: isIsoDate(record.createdAt) ? new Date(record.createdAt).toISOString() : nowIso(),
     updatedAt: isIsoDate(record.updatedAt) ? new Date(record.updatedAt).toISOString() : nowIso(),
     expiresAt: isIsoDate(record.expiresAt) ? new Date(record.expiresAt).toISOString() : addDaysIso(REPORT_SHORT_LINK_TTL_DAYS),
@@ -766,8 +774,9 @@ function buildPdfShortUrl(code, request = null) {
   return `${buildPortalOrigin(request)}/pdf/${encodeURIComponent(code)}`;
 }
 
-function buildReportShortUrl(code, request = null) {
-  return `${buildPortalOrigin(request)}/report/${encodeURIComponent(code)}`;
+function buildReportShortUrl(code, request = null, variant = 'standard') {
+  const prefix = variant === 'pretty' ? 'report-pretty' : 'report';
+  return `${buildPortalOrigin(request)}/${prefix}/${encodeURIComponent(code)}`;
 }
 
 function isPdfLinkExpired(record) {
@@ -827,7 +836,7 @@ async function issuePdfShortLink({ user, objectKey, patientName, reportType, req
   };
 }
 
-async function createReportShortLinkRecord({ store, user, objectKey, patientName, reportType }) {
+async function createReportShortLinkRecord({ store, user, objectKey, patientName, reportType, variant = 'standard' }) {
   const normalizedStore = normalizeStoreRecord(store);
   const reportLinks = { ...(normalizedStore.reportLinks || {}) };
   let code = '';
@@ -841,6 +850,7 @@ async function createReportShortLinkRecord({ store, user, objectKey, patientName
     userId: user?.id || null,
     patientName: patientName || null,
     reportType: reportType || 'report',
+    variant,
     createdAt: nowIso(),
     updatedAt: nowIso(),
     expiresAt: addDaysIso(REPORT_SHORT_LINK_TTL_DAYS),
@@ -855,11 +865,11 @@ async function createReportShortLinkRecord({ store, user, objectKey, patientName
   return {
     store: nextStore,
     code,
-    shortUrl: buildReportShortUrl(code),
+    shortUrl: buildReportShortUrl(code, null, variant),
   };
 }
 
-async function issueReportShortLink({ user, objectKey, patientName, reportType, request = null }) {
+async function issueReportShortLink({ user, objectKey, patientName, reportType, request = null, variant = 'standard' }) {
   const store = await readStore();
   const created = await createReportShortLinkRecord({
     store,
@@ -867,10 +877,11 @@ async function issueReportShortLink({ user, objectKey, patientName, reportType, 
     objectKey,
     patientName,
     reportType,
+    variant,
   });
   return {
     code: created.code,
-    shortUrl: buildReportShortUrl(created.code, request),
+    shortUrl: buildReportShortUrl(created.code, request, variant),
   };
 }
 
@@ -2110,6 +2121,15 @@ async function handleMeasureImage(request, response) {
         patientName,
         reportType: 'image',
         request,
+        variant: 'standard',
+      });
+      result.prettyReport = await generateAndUploadHtmlReport({
+        user,
+        resultPayload: result,
+        patientName,
+        reportType: 'image',
+        request,
+        variant: 'pretty',
       });
     }
     await sendBarkPush('HYFCeph 图片测量', `用户：${user.name}\n单位：${user.organization || '-'}\n图片：${path.basename(resolvedImagePath)}`);
@@ -2200,6 +2220,15 @@ async function handleMeasureOverlap(request, response) {
         patientName,
         reportType: 'overlap',
         request,
+        variant: 'standard',
+      });
+      result.prettyReport = await generateAndUploadHtmlReport({
+        user,
+        resultPayload: result,
+        patientName,
+        reportType: 'overlap',
+        request,
+        variant: 'pretty',
       });
     }
 
@@ -2396,6 +2425,11 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'GET' && (url.pathname.startsWith('/report/') || url.pathname.startsWith('/api/report/'))) {
       const prefix = url.pathname.startsWith('/api/report/') ? '/api/report/' : '/report/';
+      const code = decodeURIComponent(url.pathname.slice(prefix.length));
+      return await handleReportShortLink(request, response, code);
+    }
+    if (request.method === 'GET' && (url.pathname.startsWith('/report-pretty/') || url.pathname.startsWith('/api/report-pretty/'))) {
+      const prefix = url.pathname.startsWith('/api/report-pretty/') ? '/api/report-pretty/' : '/report-pretty/';
       const code = decodeURIComponent(url.pathname.slice(prefix.length));
       return await handleReportShortLink(request, response, code);
     }

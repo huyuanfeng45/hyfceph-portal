@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/report-pretty/:code",
+      "destination": "/api/report-pretty/:code"
+    },
+    {
       "source": "/report/:code",
       "destination": "/api/report/:code"
     },
