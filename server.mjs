@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import OSS from 'ali-oss';
 import { buildOverlapRender, listSupportedAlignModes } from './scripts/hyfceph-overlap-renderer.mjs';
+import { generateHyfcephPdfReport } from './scripts/hyfceph-report-pdf.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -204,6 +205,89 @@ async function createPdfUploadTicket({ user, fileName, mimeType, patientName, re
     downloadUrl,
     downloadExpiresAt: PDF_OSS_PUBLIC_READ ? null : new Date(Date.now() + downloadExpiresIn * 1000).toISOString(),
   };
+}
+
+async function uploadPdfFileToOss({ user, pdfPath, patientName, reportType }) {
+  if (!isPdfOssConfigured()) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'pdf-oss-not-configured',
+    };
+  }
+
+  const client = await getPdfOssClient();
+  const fileName = path.basename(String(pdfPath || '').trim() || 'hyfceph-report.pdf');
+  const objectKey = buildPdfOssObjectKey({
+    user,
+    fileName,
+    patientName,
+    reportType,
+  });
+  const downloadExpiresIn = Math.min(
+    safePositiveInteger(PDF_OSS_DOWNLOAD_EXPIRES_SECONDS, 60 * 60 * 24 * 7),
+    OSS_V4_MAX_EXPIRES_SECONDS,
+  );
+  const headers = {
+    'Content-Type': 'application/pdf',
+  };
+  if (PDF_OSS_PUBLIC_READ) {
+    headers['x-oss-object-acl'] = 'public-read';
+  }
+
+  await client.put(objectKey, pdfPath, { headers });
+  const publicUrl = buildOssPublicUrl(objectKey);
+  const downloadUrl = PDF_OSS_PUBLIC_READ
+    ? publicUrl
+    : normalizeOssSignedUrl(await client.signatureUrlV4('GET', downloadExpiresIn, undefined, objectKey));
+
+  return {
+    ok: true,
+    objectKey,
+    bucket: PDF_OSS_BUCKET,
+    region: PDF_OSS_REGION,
+    accessMode: PDF_OSS_PUBLIC_READ ? 'public-read' : 'signed-get',
+    pdfShareUrl: downloadUrl,
+    pdfPublicUrl: publicUrl,
+    pdfShareExpiresAt: PDF_OSS_PUBLIC_READ ? null : new Date(Date.now() + downloadExpiresIn * 1000).toISOString(),
+  };
+}
+
+async function generateAndUploadPdfReport({ user, resultPayload, patientName, reportType }) {
+  if (!isPdfOssConfigured()) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'pdf-oss-not-configured',
+    };
+  }
+
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hyfceph-server-pdf-'));
+  const resultJsonPath = path.join(tempDir, 'result.json');
+  const pdfOutputPath = path.join(tempDir, 'report.pdf');
+
+  try {
+    await fs.writeFile(resultJsonPath, JSON.stringify(resultPayload, null, 2), 'utf8');
+    await generateHyfcephPdfReport({
+      inputPath: resultJsonPath,
+      outputPath: pdfOutputPath,
+      patientName: patientName || undefined,
+    });
+    return await uploadPdfFileToOss({
+      user,
+      pdfPath: pdfOutputPath,
+      patientName,
+      reportType,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 function extensionFromUpload({ fileName, mimeType }) {
@@ -1542,6 +1626,8 @@ async function handleMeasureCurrentCase(request, response) {
 async function handleMeasureImage(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
+  const shouldGeneratePdf = payload.generatePdf !== false;
+  const patientName = String(payload.patientName || '').trim();
   if (!apiKey) {
     return sendJson(response, 400, { error: '缺少 API Key。' });
   }
@@ -1581,6 +1667,14 @@ async function handleMeasureImage(request, response) {
       imagePath: resolvedImagePath,
       operatorSession,
     });
+    if (shouldGeneratePdf) {
+      result.pdf = await generateAndUploadPdfReport({
+        user,
+        resultPayload: result,
+        patientName,
+        reportType: 'image',
+      });
+    }
     await sendBarkPush('HYFCeph 图片测量', `用户：${user.name}\n单位：${user.organization || '-'}\n图片：${path.basename(resolvedImagePath)}`);
     return sendJson(response, 200, {
       ok: true,
@@ -1603,6 +1697,8 @@ async function handleMeasureImage(request, response) {
 async function handleMeasureOverlap(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
+  const shouldGeneratePdf = Boolean(payload.generatePdf);
+  const patientName = String(payload.patientName || '').trim();
   if (!apiKey) {
     return sendJson(response, 400, { error: '缺少 API Key。' });
   }
@@ -1660,6 +1756,14 @@ async function handleMeasureOverlap(request, response) {
       operatorSession,
       alignMode,
     });
+    if (shouldGeneratePdf) {
+      result.pdf = await generateAndUploadPdfReport({
+        user,
+        resultPayload: result,
+        patientName,
+        reportType: 'overlap',
+      });
+    }
 
     await sendBarkPush(
       'HYFCeph 轮廓重叠',

@@ -17,6 +17,7 @@
     "@resvg/resvg-js": "^2.6.2",
     "@vercel/blob": "^2.3.1",
     "ali-oss": "^6.23.0",
-    "d3-shape": "^3.2.0"
+    "d3-shape": "^3.2.0",
+    "pdf-lib": "^1.17.1"
   }
 }
