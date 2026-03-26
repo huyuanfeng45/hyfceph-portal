@@ -52,6 +52,7 @@ const OSS_V4_MAX_EXPIRES_SECONDS = 60 * 60 * 24 * 7;
 let blobSdkPromise = null;
 let resvgPromise = null;
 let pdfOssClientPromise = null;
+let pdfOssDownloadClientPromise = null;
 const execFileAsync = promisify(execFile);
 
 const MIME_TYPES = new Map([
@@ -159,8 +160,30 @@ async function getPdfOssClient() {
   return pdfOssClientPromise;
 }
 
+async function getPdfOssDownloadClient() {
+  if (!isPdfOssConfigured()) {
+    throw new Error('PDF OSS 上传服务未配置。');
+  }
+  if (!PDF_OSS_CUSTOM_DOMAIN) {
+    return getPdfOssClient();
+  }
+  if (!pdfOssDownloadClientPromise) {
+    pdfOssDownloadClientPromise = Promise.resolve(new OSS({
+      region: PDF_OSS_REGION,
+      bucket: PDF_OSS_BUCKET,
+      endpoint: `https://${PDF_OSS_CUSTOM_DOMAIN}`,
+      cname: true,
+      accessKeyId: PDF_OSS_ACCESS_KEY_ID,
+      accessKeySecret: PDF_OSS_ACCESS_KEY_SECRET,
+      authorizationV4: true,
+    }));
+  }
+  return pdfOssDownloadClientPromise;
+}
+
 async function createPdfUploadTicket({ user, fileName, mimeType, patientName, reportType }) {
   const client = await getPdfOssClient();
+  const downloadClient = await getPdfOssDownloadClient();
   const objectKey = buildPdfOssObjectKey({
     user,
     fileName,
@@ -195,7 +218,7 @@ async function createPdfUploadTicket({ user, fileName, mimeType, patientName, re
   const publicUrl = buildOssPublicUrl(objectKey);
   const downloadUrl = PDF_OSS_PUBLIC_READ
     ? publicUrl
-    : normalizeOssSignedUrl(await client.signatureUrlV4('GET', downloadExpiresIn, undefined, objectKey));
+    : normalizeOssSignedUrl(await downloadClient.signatureUrlV4('GET', downloadExpiresIn, undefined, objectKey));
 
   return {
     objectKey,
@@ -221,6 +244,7 @@ async function uploadPdfFileToOss({ user, pdfPath, patientName, reportType }) {
   }
 
   const client = await getPdfOssClient();
+  const downloadClient = await getPdfOssDownloadClient();
   const fileName = path.basename(String(pdfPath || '').trim() || 'hyfceph-report.pdf');
   const objectKey = buildPdfOssObjectKey({
     user,
@@ -243,7 +267,7 @@ async function uploadPdfFileToOss({ user, pdfPath, patientName, reportType }) {
   const publicUrl = buildOssPublicUrl(objectKey);
   const downloadUrl = PDF_OSS_PUBLIC_READ
     ? publicUrl
-    : normalizeOssSignedUrl(await client.signatureUrlV4('GET', downloadExpiresIn, undefined, objectKey));
+    : normalizeOssSignedUrl(await downloadClient.signatureUrlV4('GET', downloadExpiresIn, undefined, objectKey));
 
   return {
     ok: true,
