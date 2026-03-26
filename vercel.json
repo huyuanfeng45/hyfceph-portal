@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/pdf/:code",
+      "destination": "/api/pdf/:code"
+    }
+  ]
+}

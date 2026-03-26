@@ -48,6 +48,7 @@ const PDF_OSS_UPLOAD_EXPIRES_SECONDS = Number(process.env.HYFCEPH_PDF_OSS_UPLOAD
 const PDF_OSS_DOWNLOAD_EXPIRES_SECONDS = Number(process.env.HYFCEPH_PDF_OSS_DOWNLOAD_EXPIRES_SECONDS || String(60 * 60 * 24 * 7));
 const PDF_OSS_PUBLIC_READ = /^(1|true|yes)$/i.test(String(process.env.HYFCEPH_PDF_OSS_PUBLIC_READ || 'false'));
 const OSS_V4_MAX_EXPIRES_SECONDS = 60 * 60 * 24 * 7;
+const PDF_SHORT_LINK_TTL_DAYS = Number(process.env.HYFCEPH_PDF_SHORT_LINK_TTL_DAYS || '365');
 
 let blobSdkPromise = null;
 let resvgPromise = null;
@@ -181,7 +182,7 @@ async function getPdfOssDownloadClient() {
   return pdfOssDownloadClientPromise;
 }
 
-async function createPdfUploadTicket({ user, fileName, mimeType, patientName, reportType }) {
+async function createPdfUploadTicket({ user, fileName, mimeType, patientName, reportType, request = null }) {
   const client = await getPdfOssClient();
   const downloadClient = await getPdfOssDownloadClient();
   const objectKey = buildPdfOssObjectKey({
@@ -216,9 +217,16 @@ async function createPdfUploadTicket({ user, fileName, mimeType, patientName, re
   ));
 
   const publicUrl = buildOssPublicUrl(objectKey);
-  const downloadUrl = PDF_OSS_PUBLIC_READ
+  const signedDownloadUrl = PDF_OSS_PUBLIC_READ
     ? publicUrl
     : normalizeOssSignedUrl(await downloadClient.signatureUrlV4('GET', downloadExpiresIn, undefined, objectKey));
+  const shortLink = await issuePdfShortLink({
+    user,
+    objectKey,
+    patientName,
+    reportType,
+    request,
+  });
 
   return {
     objectKey,
@@ -229,12 +237,14 @@ async function createPdfUploadTicket({ user, fileName, mimeType, patientName, re
     uploadHeaders,
     uploadExpiresAt: new Date(Date.now() + uploadExpiresIn * 1000).toISOString(),
     publicUrl,
-    downloadUrl,
+    downloadUrl: shortLink.shortUrl,
+    signedDownloadUrl,
+    shortCode: shortLink.code,
     downloadExpiresAt: PDF_OSS_PUBLIC_READ ? null : new Date(Date.now() + downloadExpiresIn * 1000).toISOString(),
   };
 }
 
-async function uploadPdfFileToOss({ user, pdfPath, patientName, reportType }) {
+async function uploadPdfFileToOss({ user, pdfPath, patientName, reportType, request = null }) {
   if (!isPdfOssConfigured()) {
     return {
       ok: false,
@@ -265,9 +275,16 @@ async function uploadPdfFileToOss({ user, pdfPath, patientName, reportType }) {
 
   await client.put(objectKey, pdfPath, { headers });
   const publicUrl = buildOssPublicUrl(objectKey);
-  const downloadUrl = PDF_OSS_PUBLIC_READ
+  const signedDownloadUrl = PDF_OSS_PUBLIC_READ
     ? publicUrl
     : normalizeOssSignedUrl(await downloadClient.signatureUrlV4('GET', downloadExpiresIn, undefined, objectKey));
+  const shortLink = await issuePdfShortLink({
+    user,
+    objectKey,
+    patientName,
+    reportType,
+    request,
+  });
 
   return {
     ok: true,
@@ -275,13 +292,15 @@ async function uploadPdfFileToOss({ user, pdfPath, patientName, reportType }) {
     bucket: PDF_OSS_BUCKET,
     region: PDF_OSS_REGION,
     accessMode: PDF_OSS_PUBLIC_READ ? 'public-read' : 'signed-get',
-    pdfShareUrl: downloadUrl,
+    pdfShareUrl: shortLink.shortUrl,
+    pdfSignedUrl: signedDownloadUrl,
     pdfPublicUrl: publicUrl,
+    pdfShortCode: shortLink.code,
     pdfShareExpiresAt: PDF_OSS_PUBLIC_READ ? null : new Date(Date.now() + downloadExpiresIn * 1000).toISOString(),
   };
 }
 
-async function generateAndUploadPdfReport({ user, resultPayload, patientName, reportType }) {
+async function generateAndUploadPdfReport({ user, resultPayload, patientName, reportType, request = null }) {
   if (!isPdfOssConfigured()) {
     return {
       ok: false,
@@ -306,6 +325,7 @@ async function generateAndUploadPdfReport({ user, resultPayload, patientName, re
       pdfPath: pdfOutputPath,
       patientName,
       reportType,
+      request,
     });
   } catch (error) {
     return {
@@ -554,6 +574,114 @@ function normalizeStoreRecord(store) {
   return {
     users: Array.isArray(source.users) ? source.users.map(normalizeUserRecord) : [],
     operatorSession: normalizeOperatorSession(source.operatorSession),
+    pdfLinks: normalizePdfLinkMap(source.pdfLinks),
+  };
+}
+
+function normalizePdfLinkRecord(code, record) {
+  if (!record || typeof record !== 'object') {
+    return null;
+  }
+  const normalizedCode = String(code || '').trim();
+  const objectKey = String(record.objectKey || '').trim();
+  if (!normalizedCode || !objectKey) {
+    return null;
+  }
+  return {
+    code: normalizedCode,
+    objectKey,
+    userId: typeof record.userId === 'string' && record.userId.trim() ? record.userId.trim() : null,
+    patientName: typeof record.patientName === 'string' && record.patientName.trim() ? record.patientName.trim() : null,
+    reportType: typeof record.reportType === 'string' && record.reportType.trim() ? record.reportType.trim() : 'report',
+    createdAt: isIsoDate(record.createdAt) ? new Date(record.createdAt).toISOString() : nowIso(),
+    updatedAt: isIsoDate(record.updatedAt) ? new Date(record.updatedAt).toISOString() : nowIso(),
+    expiresAt: isIsoDate(record.expiresAt) ? new Date(record.expiresAt).toISOString() : addDaysIso(PDF_SHORT_LINK_TTL_DAYS),
+    lastAccessedAt: isIsoDate(record.lastAccessedAt) ? new Date(record.lastAccessedAt).toISOString() : null,
+  };
+}
+
+function normalizePdfLinkMap(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const out = {};
+  for (const [code, record] of Object.entries(source)) {
+    const normalized = normalizePdfLinkRecord(code, record);
+    if (normalized) {
+      out[normalized.code] = normalized;
+    }
+  }
+  return out;
+}
+
+function createPdfShortCode() {
+  return randomBytes(6).toString('base64url').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 8);
+}
+
+function buildPortalOrigin(request = null) {
+  if (process.env.HYFCEPH_PUBLIC_BASE_URL) {
+    return String(process.env.HYFCEPH_PUBLIC_BASE_URL).trim().replace(/\/+$/, '');
+  }
+  if (request?.headers?.host) {
+    const host = String(request.headers.host).trim();
+    const forwardedProto = String(request.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+    const proto = forwardedProto || (process.env.VERCEL || process.env.NODE_ENV === 'production' ? 'https' : 'http');
+    return `${proto}://${host}`.replace(/\/+$/, '');
+  }
+  return `http://${HOST}:${PORT}`;
+}
+
+function buildPdfShortUrl(code, request = null) {
+  return `${buildPortalOrigin(request)}/pdf/${encodeURIComponent(code)}`;
+}
+
+function isPdfLinkExpired(record) {
+  if (!record?.expiresAt) return false;
+  return new Date(record.expiresAt).getTime() <= Date.now();
+}
+
+async function createPdfShortLinkRecord({ store, user, objectKey, patientName, reportType }) {
+  const normalizedStore = normalizeStoreRecord(store);
+  const pdfLinks = { ...(normalizedStore.pdfLinks || {}) };
+  let code = '';
+  do {
+    code = createPdfShortCode();
+  } while (pdfLinks[code]);
+
+  pdfLinks[code] = {
+    code,
+    objectKey,
+    userId: user?.id || null,
+    patientName: patientName || null,
+    reportType: reportType || 'report',
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    expiresAt: addDaysIso(PDF_SHORT_LINK_TTL_DAYS),
+    lastAccessedAt: null,
+  };
+
+  const nextStore = {
+    ...normalizedStore,
+    pdfLinks,
+  };
+  await writeStore(nextStore);
+  return {
+    store: nextStore,
+    code,
+    shortUrl: buildPdfShortUrl(code),
+  };
+}
+
+async function issuePdfShortLink({ user, objectKey, patientName, reportType, request = null }) {
+  const store = await readStore();
+  const created = await createPdfShortLinkRecord({
+    store,
+    user,
+    objectKey,
+    patientName,
+    reportType,
+  });
+  return {
+    code: created.code,
+    shortUrl: buildPdfShortUrl(created.code, request),
   };
 }
 
@@ -1553,6 +1681,7 @@ async function handlePdfUploadTicket(request, response) {
       mimeType,
       patientName,
       reportType,
+      request,
     });
     return sendJson(response, 200, {
       ok: true,
@@ -1562,6 +1691,48 @@ async function handlePdfUploadTicket(request, response) {
     const message = error instanceof Error ? error.message : String(error);
     return sendJson(response, 502, { error: message || 'PDF 上传票据生成失败。' });
   }
+}
+
+async function handlePdfShortLink(request, response, code) {
+  const normalizedCode = String(code || '').trim();
+  if (!normalizedCode) {
+    return sendText(response, 404, 'Not Found');
+  }
+
+  const store = await readStore();
+  const record = normalizePdfLinkRecord(normalizedCode, store.pdfLinks?.[normalizedCode]);
+  if (!record) {
+    return sendText(response, 404, 'PDF link not found.');
+  }
+  if (isPdfLinkExpired(record)) {
+    return sendText(response, 410, 'PDF link expired.');
+  }
+
+  let location = '';
+  if (PDF_OSS_PUBLIC_READ) {
+    location = buildOssPublicUrl(record.objectKey);
+  } else {
+    const downloadClient = await getPdfOssDownloadClient();
+    const downloadExpiresIn = Math.min(
+      safePositiveInteger(PDF_OSS_DOWNLOAD_EXPIRES_SECONDS, 60 * 60 * 24 * 7),
+      OSS_V4_MAX_EXPIRES_SECONDS,
+    );
+    location = normalizeOssSignedUrl(await downloadClient.signatureUrlV4('GET', downloadExpiresIn, undefined, record.objectKey));
+  }
+
+  record.lastAccessedAt = nowIso();
+  record.updatedAt = nowIso();
+  store.pdfLinks = {
+    ...(store.pdfLinks || {}),
+    [record.code]: record,
+  };
+  await writeStore(store);
+
+  response.writeHead(302, {
+    Location: location,
+    'Cache-Control': 'no-store',
+  });
+  response.end();
 }
 
 async function handleMeasureShareUrl(request, response) {
@@ -1701,6 +1872,7 @@ async function handleMeasureImage(request, response) {
         resultPayload: result,
         patientName,
         reportType: 'image',
+        request,
       });
     }
     await sendBarkPush('HYFCeph 图片测量', `用户：${user.name}\n单位：${user.organization || '-'}\n图片：${path.basename(resolvedImagePath)}`);
@@ -1790,6 +1962,7 @@ async function handleMeasureOverlap(request, response) {
         resultPayload: result,
         patientName,
         reportType: 'overlap',
+        request,
       });
     }
 
@@ -1983,6 +2156,11 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'POST' && url.pathname === '/api/pdf/upload-ticket') {
       return await handlePdfUploadTicket(request, response);
+    }
+    if (request.method === 'GET' && (url.pathname.startsWith('/pdf/') || url.pathname.startsWith('/api/pdf/'))) {
+      const prefix = url.pathname.startsWith('/api/pdf/') ? '/api/pdf/' : '/pdf/';
+      const code = decodeURIComponent(url.pathname.slice(prefix.length));
+      return await handlePdfShortLink(request, response, code);
     }
     if (request.method === 'GET' && url.pathname === '/api/bridge/current-case') {
       return await handleBridgeCurrentCaseGet(request, response);
