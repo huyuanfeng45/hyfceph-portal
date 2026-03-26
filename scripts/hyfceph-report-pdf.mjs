@@ -1222,8 +1222,16 @@ async function buildPrettyHyfcephHtmlReport(payload) {
   const mode = String(payload.mode || payload.analysis?.type || 'image').trim();
   const reportTitle = mode === 'overlap' ? 'HYFCeph 治疗前后重叠深度分析报告' : 'HYFCeph 数字化头影测量深度分析报告';
   const generatedAt = formatDateTime(new Date().toISOString());
-  const imageDataUri = await imageToDataUri(payload.annotatedPngPath || payload.annotatedSvgPath);
-  const contourDataUri = await imageToDataUri(payload.contourPngPath || payload.contourSvgPath);
+  const imageDataUri = await imageToDataUri(
+    payload.annotatedPngPath || payload.annotatedSvgPath,
+    payload.artifacts?.annotatedPngBase64 || payload.artifacts?.annotatedSvgBase64 || null,
+    payload.artifacts?.annotatedPngMimeType || payload.artifacts?.annotatedSvgMimeType || null,
+  );
+  const contourDataUri = await imageToDataUri(
+    payload.contourPngPath || payload.contourSvgPath,
+    payload.artifacts?.contourPngBase64 || payload.artifacts?.contourSvgBase64 || null,
+    payload.artifacts?.contourPngMimeType || payload.artifacts?.contourSvgMimeType || null,
+  );
   const frameworkChoices = payload.frameworkChoices || payload.analysis?.frameworkChoices || payload.summary?.frameworkChoices || [];
   const patientName = String(payload.patientName || '').trim() || '未提供';
 
@@ -1726,8 +1734,16 @@ async function buildStandardHyfcephHtmlReport(payload) {
   const mode = String(payload.mode || payload.analysis?.type || 'image').trim();
   const reportTitle = mode === 'overlap' ? 'HYFCeph 治疗前后重叠深度分析报告' : 'HYFCeph 数字化头影测量深度分析报告';
   const generatedAt = formatDateTime(new Date().toISOString());
-  const imageDataUri = await imageToDataUri(payload.annotatedPngPath || payload.annotatedSvgPath);
-  const contourDataUri = await imageToDataUri(payload.contourPngPath || payload.contourSvgPath);
+  const imageDataUri = await imageToDataUri(
+    payload.annotatedPngPath || payload.annotatedSvgPath,
+    payload.artifacts?.annotatedPngBase64 || payload.artifacts?.annotatedSvgBase64 || null,
+    payload.artifacts?.annotatedPngMimeType || payload.artifacts?.annotatedSvgMimeType || null,
+  );
+  const contourDataUri = await imageToDataUri(
+    payload.contourPngPath || payload.contourSvgPath,
+    payload.artifacts?.contourPngBase64 || payload.artifacts?.contourSvgBase64 || null,
+    payload.artifacts?.contourPngMimeType || payload.artifacts?.contourSvgMimeType || null,
+  );
   const frameworkChoices = payload.frameworkChoices || payload.analysis?.frameworkChoices || payload.summary?.frameworkChoices || [];
   const patientName = String(payload.patientName || '').trim();
 
@@ -2108,16 +2124,21 @@ export async function buildHyfcephHtmlReport(payload, variant = 'standard') {
   return buildStandardHyfcephHtmlReport(payload);
 }
 
-async function imageToDataUri(filePath) {
-  if (!filePath) return null;
-  const buffer = await fs.readFile(filePath);
-  const ext = path.extname(filePath).toLowerCase();
-  const mime = ext === '.svg'
-    ? 'image/svg+xml'
-    : ext === '.jpg' || ext === '.jpeg'
-      ? 'image/jpeg'
-      : 'image/png';
-  return `data:${mime};base64,${buffer.toString('base64')}`;
+async function imageToDataUri(filePath, fallbackBase64 = null, fallbackMimeType = null) {
+  if (filePath) {
+    const buffer = await fs.readFile(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const mime = ext === '.svg'
+      ? 'image/svg+xml'
+      : ext === '.jpg' || ext === '.jpeg'
+        ? 'image/jpeg'
+        : 'image/png';
+    return `data:${mime};base64,${buffer.toString('base64')}`;
+  }
+  if (fallbackBase64) {
+    return `data:${fallbackMimeType || 'image/png'};base64,${fallbackBase64}`;
+  }
+  return null;
 }
 
 async function getImageSize(filePath) {
