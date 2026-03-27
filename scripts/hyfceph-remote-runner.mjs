@@ -2507,6 +2507,138 @@ function buildToothFillElements(toothFillShapes) {
   return toothFillElements;
 }
 
+const PIXEL_BADGE_GLYPHS = {
+  '/': [
+    '00001',
+    '00010',
+    '00100',
+    '00100',
+    '01000',
+    '10000',
+    '00000',
+  ],
+  c: [
+    '01110',
+    '10001',
+    '10000',
+    '10000',
+    '10000',
+    '10001',
+    '01110',
+  ],
+  e: [
+    '01110',
+    '10001',
+    '11111',
+    '10000',
+    '10000',
+    '10001',
+    '01110',
+  ],
+  f: [
+    '00110',
+    '01001',
+    '01000',
+    '11100',
+    '01000',
+    '01000',
+    '01000',
+  ],
+  h: [
+    '10000',
+    '10000',
+    '10110',
+    '11001',
+    '10001',
+    '10001',
+    '10001',
+  ],
+  i: [
+    '00100',
+    '00000',
+    '01100',
+    '00100',
+    '00100',
+    '00100',
+    '01110',
+  ],
+  k: [
+    '10001',
+    '10010',
+    '10100',
+    '11000',
+    '10100',
+    '10010',
+    '10001',
+  ],
+  l: [
+    '11000',
+    '01000',
+    '01000',
+    '01000',
+    '01000',
+    '01001',
+    '00110',
+  ],
+  p: [
+    '11110',
+    '10001',
+    '10001',
+    '11110',
+    '10000',
+    '10000',
+    '10000',
+  ],
+  s: [
+    '01110',
+    '10001',
+    '10000',
+    '01110',
+    '00001',
+    '10001',
+    '01110',
+  ],
+  y: [
+    '10001',
+    '10001',
+    '01111',
+    '00001',
+    '00010',
+    '00100',
+    '01000',
+  ],
+};
+
+function buildPixelBadgeWordmark(text, {
+  x,
+  y,
+  pixelSize = 2,
+  charGap = 2,
+  color = '#1f2340',
+  radius = 0.6,
+} = {}) {
+  const glyphs = [];
+  let cursorX = x;
+  for (const rawChar of String(text || '').toLowerCase()) {
+    const glyph = PIXEL_BADGE_GLYPHS[rawChar];
+    if (!glyph) {
+      cursorX += pixelSize * 3;
+      continue;
+    }
+    for (let row = 0; row < glyph.length; row += 1) {
+      const rowBits = glyph[row];
+      for (let col = 0; col < rowBits.length; col += 1) {
+        if (rowBits[col] !== '1') continue;
+        glyphs.push(
+          `<rect x="${(cursorX + col * pixelSize).toFixed(2)}" y="${(y + row * pixelSize).toFixed(2)}" width="${pixelSize.toFixed(2)}" height="${pixelSize.toFixed(2)}" rx="${radius}" fill="${color}" />`,
+        );
+      }
+    }
+    cursorX += glyph[0].length * pixelSize + charGap;
+  }
+  return glyphs.join('');
+}
+
 function buildAnnotatedSvg({
   imageDataUrl,
   width,
@@ -2559,8 +2691,15 @@ function buildAnnotatedSvg({
     .join('');
 
   const cornerBadge = [
-    `<rect x="18" y="18" width="170" height="36" rx="10" fill="#ffffff" fill-opacity="0.84" stroke="#1f2340" stroke-opacity="0.18" stroke-width="1" />`,
-    `<text x="34" y="41" font-family="Menlo, Consolas, monospace" font-size="16" font-weight="700" fill="#1f2340">skill/hyfceph</text>`,
+    `<rect x="18" y="18" width="176" height="36" rx="10" fill="#ffffff" fill-opacity="0.84" stroke="#1f2340" stroke-opacity="0.18" stroke-width="1" />`,
+    buildPixelBadgeWordmark('skill/hyfceph', {
+      x: 34,
+      y: 27,
+      pixelSize: 1.8,
+      charGap: 2.2,
+      color: '#1f2340',
+      radius: 0.45,
+    }),
   ].join('');
 
   return [
