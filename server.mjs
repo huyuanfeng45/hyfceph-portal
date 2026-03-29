@@ -1962,12 +1962,6 @@ async function handleReportShortLink(request, response, code) {
     location = normalizeOssSignedUrl(await downloadClient.signatureUrlV4('GET', downloadExpiresIn, undefined, record.objectKey));
   }
 
-  const upstream = await fetch(location);
-  if (!upstream.ok) {
-    return sendText(response, 502, 'Report fetch failed.');
-  }
-
-  const html = await upstream.text();
   record.lastAccessedAt = nowIso();
   record.updatedAt = nowIso();
   store.reportLinks = {
@@ -1976,11 +1970,11 @@ async function handleReportShortLink(request, response, code) {
   };
   await writeStore(store);
 
-  response.writeHead(200, {
-    'Content-Type': 'text/html; charset=utf-8',
+  response.writeHead(302, {
+    Location: location,
     'Cache-Control': 'no-store',
   });
-  response.end(html);
+  response.end();
 }
 
 async function handleMeasureShareUrl(request, response) {
