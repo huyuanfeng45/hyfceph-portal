@@ -1,6 +1,7 @@
 const state = {
   user: null,
   adminUsers: [],
+  weixinBindingSession: null,
 };
 
 const flash = document.querySelector('#flash');
@@ -17,6 +18,15 @@ const copyKeyButton = document.querySelector('#copy-key-button');
 const copySkillLinkButton = document.querySelector('#copy-skill-link-button');
 const apiKeyOutput = document.querySelector('#api-key-output');
 const apiKeyExpiry = document.querySelector('#api-key-expiry');
+const weixinBindingStatus = document.querySelector('#weixin-binding-status');
+const weixinBindingDetail = document.querySelector('#weixin-binding-detail');
+const weixinBindingStartButton = document.querySelector('#weixin-binding-start-button');
+const weixinBindingRefreshButton = document.querySelector('#weixin-binding-refresh-button');
+const weixinBindingDeleteButton = document.querySelector('#weixin-binding-delete-button');
+const weixinBindingQrWrap = document.querySelector('#weixin-binding-qr-wrap');
+const weixinBindingQrImage = document.querySelector('#weixin-binding-qr-image');
+const weixinBindingQrCaption = document.querySelector('#weixin-binding-qr-caption');
+const weixinBindingSessionCode = document.querySelector('#weixin-binding-session-code');
 const measureImageInput = document.querySelector('#measure-image-input');
 const measureImageButton = document.querySelector('#measure-image-button');
 const measurePanel = document.querySelector('#measure-panel');
@@ -33,6 +43,7 @@ const clearOperatorSyncButton = document.querySelector('#clear-operator-sync-but
 const refreshAdminButton = document.querySelector('#refresh-admin-button');
 const adminPanel = document.querySelector('#admin-panel');
 const adminUsersBody = document.querySelector('#admin-users-body');
+let weixinBindingPollTimer = null;
 
 function showFlash(message, type = 'success') {
   flash.textContent = message;
@@ -91,6 +102,93 @@ function updateDashboard(user) {
     : '还没有 API Key，点击下方按钮生成。';
   apiKeyExpiry.textContent = user?.apiKeyExpiresAt ? formatDateTime(user.apiKeyExpiresAt) : '-';
   generateKeyButton.textContent = user?.apiKey ? '重新生成 API Key' : '生成 API Key';
+}
+
+function stopWeixinBindingPolling() {
+  if (weixinBindingPollTimer) {
+    window.clearInterval(weixinBindingPollTimer);
+    weixinBindingPollTimer = null;
+  }
+}
+
+function renderWeixinBinding() {
+  const binding = state.user?.weixinBinding || null;
+  const session = state.weixinBindingSession;
+
+  if (binding) {
+    weixinBindingStatus.textContent = '已绑定';
+    weixinBindingDetail.textContent = [
+      binding.displayUserId ? `微信用户 ${binding.displayUserId}` : '',
+      binding.boundAt ? `绑定于 ${formatDateTime(binding.boundAt)}` : '',
+    ].filter(Boolean).join('，') || '当前微信已绑定 HYFCeph。';
+    weixinBindingDeleteButton.disabled = false;
+  } else if (session?.active) {
+    weixinBindingStatus.textContent = session.status === 'scaned' ? '已扫码，待确认' : '等待扫码';
+    weixinBindingDetail.textContent = session.message || '二维码已生成，请使用微信扫码完成绑定。';
+    weixinBindingDeleteButton.disabled = true;
+  } else {
+    weixinBindingStatus.textContent = '未绑定';
+    weixinBindingDetail.textContent = '先在这里生成二维码，再用微信扫描完成绑定。绑定成功后，就能在微信里直接把侧位片发给 HYFCeph。';
+    weixinBindingDeleteButton.disabled = true;
+  }
+
+  if (session?.qrcodeUrl && session?.active && !binding) {
+    weixinBindingQrImage.src = session.qrcodeUrl;
+    weixinBindingQrWrap.classList.remove('hidden');
+    weixinBindingQrCaption.textContent = session.message || '二维码已生成，系统会自动轮询绑定状态。';
+    weixinBindingSessionCode.textContent = session.sessionKey ? `会话：${session.sessionKey}` : '';
+  } else {
+    weixinBindingQrWrap.classList.add('hidden');
+    weixinBindingQrImage.removeAttribute('src');
+    weixinBindingQrCaption.textContent = '二维码生成后，会在这里自动轮询绑定状态。';
+    weixinBindingSessionCode.textContent = '';
+  }
+}
+
+async function refreshWeixinBindingStatus() {
+  const sessionKey = state.weixinBindingSession?.sessionKey;
+  if (!sessionKey) {
+    renderWeixinBinding();
+    return;
+  }
+
+  try {
+    const payload = await requestJson(`/api/weixin/binding/status?sessionKey=${encodeURIComponent(sessionKey)}`, {
+      method: 'GET',
+    });
+    state.weixinBindingSession = payload.session || null;
+    if (payload.user) {
+      state.user = payload.user;
+      updateDashboard(state.user);
+      stopWeixinBindingPolling();
+      state.weixinBindingSession = null;
+      showFlash('微信绑定成功，现在可以去微信里直接使用 HYFCeph 了。');
+    } else if (!payload.session?.active) {
+      stopWeixinBindingPolling();
+    }
+    renderWeixinBinding();
+  } catch (error) {
+    if (/过期|不存在/.test(error.message)) {
+      state.weixinBindingSession = null;
+      stopWeixinBindingPolling();
+      renderWeixinBinding();
+    }
+    throw error;
+  }
+}
+
+function ensureWeixinBindingPolling() {
+  stopWeixinBindingPolling();
+  if (!state.weixinBindingSession?.sessionKey) {
+    return;
+  }
+  weixinBindingPollTimer = window.setInterval(async () => {
+    try {
+      await refreshWeixinBindingStatus();
+    } catch {
+      // Ignore polling jitter; manual refresh still surfaces errors.
+    }
+  }, 3000);
 }
 
 function resetMeasureResult() {
@@ -306,6 +404,7 @@ async function syncAuthUi() {
     registerTab.classList.add('hidden');
     loginTab.classList.add('hidden');
     updateDashboard(state.user);
+    renderWeixinBinding();
     measurePanel.classList.toggle('hidden', !isAdmin);
     operatorSyncPanel.classList.toggle('hidden', !isAdmin);
     adminPanel.classList.toggle('hidden', !isAdmin);
@@ -313,7 +412,10 @@ async function syncAuthUi() {
     await loadOperatorSyncStatus();
     await loadAdminUsers();
   } else {
+    state.weixinBindingSession = null;
+    stopWeixinBindingPolling();
     renderOperatorSyncStatus(null);
+    renderWeixinBinding();
     measurePanel.classList.add('hidden');
     operatorSyncPanel.classList.add('hidden');
     adminPanel.classList.add('hidden');
@@ -332,6 +434,7 @@ async function loadCurrentUser() {
     state.user = null;
   }
   resetMeasureResult();
+  renderWeixinBinding();
   await syncAuthUi();
 }
 
@@ -440,6 +543,59 @@ copySkillLinkButton?.addEventListener('click', async () => {
     showFlash('Skill 直链已复制。把它粘贴到 OpenClaw 对话框中发送即可安装。');
   } catch {
     showFlash('复制失败，请手动复制直链。', 'error');
+  }
+});
+
+weixinBindingStartButton?.addEventListener('click', async () => {
+  clearFlash();
+  try {
+    weixinBindingStartButton.disabled = true;
+    const payload = await requestJson('/api/weixin/binding/start', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    state.weixinBindingSession = payload.session || null;
+    renderWeixinBinding();
+    ensureWeixinBindingPolling();
+    showFlash('绑定二维码已生成，请用微信扫码。');
+  } catch (error) {
+    showFlash(error.message, 'error');
+  } finally {
+    weixinBindingStartButton.disabled = false;
+  }
+});
+
+weixinBindingRefreshButton?.addEventListener('click', async () => {
+  clearFlash();
+  try {
+    await refreshWeixinBindingStatus();
+    showFlash('微信绑定状态已刷新。');
+  } catch (error) {
+    showFlash(error.message, 'error');
+  }
+});
+
+weixinBindingDeleteButton?.addEventListener('click', async () => {
+  clearFlash();
+  const shouldContinue = window.confirm('解绑后，这个微信账号将不能继续在 Clawbot 中使用 HYFCeph。是否继续？');
+  if (!shouldContinue) {
+    return;
+  }
+  try {
+    await requestJson('/api/weixin/binding', {
+      method: 'DELETE',
+      body: JSON.stringify({}),
+    });
+    state.weixinBindingSession = null;
+    stopWeixinBindingPolling();
+    if (state.user) {
+      state.user.weixinBinding = null;
+      state.user.updatedAt = new Date().toISOString();
+    }
+    renderWeixinBinding();
+    showFlash('微信绑定已解除。');
+  } catch (error) {
+    showFlash(error.message, 'error');
   }
 });
 

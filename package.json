@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node server.mjs",
     "dev": "node server.mjs",
+    "weixin:bot": "node scripts/hyfceph-weixin-bot.mjs",
     "publish:skill": "node scripts/publish-skill-package.mjs"
   },
   "engines": {
@@ -20,6 +21,7 @@
     "ali-oss": "^6.23.0",
     "d3-shape": "^3.2.0",
     "node-source-han-sans-sc": "^1.1.0-2.001R",
-    "pdf-lib": "^1.17.1"
+    "pdf-lib": "^1.17.1",
+    "weixin-agent-sdk": "^0.3.0"
   }
 }

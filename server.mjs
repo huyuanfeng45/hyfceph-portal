@@ -51,6 +51,13 @@ const PDF_OSS_PUBLIC_READ = /^(1|true|yes)$/i.test(String(process.env.HYFCEPH_PD
 const OSS_V4_MAX_EXPIRES_SECONDS = 60 * 60 * 24 * 7;
 const PDF_SHORT_LINK_TTL_DAYS = Number(process.env.HYFCEPH_PDF_SHORT_LINK_TTL_DAYS || '365');
 const REPORT_SHORT_LINK_TTL_DAYS = Number(process.env.HYFCEPH_REPORT_SHORT_LINK_TTL_DAYS || '365');
+const WEIXIN_FIXED_BASE_URL = (process.env.HYFCEPH_WEIXIN_API_BASE_URL || 'https://ilinkai.weixin.qq.com').replace(/\/+$/, '');
+const WEIXIN_BOT_TYPE = String(process.env.HYFCEPH_WEIXIN_BOT_TYPE || '3').trim() || '3';
+const WEIXIN_BINDING_TTL_MINUTES = Number(process.env.HYFCEPH_WEIXIN_BINDING_TTL_MINUTES || '10');
+const WEIXIN_QR_TIMEOUT_MS = Number(process.env.HYFCEPH_WEIXIN_QR_TIMEOUT_MS || '5000');
+const WEIXIN_QR_POLL_TIMEOUT_MS = Number(process.env.HYFCEPH_WEIXIN_QR_POLL_TIMEOUT_MS || '35000');
+const WEIXIN_BOT_SECRET = process.env.HYFCEPH_WEIXIN_BOT_SECRET
+  || createHmac('sha256', SESSION_SECRET).update('hyfceph-weixin-bot').digest('hex');
 
 let blobSdkPromise = null;
 let resvgPromise = null;
@@ -532,6 +539,31 @@ function isBridgeStateActive(bridgeState) {
   return new Date(bridgeState.expiresAt).getTime() > Date.now();
 }
 
+function maskWeixinUserId(value) {
+  const source = String(value || '').trim();
+  if (!source) {
+    return null;
+  }
+  if (source.length <= 6) {
+    return source;
+  }
+  return `${source.slice(0, 3)}***${source.slice(-3)}`;
+}
+
+function publicWeixinBinding(binding) {
+  if (!binding) {
+    return null;
+  }
+  return {
+    source: binding.source,
+    boundAt: binding.boundAt,
+    updatedAt: binding.updatedAt,
+    botAccountId: binding.botAccountId || null,
+    displayUserId: maskWeixinUserId(binding.weixinUserId),
+    active: true,
+  };
+}
+
 function publicUser(user) {
   return {
     id: user.id,
@@ -546,6 +578,28 @@ function publicUser(user) {
     apiKey: user.apiKey || null,
     apiKeyExpiresAt: user.apiKeyExpiresAt || null,
     apiKeyActive: isApiKeyActive(user),
+    weixinBinding: publicWeixinBinding(user.weixinBinding),
+  };
+}
+
+function normalizeWeixinBindingRecord(binding) {
+  if (!binding || typeof binding !== 'object') {
+    return null;
+  }
+  const weixinUserId = typeof binding.weixinUserId === 'string' ? binding.weixinUserId.trim() : '';
+  if (!weixinUserId) {
+    return null;
+  }
+  return {
+    source: typeof binding.source === 'string' && binding.source.trim()
+      ? binding.source.trim()
+      : 'weixin-clawbot',
+    weixinUserId,
+    botAccountId: typeof binding.botAccountId === 'string' && binding.botAccountId.trim()
+      ? binding.botAccountId.trim()
+      : null,
+    boundAt: isIsoDate(binding.boundAt) ? new Date(binding.boundAt).toISOString() : nowIso(),
+    updatedAt: isIsoDate(binding.updatedAt) ? new Date(binding.updatedAt).toISOString() : nowIso(),
   };
 }
 
@@ -564,6 +618,7 @@ function normalizeUserRecord(user) {
     updatedAt: isIsoDate(user?.updatedAt) ? new Date(user.updatedAt).toISOString() : nowIso(),
     lastLoginAt: isIsoDate(user?.lastLoginAt) ? new Date(user.lastLoginAt).toISOString() : null,
     currentCaseBridge: normalizeBridgeState(user?.currentCaseBridge),
+    weixinBinding: normalizeWeixinBindingRecord(user?.weixinBinding),
   };
 }
 
@@ -673,6 +728,125 @@ function publicOperatorSession(operatorSession) {
   };
 }
 
+function normalizeWeixinBotRecord(record) {
+  if (!record || typeof record !== 'object') {
+    return null;
+  }
+  const accountId = typeof record.accountId === 'string' ? record.accountId.trim() : '';
+  const token = typeof record.token === 'string' ? record.token.trim() : '';
+  if (!accountId || !token) {
+    return null;
+  }
+  return {
+    accountId,
+    token,
+    baseUrl: typeof record.baseUrl === 'string' && record.baseUrl.trim()
+      ? record.baseUrl.trim().replace(/\/+$/, '')
+      : WEIXIN_FIXED_BASE_URL,
+    botType: typeof record.botType === 'string' && record.botType.trim()
+      ? record.botType.trim()
+      : WEIXIN_BOT_TYPE,
+    configuredAt: isIsoDate(record.configuredAt) ? new Date(record.configuredAt).toISOString() : nowIso(),
+    updatedAt: isIsoDate(record.updatedAt) ? new Date(record.updatedAt).toISOString() : nowIso(),
+    lastLinkedUserId: typeof record.lastLinkedUserId === 'string' && record.lastLinkedUserId.trim()
+      ? record.lastLinkedUserId.trim()
+      : null,
+  };
+}
+
+function publicWeixinBotRecord(record) {
+  if (!record) {
+    return {
+      configured: false,
+    };
+  }
+  return {
+    configured: true,
+    accountId: record.accountId,
+    baseUrl: record.baseUrl,
+    botType: record.botType,
+    configuredAt: record.configuredAt,
+    updatedAt: record.updatedAt,
+    lastLinkedUserId: maskWeixinUserId(record.lastLinkedUserId),
+    token: record.token,
+  };
+}
+
+function isWeixinBindingSessionActive(session) {
+  if (!session?.expiresAt) {
+    return false;
+  }
+  return new Date(session.expiresAt).getTime() > Date.now();
+}
+
+function normalizeWeixinBindingSessionRecord(sessionKey, session) {
+  if (!session || typeof session !== 'object') {
+    return null;
+  }
+  const normalizedSessionKey = String(sessionKey || session.sessionKey || '').trim();
+  const qrcode = typeof session.qrcode === 'string' ? session.qrcode.trim() : '';
+  const qrcodeUrl = typeof session.qrcodeUrl === 'string' ? session.qrcodeUrl.trim() : '';
+  const userId = typeof session.userId === 'string' ? session.userId.trim() : '';
+  if (!normalizedSessionKey || !qrcode || !qrcodeUrl || !userId) {
+    return null;
+  }
+  return {
+    sessionKey: normalizedSessionKey,
+    userId,
+    qrcode,
+    qrcodeUrl,
+    botType: typeof session.botType === 'string' && session.botType.trim()
+      ? session.botType.trim()
+      : WEIXIN_BOT_TYPE,
+    status: typeof session.status === 'string' && session.status.trim()
+      ? session.status.trim()
+      : 'wait',
+    message: typeof session.message === 'string' && session.message.trim()
+      ? session.message.trim()
+      : '',
+    currentApiBaseUrl: typeof session.currentApiBaseUrl === 'string' && session.currentApiBaseUrl.trim()
+      ? session.currentApiBaseUrl.trim().replace(/\/+$/, '')
+      : WEIXIN_FIXED_BASE_URL,
+    redirectHost: typeof session.redirectHost === 'string' && session.redirectHost.trim()
+      ? session.redirectHost.trim()
+      : null,
+    startedAt: isIsoDate(session.startedAt) ? new Date(session.startedAt).toISOString() : nowIso(),
+    updatedAt: isIsoDate(session.updatedAt) ? new Date(session.updatedAt).toISOString() : nowIso(),
+    expiresAt: isIsoDate(session.expiresAt)
+      ? new Date(session.expiresAt).toISOString()
+      : addMinutesIso(WEIXIN_BINDING_TTL_MINUTES),
+  };
+}
+
+function normalizeWeixinBindingSessionMap(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const out = {};
+  for (const [sessionKey, session] of Object.entries(source)) {
+    const normalized = normalizeWeixinBindingSessionRecord(sessionKey, session);
+    if (normalized && isWeixinBindingSessionActive(normalized)) {
+      out[normalized.sessionKey] = normalized;
+    }
+  }
+  return out;
+}
+
+function publicWeixinBindingSession(session) {
+  if (!session) {
+    return null;
+  }
+  return {
+    sessionKey: session.sessionKey,
+    qrcodeUrl: session.qrcodeUrl,
+    botType: session.botType,
+    status: session.status,
+    message: session.message || '',
+    startedAt: session.startedAt,
+    updatedAt: session.updatedAt,
+    expiresAt: session.expiresAt,
+    active: isWeixinBindingSessionActive(session),
+  };
+}
+
 function normalizeStoreRecord(store) {
   const source = store && typeof store === 'object' ? store : {};
   return {
@@ -680,6 +854,8 @@ function normalizeStoreRecord(store) {
     operatorSession: normalizeOperatorSession(source.operatorSession),
     pdfLinks: normalizePdfLinkMap(source.pdfLinks),
     reportLinks: normalizeReportLinkMap(source.reportLinks),
+    weixinBot: normalizeWeixinBotRecord(source.weixinBot),
+    weixinBindingSessions: normalizeWeixinBindingSessionMap(source.weixinBindingSessions),
   };
 }
 
@@ -1561,6 +1737,108 @@ async function sendBarkPush(title, body) {
   }
 }
 
+async function fetchJsonWithTimeout(url, { method = 'GET', headers = {}, body, timeoutMs = 5000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method,
+      headers,
+      body,
+      signal: controller.signal,
+    });
+    const raw = await response.text();
+    if (!response.ok) {
+      throw new Error(raw || `HTTP ${response.status}`);
+    }
+    return raw.trim() ? JSON.parse(raw) : {};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchWeixinBindingQrCode(botType = WEIXIN_BOT_TYPE) {
+  const url = new URL('/ilink/bot/get_bot_qrcode', WEIXIN_FIXED_BASE_URL);
+  url.searchParams.set('bot_type', botType);
+  const payload = await fetchJsonWithTimeout(url, {
+    method: 'GET',
+    timeoutMs: WEIXIN_QR_TIMEOUT_MS,
+  });
+  const qrcode = String(payload.qrcode || '').trim();
+  const qrcodeUrl = String(payload.qrcode_img_content || '').trim();
+  if (!qrcode || !qrcodeUrl) {
+    throw new Error('微信二维码获取失败。');
+  }
+  return {
+    qrcode,
+    qrcodeUrl,
+  };
+}
+
+async function pollWeixinBindingStatus(session) {
+  const baseUrl = (session?.currentApiBaseUrl || WEIXIN_FIXED_BASE_URL).replace(/\/+$/, '');
+  const url = new URL('/ilink/bot/get_qrcode_status', baseUrl);
+  url.searchParams.set('qrcode', session.qrcode);
+  try {
+    const payload = await fetchJsonWithTimeout(url, {
+      method: 'GET',
+      timeoutMs: WEIXIN_QR_POLL_TIMEOUT_MS,
+    });
+    return {
+      status: typeof payload.status === 'string' ? payload.status.trim() : 'wait',
+      botToken: typeof payload.bot_token === 'string' ? payload.bot_token.trim() : '',
+      accountId: typeof payload.ilink_bot_id === 'string' ? payload.ilink_bot_id.trim() : '',
+      baseUrl: typeof payload.baseurl === 'string' && payload.baseurl.trim()
+        ? payload.baseurl.trim().replace(/\/+$/, '')
+        : baseUrl,
+      weixinUserId: typeof payload.ilink_user_id === 'string' ? payload.ilink_user_id.trim() : '',
+      redirectHost: typeof payload.redirect_host === 'string' ? payload.redirect_host.trim() : '',
+    };
+  } catch (error) {
+    if (error instanceof Error && /timeout/i.test(error.message)) {
+      return {
+        status: 'wait',
+        botToken: '',
+        accountId: '',
+        baseUrl,
+        weixinUserId: '',
+        redirectHost: '',
+      };
+    }
+    throw error;
+  }
+}
+
+function findUserByWeixinUserId(store, weixinUserId) {
+  const normalized = String(weixinUserId || '').trim();
+  if (!normalized) {
+    return null;
+  }
+  return store.users.find((item) => item.weixinBinding?.weixinUserId === normalized) || null;
+}
+
+function secureCompareText(left, right) {
+  const leftBuffer = Buffer.from(String(left || ''), 'utf8');
+  const rightBuffer = Buffer.from(String(right || ''), 'utf8');
+  if (!leftBuffer.length || leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+  return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function requireWeixinBotSecret(request, response) {
+  const provided = String(
+    request.headers['x-hyfceph-weixin-secret']
+      || request.headers['x-weixin-bot-secret']
+      || '',
+  ).trim();
+  if (!provided || !secureCompareText(provided, WEIXIN_BOT_SECRET)) {
+    sendJson(response, 401, { error: '微信 bot 认证失败。' });
+    return false;
+  }
+  return true;
+}
+
 async function handleRegister(request, response) {
   const payload = await readRequestJson(request);
   const name = String(payload.name || '').trim();
@@ -1648,6 +1926,265 @@ async function handleCurrentUser(request, response) {
     return sendJson(response, 401, { error: '未登录。' });
   }
   return sendJson(response, 200, { user: publicUser(user) });
+}
+
+async function handleWeixinBindingStart(request, response) {
+  const currentUser = await getSessionUser(request);
+  if (!currentUser) {
+    return sendJson(response, 401, { error: '请先登录。' });
+  }
+
+  const store = await readStore();
+  const user = store.users.find((item) => item.id === currentUser.id);
+  if (!user) {
+    return sendJson(response, 404, { error: '用户不存在。' });
+  }
+
+  try {
+    const qr = await fetchWeixinBindingQrCode(WEIXIN_BOT_TYPE);
+    const sessionKey = randomBytes(12).toString('base64url');
+    const nextSessions = { ...(store.weixinBindingSessions || {}) };
+
+    for (const [code, session] of Object.entries(nextSessions)) {
+      if (session?.userId === user.id) {
+        delete nextSessions[code];
+      }
+    }
+
+    const session = normalizeWeixinBindingSessionRecord(sessionKey, {
+      sessionKey,
+      userId: user.id,
+      qrcode: qr.qrcode,
+      qrcodeUrl: qr.qrcodeUrl,
+      botType: WEIXIN_BOT_TYPE,
+      status: 'wait',
+      message: '请使用微信扫描二维码完成 Clawbot 绑定。',
+      currentApiBaseUrl: WEIXIN_FIXED_BASE_URL,
+      startedAt: nowIso(),
+      updatedAt: nowIso(),
+      expiresAt: addMinutesIso(WEIXIN_BINDING_TTL_MINUTES),
+    });
+
+    nextSessions[sessionKey] = session;
+    store.weixinBindingSessions = nextSessions;
+    user.updatedAt = nowIso();
+    await writeStore(store);
+
+    return sendJson(response, 200, {
+      ok: true,
+      session: publicWeixinBindingSession(session),
+      binding: publicWeixinBinding(user.weixinBinding),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return sendJson(response, 502, { error: message || '微信绑定二维码生成失败。' });
+  }
+}
+
+async function handleWeixinBindingStatus(request, response, sessionKey) {
+  const currentUser = await getSessionUser(request);
+  if (!currentUser) {
+    return sendJson(response, 401, { error: '请先登录。' });
+  }
+
+  const normalizedSessionKey = String(sessionKey || '').trim();
+  if (!normalizedSessionKey) {
+    return sendJson(response, 400, { error: '缺少绑定会话。' });
+  }
+
+  const store = await readStore();
+  const user = store.users.find((item) => item.id === currentUser.id);
+  if (!user) {
+    return sendJson(response, 404, { error: '用户不存在。' });
+  }
+
+  const session = normalizeWeixinBindingSessionRecord(
+    normalizedSessionKey,
+    store.weixinBindingSessions?.[normalizedSessionKey],
+  );
+  if (!session || session.userId !== user.id) {
+    return sendJson(response, 404, { error: '绑定会话不存在。' });
+  }
+  if (!isWeixinBindingSessionActive(session)) {
+    const nextSessions = { ...(store.weixinBindingSessions || {}) };
+    delete nextSessions[normalizedSessionKey];
+    store.weixinBindingSessions = nextSessions;
+    await writeStore(store);
+    return sendJson(response, 410, {
+      ok: false,
+      expired: true,
+      error: '二维码已过期，请重新生成。',
+    });
+  }
+
+  try {
+    const polled = await pollWeixinBindingStatus(session);
+    const nextSessions = { ...(store.weixinBindingSessions || {}) };
+    const nextSession = normalizeWeixinBindingSessionRecord(normalizedSessionKey, {
+      ...session,
+      status: polled.status || session.status,
+      message: polled.status === 'scaned'
+        ? '已扫码，请在微信中继续确认。'
+        : polled.status === 'confirmed'
+          ? '绑定已确认。'
+          : polled.status === 'expired'
+            ? '二维码已过期。'
+            : session.message,
+      currentApiBaseUrl: polled.redirectHost ? `https://${polled.redirectHost}` : (polled.baseUrl || session.currentApiBaseUrl),
+      redirectHost: polled.redirectHost || session.redirectHost,
+      updatedAt: nowIso(),
+    });
+
+    if (polled.status === 'scaned_but_redirect' && polled.redirectHost) {
+      nextSessions[normalizedSessionKey] = nextSession;
+      store.weixinBindingSessions = nextSessions;
+      await writeStore(store);
+      return sendJson(response, 200, {
+        ok: true,
+        connected: false,
+        session: publicWeixinBindingSession(nextSession),
+        binding: publicWeixinBinding(user.weixinBinding),
+      });
+    }
+
+    if (polled.status === 'expired') {
+      delete nextSessions[normalizedSessionKey];
+      store.weixinBindingSessions = nextSessions;
+      await writeStore(store);
+      return sendJson(response, 410, {
+        ok: false,
+        expired: true,
+        error: '二维码已过期，请重新生成。',
+      });
+    }
+
+    if (polled.status === 'confirmed' && polled.weixinUserId) {
+      const existing = findUserByWeixinUserId(store, polled.weixinUserId);
+      if (existing && existing.id !== user.id) {
+        return sendJson(response, 409, {
+          error: '这个微信已经绑定到其他 HYFCeph 账号，请先解绑后再试。',
+        });
+      }
+
+      user.weixinBinding = normalizeWeixinBindingRecord({
+        source: 'weixin-clawbot',
+        weixinUserId: polled.weixinUserId,
+        botAccountId: polled.accountId || store.weixinBot?.accountId || null,
+        boundAt: user.weixinBinding?.boundAt || nowIso(),
+        updatedAt: nowIso(),
+      });
+      user.updatedAt = nowIso();
+
+      if (polled.botToken && polled.accountId) {
+        const existingBot = normalizeWeixinBotRecord(store.weixinBot);
+        store.weixinBot = normalizeWeixinBotRecord({
+          accountId: polled.accountId,
+          token: polled.botToken,
+          baseUrl: polled.baseUrl || existingBot?.baseUrl || WEIXIN_FIXED_BASE_URL,
+          botType: session.botType || WEIXIN_BOT_TYPE,
+          configuredAt: existingBot?.configuredAt || nowIso(),
+          updatedAt: nowIso(),
+          lastLinkedUserId: polled.weixinUserId,
+        });
+      }
+
+      delete nextSessions[normalizedSessionKey];
+      store.weixinBindingSessions = nextSessions;
+      await writeStore(store);
+
+      return sendJson(response, 200, {
+        ok: true,
+        connected: true,
+        binding: publicWeixinBinding(user.weixinBinding),
+        user: publicUser(user),
+        weixinBot: publicWeixinBotRecord(store.weixinBot),
+      });
+    }
+
+    nextSessions[normalizedSessionKey] = nextSession;
+    store.weixinBindingSessions = nextSessions;
+    await writeStore(store);
+    return sendJson(response, 200, {
+      ok: true,
+      connected: false,
+      session: publicWeixinBindingSession(nextSession),
+      binding: publicWeixinBinding(user.weixinBinding),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return sendJson(response, 502, { error: message || '微信绑定状态刷新失败。' });
+  }
+}
+
+async function handleWeixinBindingDelete(request, response) {
+  const currentUser = await getSessionUser(request);
+  if (!currentUser) {
+    return sendJson(response, 401, { error: '请先登录。' });
+  }
+
+  const store = await readStore();
+  const user = store.users.find((item) => item.id === currentUser.id);
+  if (!user) {
+    return sendJson(response, 404, { error: '用户不存在。' });
+  }
+
+  user.weixinBinding = null;
+  user.updatedAt = nowIso();
+
+  const nextSessions = { ...(store.weixinBindingSessions || {}) };
+  for (const [code, session] of Object.entries(nextSessions)) {
+    if (session?.userId === user.id) {
+      delete nextSessions[code];
+    }
+  }
+  store.weixinBindingSessions = nextSessions;
+  await writeStore(store);
+
+  return sendJson(response, 200, {
+    ok: true,
+    user: publicUser(user),
+  });
+}
+
+async function handleWeixinBotConfigGet(request, response) {
+  if (!requireWeixinBotSecret(request, response)) {
+    return;
+  }
+
+  const store = await readStore();
+  return sendJson(response, 200, {
+    ok: true,
+    bot: publicWeixinBotRecord(store.weixinBot),
+  });
+}
+
+async function handleWeixinBotResolveUser(request, response) {
+  if (!requireWeixinBotSecret(request, response)) {
+    return;
+  }
+
+  const payload = await readRequestJson(request);
+  const weixinUserId = String(payload.weixinUserId || payload.conversationId || '').trim();
+  if (!weixinUserId) {
+    return sendJson(response, 400, { error: '缺少微信用户标识。' });
+  }
+
+  const store = await readStore();
+  const user = findUserByWeixinUserId(store, weixinUserId);
+  if (!user) {
+    return sendJson(response, 404, { error: '这个微信尚未绑定 HYFCeph 账号。' });
+  }
+  if (!isApiKeyActive(user)) {
+    return sendJson(response, 403, { error: '绑定账号缺少有效 API Key，请先回到门户生成 API Key。' });
+  }
+
+  return sendJson(response, 200, {
+    ok: true,
+    user: publicUser(user),
+    auth: {
+      apiKey: user.apiKey,
+    },
+  });
 }
 
 async function handleGenerateApiKey(request, response) {
@@ -2394,6 +2931,8 @@ export async function handleNodeRequest(request, response) {
         operatorSessionActive: isOperatorSessionActive(store.operatorSession),
         pdfOssConfigured: isPdfOssConfigured(),
         pdfOssCustomDomain: PDF_OSS_CUSTOM_DOMAIN ? `https://${PDF_OSS_CUSTOM_DOMAIN}` : null,
+        weixinBotConfigured: Boolean(store.weixinBot?.token && store.weixinBot?.accountId),
+        weixinBindingSessions: Object.keys(store.weixinBindingSessions || {}).length,
       });
     }
     if (request.method === 'POST' && url.pathname === '/api/register') {
@@ -2407,6 +2946,22 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'GET' && url.pathname === '/api/me') {
       return await handleCurrentUser(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/weixin/binding/start') {
+      return await handleWeixinBindingStart(request, response);
+    }
+    if (request.method === 'GET' && url.pathname === '/api/weixin/binding/status') {
+      const sessionKey = String(url.searchParams.get('sessionKey') || '').trim();
+      return await handleWeixinBindingStatus(request, response, sessionKey);
+    }
+    if (request.method === 'DELETE' && url.pathname === '/api/weixin/binding') {
+      return await handleWeixinBindingDelete(request, response);
+    }
+    if (request.method === 'GET' && url.pathname === '/api/weixin/bot/config') {
+      return await handleWeixinBotConfigGet(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/weixin/bot/resolve-user') {
+      return await handleWeixinBotResolveUser(request, response);
     }
     if (request.method === 'POST' && url.pathname === '/api/api-key/generate') {
       return await handleGenerateApiKey(request, response);

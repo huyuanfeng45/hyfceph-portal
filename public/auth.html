@@ -160,6 +160,40 @@
 
                   <p class="api-note">重新生成后，旧 Key 会立即失效。仅在需要轮换时再重新生成。</p>
                 </div>
+
+                <div id="weixin-binding-panel" class="dashboard-card weixin-binding-card">
+                  <div class="api-header">
+                    <div>
+                      <div class="section-kicker">WeChat</div>
+                      <div class="api-card-title">绑定微信 Clawbot</div>
+                      <div class="api-tip">绑定后，就可以在微信里直接把侧位片发给 HYFCeph。这个入口只用于 HYFCeph，不会变成普通聊天机器人。</div>
+                    </div>
+                  </div>
+
+                  <div class="dashboard-row">
+                    <span class="label">当前状态</span>
+                    <strong id="weixin-binding-status">未绑定</strong>
+                  </div>
+
+                  <p id="weixin-binding-detail" class="api-note">
+                    先在这里生成二维码，再用微信扫描完成绑定。绑定成功后，这个微信账号就能直接使用 HYFCeph。
+                  </p>
+
+                  <section id="weixin-binding-qr-wrap" class="weixin-binding-qr hidden">
+                    <img id="weixin-binding-qr-image" class="weixin-binding-qr-image" alt="微信 Clawbot 绑定二维码" />
+                    <div class="weixin-binding-qr-meta">
+                      <strong>请使用微信扫码完成绑定</strong>
+                      <span id="weixin-binding-qr-caption">二维码生成后，会在这里自动轮询绑定状态。</span>
+                      <code id="weixin-binding-session-code"></code>
+                    </div>
+                  </section>
+
+                  <div class="api-actions weixin-binding-actions">
+                    <button id="weixin-binding-start-button" class="primary-button" type="button">生成绑定二维码</button>
+                    <button id="weixin-binding-refresh-button" class="ghost-button" type="button">刷新状态</button>
+                    <button id="weixin-binding-delete-button" class="ghost-button" type="button">解绑微信</button>
+                  </div>
+                </div>
               </div>
 
               <div class="dashboard-column dashboard-column-wide">
