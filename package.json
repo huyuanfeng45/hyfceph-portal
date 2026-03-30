@@ -12,6 +12,7 @@
     "weixin:bot:install:launchd": "node scripts/hyfceph-weixin-bot-launchd-install.mjs",
     "weixin:bot:uninstall:launchd": "node scripts/hyfceph-weixin-bot-launchd-uninstall.mjs",
     "weixin:bot:status": "node scripts/hyfceph-weixin-bot-launchd-status.mjs",
+    "store:migrate": "node scripts/hyfceph-store-migrate.mjs",
     "publish:skill": "node scripts/publish-skill-package.mjs"
   },
   "engines": {

@@ -114,6 +114,44 @@ HYFCEPH_FEISHU_BITABLE_TABLE_ID=your_bitable_table_id
 
 The portal stores the full HYFCeph JSON state in one Bitable record keyed by `hyfceph-store`.
 
+## Recovering old Blob data into Feishu
+
+When Blob access becomes available again, you can export or migrate the old store directly.
+
+Preview a migration from Blob to Feishu:
+
+```bash
+HYFCEPH_STORE_BLOB_PATH=hyfceph/users.json \
+BLOB_READ_WRITE_TOKEN=your_blob_token \
+HYFCEPH_FEISHU_APP_ID=your_feishu_app_id \
+HYFCEPH_FEISHU_APP_SECRET=your_feishu_app_secret \
+HYFCEPH_FEISHU_BITABLE_APP_TOKEN=your_bitable_app_token \
+HYFCEPH_FEISHU_BITABLE_TABLE_ID=your_bitable_table_id \
+npm run store:migrate -- --from blob --to feishu-bitable --mode merge --dry-run
+```
+
+Apply the migration:
+
+```bash
+HYFCEPH_STORE_BLOB_PATH=hyfceph/users.json \
+BLOB_READ_WRITE_TOKEN=your_blob_token \
+HYFCEPH_FEISHU_APP_ID=your_feishu_app_id \
+HYFCEPH_FEISHU_APP_SECRET=your_feishu_app_secret \
+HYFCEPH_FEISHU_BITABLE_APP_TOKEN=your_bitable_app_token \
+HYFCEPH_FEISHU_BITABLE_TABLE_ID=your_bitable_table_id \
+npm run store:migrate -- --from blob --to feishu-bitable --mode merge
+```
+
+If you manage to export a historical JSON file first, you can also import it:
+
+```bash
+HYFCEPH_FEISHU_APP_ID=your_feishu_app_id \
+HYFCEPH_FEISHU_APP_SECRET=your_feishu_app_secret \
+HYFCEPH_FEISHU_BITABLE_APP_TOKEN=your_bitable_app_token \
+HYFCEPH_FEISHU_BITABLE_TABLE_ID=your_bitable_table_id \
+npm run store:migrate -- --from file --file ./old-users.json --to feishu-bitable --mode merge
+```
+
 ## WeChat bot on a local Mac
 
 If you want the WeChat Clawbot bridge to keep running on your own Mac, use the bundled `launchd` installer.
