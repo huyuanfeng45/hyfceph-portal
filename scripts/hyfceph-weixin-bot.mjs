@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { start as startWeixinBot } from 'weixin-agent-sdk';
+import { start as startWeixinBot } from './vendor/weixin-agent-sdk-hyf.mjs';
 
 const PORTAL_BASE_URL = (process.env.HYFCEPH_WEIXIN_PORTAL_BASE_URL || 'http://127.0.0.1:3077').replace(/\/+$/, '');
 const WEIXIN_BOT_SECRET = String(process.env.HYFCEPH_WEIXIN_BOT_SECRET || '').trim();
