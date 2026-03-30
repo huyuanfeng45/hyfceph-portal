@@ -38,6 +38,13 @@ const FEISHU_BITABLE_APP_TOKEN = process.env.HYFCEPH_FEISHU_BITABLE_APP_TOKEN ||
 const FEISHU_BITABLE_TABLE_ID = process.env.HYFCEPH_FEISHU_BITABLE_TABLE_ID || '';
 const FEISHU_STORE_KEY = process.env.HYFCEPH_FEISHU_STORE_KEY || 'hyfceph-store';
 const FEISHU_API_BASE = (process.env.HYFCEPH_FEISHU_API_BASE || 'https://open.feishu.cn/open-apis').replace(/\/+$/, '');
+const FEISHU_WEB_BASE = (() => {
+  const configured = String(process.env.HYFCEPH_FEISHU_WEB_BASE || '').trim();
+  if (configured) {
+    return configured.replace(/\/+$/, '');
+  }
+  return 'https://my.feishu.cn';
+})();
 const FEISHU_STORE_PAYLOAD_FIELD = process.env.HYFCEPH_FEISHU_STORE_PAYLOAD_FIELD || 'payload';
 const FEISHU_STORE_UPDATED_AT_FIELD = process.env.HYFCEPH_FEISHU_STORE_UPDATED_AT_FIELD || 'updated_at';
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -430,6 +437,167 @@ async function loadReportPayloadFromOss(objectKey) {
   }
   const buffer = Buffer.isBuffer(content) ? content : Buffer.from(content);
   return JSON.parse(buffer.toString('utf8'));
+}
+
+async function loadTextObjectFromOss(objectKey) {
+  if (!isPdfOssConfigured()) {
+    throw new Error('报告存储未配置。');
+  }
+
+  const client = await getPdfOssClient();
+  const response = await client.get(objectKey);
+  const content = response?.content;
+  if (!content) {
+    throw new Error('报告内容不存在。');
+  }
+  const buffer = Buffer.isBuffer(content) ? content : Buffer.from(content);
+  return buffer.toString('utf8');
+}
+
+function buildFeishuDocUrl(documentId) {
+  return `${FEISHU_WEB_BASE}/docx/${encodeURIComponent(documentId)}`;
+}
+
+function formatMetricValueText(metric) {
+  if (!metric) {
+    return '-';
+  }
+  return metric.valueText || (Number.isFinite(metric.value) ? String(metric.value) : '-');
+}
+
+function pickMetricByCodes(metrics, codes) {
+  const map = new Map((Array.isArray(metrics) ? metrics : []).map((metric) => [String(metric?.code || '').toUpperCase(), metric]));
+  for (const code of Array.isArray(codes) ? codes : []) {
+    const hit = map.get(String(code).toUpperCase());
+    if (hit) {
+      return hit;
+    }
+  }
+  return null;
+}
+
+function buildFeishuDocParagraphs({
+  resultPayload,
+  patientName = '',
+  reportType = 'image',
+  prettyReportUrl = '',
+  standardReportUrl = '',
+}) {
+  const mode = String(resultPayload?.mode || resultPayload?.analysis?.type || reportType || 'image').trim();
+  const summary = resultPayload?.summary || {};
+  const analysis = resultPayload?.analysis || {};
+  const metrics = Array.isArray(resultPayload?.metrics) ? resultPayload.metrics : [];
+  const metricCodes = [
+    ['SNA'],
+    ['SNB'],
+    ['ANB'],
+    ['WITS', 'AO-BO', 'AO-BO(MM)'],
+    ['GOGN-SN'],
+    ['FMA'],
+    ['U1-SN'],
+    ['IMPA'],
+  ];
+  const keyMetricLine = metricCodes
+    .map((codes) => {
+      const metric = pickMetricByCodes(metrics, codes);
+      if (!metric) {
+        return null;
+      }
+      return `${metric.code} ${formatMetricValueText(metric)}`;
+    })
+    .filter(Boolean)
+    .join('；');
+
+  const frameworkChoices = Array.isArray(analysis?.frameworkChoices)
+    ? analysis.frameworkChoices
+    : Array.isArray(summary?.frameworkChoices)
+      ? summary.frameworkChoices
+      : [];
+
+  const lines = [
+    'HYFCeph 备用在线文档',
+    patientName ? `患者姓名：${patientName}` : '患者姓名：未提供',
+    `报告类型：${mode === 'overlap' ? '治疗前后重叠对比' : '单张侧位片测量'}`,
+    analysis?.riskLabel || summary?.riskLabel ? `综合标签：${analysis?.riskLabel || summary?.riskLabel}` : null,
+    analysis?.insight || summary?.insight ? `自动解读：${analysis?.insight || summary?.insight}` : null,
+    keyMetricLine ? `关键指标：${keyMetricLine}` : null,
+    frameworkChoices.length ? `支持分析法：${frameworkChoices.join('、')}` : null,
+    prettyReportUrl ? `主链接（门户美化报告）：${prettyReportUrl}` : null,
+    standardReportUrl ? `标准门户报告：${standardReportUrl}` : null,
+    '说明：这是备用的飞书文档版报告，用于在部分客户端中更稳定地打开和转发。若样式展示需要更完整，请优先查看门户美化报告。',
+  ].filter(Boolean);
+
+  return lines;
+}
+
+async function createFeishuDocReport({
+  resultPayload,
+  patientName = '',
+  reportType = 'image',
+  prettyReportUrl = '',
+  standardReportUrl = '',
+}) {
+  if (!isFeishuBitableConfigured()) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'feishu-not-configured',
+    };
+  }
+  try {
+    const titlePrefix = reportType === 'overlap' ? 'HYFCeph 重叠对比备用文档' : 'HYFCeph 测量备用文档';
+    const title = patientName
+      ? `${titlePrefix} - ${patientName}`
+      : `${titlePrefix} - ${new Date().toLocaleDateString('zh-CN')}`;
+    const createData = await callFeishuBitableApi('POST', '/docx/v1/documents', {
+      title,
+    });
+    const documentId = String(createData?.document?.document_id || '').trim();
+    if (!documentId) {
+      throw new Error('飞书文档创建失败。');
+    }
+
+    const paragraphs = buildFeishuDocParagraphs({
+      resultPayload,
+      patientName,
+      reportType,
+      prettyReportUrl,
+      standardReportUrl,
+    });
+    const children = paragraphs.map((content) => ({
+      block_type: 2,
+      text: {
+        elements: [
+          {
+            text_run: {
+              content,
+            },
+          },
+        ],
+      },
+    }));
+
+    if (children.length) {
+      await callFeishuBitableApi(
+        'POST',
+        `/docx/v1/documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(documentId)}/children`,
+        { children },
+      );
+    }
+
+    return {
+      ok: true,
+      documentId,
+      docUrl: buildFeishuDocUrl(documentId),
+      title,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 async function generateAndUploadPdfReport({ user, resultPayload, patientName, reportType, request = null }) {
@@ -2770,18 +2938,6 @@ async function handleReportShortLink(request, response, code) {
     return sendText(response, 410, 'Report link expired.');
   }
 
-  let location = '';
-  if (PDF_OSS_PUBLIC_READ) {
-    location = buildOssPublicUrl(record.objectKey);
-  } else {
-    const downloadClient = await getPdfOssDownloadClient();
-    const downloadExpiresIn = Math.min(
-      safePositiveInteger(PDF_OSS_DOWNLOAD_EXPIRES_SECONDS, 60 * 60 * 24 * 7),
-      OSS_V4_MAX_EXPIRES_SECONDS,
-    );
-    location = normalizeOssSignedUrl(await downloadClient.signatureUrlV4('GET', downloadExpiresIn, undefined, record.objectKey));
-  }
-
   record.lastAccessedAt = nowIso();
   record.updatedAt = nowIso();
   store.reportLinks = {
@@ -2790,11 +2946,13 @@ async function handleReportShortLink(request, response, code) {
   };
   await writeStore(store);
 
-  response.writeHead(302, {
-    Location: location,
-    'Cache-Control': 'no-store',
-  });
-  response.end();
+  try {
+    const html = await loadTextObjectFromOss(record.objectKey);
+    return sendText(response, 200, html, 'text/html; charset=utf-8');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return sendText(response, 502, `Report fetch failed: ${message || 'unknown error'}`);
+  }
 }
 
 async function handleMeasureShareUrl(request, response) {
@@ -2952,6 +3110,13 @@ async function handleMeasureImage(request, response) {
         request,
         variant: 'pretty',
       });
+      result.feishuDoc = await createFeishuDocReport({
+        resultPayload: result,
+        patientName,
+        reportType: 'image',
+        prettyReportUrl: result.prettyReport?.reportShareUrl || '',
+        standardReportUrl: result.report?.reportShareUrl || '',
+      });
     }
     await sendBarkPush('HYFCeph 图片测量', `用户：${user.name}\n单位：${user.organization || '-'}\n图片：${path.basename(resolvedImagePath)}`);
     return sendJson(response, 200, {
@@ -3014,10 +3179,18 @@ async function handleGenerateReport(request, response) {
       request,
       variant: 'pretty',
     });
+    const feishuDoc = await createFeishuDocReport({
+      resultPayload,
+      patientName,
+      reportType,
+      prettyReportUrl: prettyReport?.reportShareUrl || '',
+      standardReportUrl: report?.reportShareUrl || '',
+    });
     return sendJson(response, 200, {
       ok: true,
       report,
       prettyReport,
+      feishuDoc,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -3103,6 +3276,13 @@ async function handleMeasureOverlap(request, response) {
         reportType: 'overlap',
         request,
         variant: 'pretty',
+      });
+      result.feishuDoc = await createFeishuDocReport({
+        resultPayload: result,
+        patientName,
+        reportType: 'overlap',
+        prettyReportUrl: result.prettyReport?.reportShareUrl || '',
+        standardReportUrl: result.report?.reportShareUrl || '',
       });
     }
 

@@ -286,11 +286,14 @@ function buildSummaryText(result) {
     lines.push('', '关键值：', keyLines.join('；'));
   }
 
-  if (result?.report?.shortUrl) {
-    lines.push('', `在线报告链接：${result.report.shortUrl}`);
-  }
   if (result?.prettyReport?.shortUrl) {
-    lines.push(`美化报告链接：${result.prettyReport.shortUrl}`);
+    lines.push('', `美化报告链接：${result.prettyReport.shortUrl}`);
+  }
+  if (result?.feishuDoc?.docUrl) {
+    lines.push(`飞书文档版：${result.feishuDoc.docUrl}`);
+  }
+  if (result?.report?.shortUrl) {
+    lines.push(`在线报告链接：${result.report.shortUrl}`);
   }
 
   lines.push('', '如需继续，请直接再发一张侧位片。这个微信入口只处理 HYFCeph 测量，不提供普通聊天。');
@@ -495,6 +498,7 @@ async function generateReportsForUser({ apiKey, resultPayload }) {
   return {
     report: payload.report || null,
     prettyReport: payload.prettyReport || null,
+    feishuDoc: payload.feishuDoc || null,
   };
 }
 
@@ -538,11 +542,14 @@ async function createRestrictedAgent() {
 
         if (/在线报告|报告链接|报告地址|报告/.test(text)) {
           const lines = [];
-          if (cached.result?.report?.reportShareUrl || cached.result?.report?.shortUrl) {
-            lines.push(`在线报告链接：${cached.result.report.reportShareUrl || cached.result.report.shortUrl}`);
-          }
           if (cached.result?.prettyReport?.reportShareUrl || cached.result?.prettyReport?.shortUrl) {
             lines.push(`美化报告链接：${cached.result.prettyReport.reportShareUrl || cached.result.prettyReport.shortUrl}`);
+          }
+          if (cached.result?.feishuDoc?.docUrl) {
+            lines.push(`飞书文档版：${cached.result.feishuDoc.docUrl}`);
+          }
+          if (cached.result?.report?.reportShareUrl || cached.result?.report?.shortUrl) {
+            lines.push(`在线报告链接：${cached.result.report.reportShareUrl || cached.result.report.shortUrl}`);
           }
           return {
             text: lines.length ? lines.join('\n') : '最近一次测量还没有生成在线报告链接。',
@@ -612,6 +619,9 @@ async function createRestrictedAgent() {
           }
           if (reports.prettyReport) {
             result.prettyReport = reports.prettyReport;
+          }
+          if (reports.feishuDoc) {
+            result.feishuDoc = reports.feishuDoc;
           }
         } catch (error) {
           console.warn(`[HYFCeph Weixin] report generation skipped: ${error instanceof Error ? error.message : String(error)}`);
