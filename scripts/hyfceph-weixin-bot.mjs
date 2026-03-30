@@ -467,6 +467,7 @@ async function measureImageForUser({ apiKey, media }) {
       mimeType,
       imageBase64: fileBuffer.toString('base64'),
       generateReport: false,
+      includeReportPayloadKey: true,
     }),
     timeoutMs: PORTAL_MEASURE_TIMEOUT_MS,
     label: 'portal image measurement request',
@@ -476,6 +477,7 @@ async function measureImageForUser({ apiKey, media }) {
 
 async function generateReportsForUser({ apiKey, resultPayload }) {
   console.log('[HYFCeph Weixin] generating report links');
+  const reportPayloadKey = String(resultPayload?.reportPayload?.objectKey || '').trim();
   const payload = await fetchJsonWithRetry(`${PORTAL_BASE_URL}/api/report/generate`, {
     method: 'POST',
     headers: {
@@ -484,9 +486,9 @@ async function generateReportsForUser({ apiKey, resultPayload }) {
     },
     body: JSON.stringify({
       reportType: 'image',
-      resultPayload,
+      ...(reportPayloadKey ? { resultPayloadKey: reportPayloadKey } : { resultPayload }),
     }),
-    compressBody: true,
+    compressBody: !reportPayloadKey,
     timeoutMs: PORTAL_REPORT_TIMEOUT_MS,
     label: 'portal html report generation request',
   });

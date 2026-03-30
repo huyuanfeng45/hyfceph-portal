@@ -55,6 +55,7 @@ const PDF_OSS_BUCKET = process.env.HYFCEPH_PDF_OSS_BUCKET || '';
 const PDF_OSS_CUSTOM_DOMAIN = (process.env.HYFCEPH_PDF_OSS_CUSTOM_DOMAIN || '').replace(/^https?:\/\//i, '').replace(/\/+$/, '');
 const PDF_OSS_PREFIX = process.env.HYFCEPH_PDF_OSS_PREFIX || 'hyfceph-pdf';
 const REPORT_OSS_PREFIX = process.env.HYFCEPH_REPORT_OSS_PREFIX || 'hyfceph-report';
+const REPORT_PAYLOAD_OSS_PREFIX = process.env.HYFCEPH_REPORT_PAYLOAD_OSS_PREFIX || 'hyfceph-report-payload';
 const PDF_OSS_UPLOAD_EXPIRES_SECONDS = Number(process.env.HYFCEPH_PDF_OSS_UPLOAD_EXPIRES_SECONDS || '900');
 const PDF_OSS_DOWNLOAD_EXPIRES_SECONDS = Number(process.env.HYFCEPH_PDF_OSS_DOWNLOAD_EXPIRES_SECONDS || String(60 * 60 * 24 * 7));
 const PDF_OSS_PUBLIC_READ = /^(1|true|yes)$/i.test(String(process.env.HYFCEPH_PDF_OSS_PUBLIC_READ || 'false'));
@@ -381,6 +382,54 @@ async function uploadHtmlReportToOss({ user, htmlPath, patientName, reportType, 
     reportShortCode: shortLink.code,
     variant,
   };
+}
+
+function buildReportPayloadObjectKey({ user, reportType = 'image' }) {
+  const createdAt = new Date();
+  const yyyy = String(createdAt.getUTCFullYear());
+  const mm = String(createdAt.getUTCMonth() + 1).padStart(2, '0');
+  const userSegment = sanitizeFileStem(user?.id || 'anonymous');
+  const stamp = createdAt.toISOString().replace(/[:.]/g, '-');
+  const reportSegment = sanitizeFileStem(reportType || 'image');
+  return `${sanitizeFileStem(REPORT_PAYLOAD_OSS_PREFIX)}/${yyyy}/${mm}/${userSegment}/${stamp}-${reportSegment}-result.json`;
+}
+
+async function uploadReportPayloadToOss({ user, resultPayload, reportType = 'image' }) {
+  if (!isPdfOssConfigured()) {
+    return null;
+  }
+
+  const client = await getPdfOssClient();
+  const objectKey = buildReportPayloadObjectKey({ user, reportType });
+  const body = Buffer.from(JSON.stringify(resultPayload), 'utf8');
+  const headers = {
+    'Content-Type': 'application/json; charset=utf-8',
+  };
+  if (PDF_OSS_PUBLIC_READ) {
+    headers['x-oss-object-acl'] = 'public-read';
+  }
+
+  await client.put(objectKey, body, { headers });
+  return {
+    objectKey,
+    bucket: PDF_OSS_BUCKET,
+    region: PDF_OSS_REGION,
+  };
+}
+
+async function loadReportPayloadFromOss(objectKey) {
+  if (!isPdfOssConfigured()) {
+    throw new Error('报告存储未配置。');
+  }
+
+  const client = await getPdfOssClient();
+  const response = await client.get(objectKey);
+  const content = response?.content;
+  if (!content) {
+    throw new Error('报告结果不存在。');
+  }
+  const buffer = Buffer.isBuffer(content) ? content : Buffer.from(content);
+  return JSON.parse(buffer.toString('utf8'));
 }
 
 async function generateAndUploadPdfReport({ user, resultPayload, patientName, reportType, request = null }) {
@@ -2879,6 +2928,13 @@ async function handleMeasureImage(request, response) {
       imagePath: resolvedImagePath,
       operatorSession,
     });
+    if (payload.includeReportPayloadKey && isPdfOssConfigured()) {
+      result.reportPayload = await uploadReportPayloadToOss({
+        user,
+        resultPayload: result,
+        reportType: 'image',
+      });
+    }
     if (shouldGenerateReport) {
       result.report = await generateAndUploadHtmlReport({
         user,
@@ -2921,14 +2977,15 @@ async function handleGenerateReport(request, response) {
   const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
   const patientName = String(payload.patientName || '').trim();
   const reportType = String(payload.reportType || payload.mode || 'image').trim() || 'image';
-  const resultPayload = payload.resultPayload && typeof payload.resultPayload === 'object'
+  const resultPayloadKey = String(payload.resultPayloadKey || '').trim();
+  let resultPayload = payload.resultPayload && typeof payload.resultPayload === 'object'
     ? payload.resultPayload
     : null;
 
   if (!apiKey) {
     return sendJson(response, 400, { error: '缺少 API Key。' });
   }
-  if (!resultPayload) {
+  if (!resultPayload && !resultPayloadKey) {
     return sendJson(response, 400, { error: '缺少 resultPayload。' });
   }
 
@@ -2938,6 +2995,9 @@ async function handleGenerateReport(request, response) {
   }
 
   try {
+    if (!resultPayload && resultPayloadKey) {
+      resultPayload = await loadReportPayloadFromOss(resultPayloadKey);
+    }
     const report = await generateAndUploadHtmlReport({
       user,
       resultPayload,
