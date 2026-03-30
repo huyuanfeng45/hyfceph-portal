@@ -10,6 +10,9 @@ import { start as startWeixinBot } from './vendor/weixin-agent-sdk-hyf.mjs';
 
 const DEFAULT_CONFIG_PATH = path.join(os.homedir(), 'Library', 'Application Support', 'HYFCeph', 'weixin-bot.json');
 const WEIXIN_CONFIG_PATH = process.env.HYFCEPH_WEIXIN_CONFIG_PATH?.trim() || DEFAULT_CONFIG_PATH;
+const HYFCEPH_APP_SUPPORT_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'HYFCeph');
+const WEIXIN_RESULT_CACHE_PATH = path.join(HYFCEPH_APP_SUPPORT_DIR, 'weixin-latest-results.json');
+const WEIXIN_MEDIA_CACHE_DIR = path.join(HYFCEPH_APP_SUPPORT_DIR, 'weixin-media');
 const OPENCLAW_STATE_DIR = process.env.OPENCLAW_STATE_DIR?.trim()
   || process.env.CLAWDBOT_STATE_DIR?.trim()
   || path.join(os.homedir(), '.openclaw');
@@ -53,10 +56,27 @@ const PORTAL_MEASURE_TIMEOUT_MS = 240_000;
 const PORTAL_REPORT_TIMEOUT_MS = 90_000;
 const PORTAL_RETRY_ATTEMPTS = 3;
 const PORTAL_RETRY_DELAY_MS = 1_500;
+const WEIXIN_RESULT_CACHE_LIMIT = 50;
 
 function normalizeAccountId(raw) {
   return String(raw || '').trim().toLowerCase().replace(/[@.]/g, '-');
 }
+
+function normalizeConversationKey(value) {
+  return String(value || '').trim() || 'unknown';
+}
+
+function readJsonFileSync(filePath, fallback = {}) {
+  try {
+    const raw = fsSync.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const latestResultCache = readJsonFileSync(WEIXIN_RESULT_CACHE_PATH, {});
 
 async function requestJson(url, { method = 'GET', headers = {}, body } = {}) {
   return fetchJsonWithRetry(url, {
@@ -182,6 +202,63 @@ function extractMetricMap(result) {
   return new Map(metrics.map((metric) => [metric.code, metric.valueText]));
 }
 
+function frameworkAliases() {
+  return [
+    { code: 'downs', label: 'Downs', patterns: ['downs'] },
+    { code: 'steiner', label: 'Steiner', patterns: ['steiner'] },
+    { code: 'pku', label: '北大分析法', patterns: ['北大分析法', '北大', 'pku'] },
+    { code: 'abo', label: 'ABO', patterns: ['abo'] },
+    { code: 'ricketts', label: 'Ricketts', patterns: ['ricketts'] },
+    { code: 'tweed', label: 'Tweed', patterns: ['tweed'] },
+    { code: 'mcnamara', label: 'McNamara', patterns: ['mcnamara', 'mcnamara分析'] },
+    { code: 'jarabak', label: 'Jarabak', patterns: ['jarabak'] },
+  ];
+}
+
+function findRequestedFramework(text) {
+  const normalized = String(text || '').trim().toLowerCase();
+  for (const item of frameworkAliases()) {
+    if (item.patterns.some((pattern) => normalized.includes(String(pattern).toLowerCase()))) {
+      return item;
+    }
+  }
+  return null;
+}
+
+function metricSeverityScore(metric) {
+  if (!metric) return 0;
+  if (metric.tone === 'danger') return 3;
+  if (metric.tone === 'warn') return 2;
+  if (metric.tone === 'success') return 1;
+  return 0;
+}
+
+function frameworkItemSeverityScore(item) {
+  if (!item) return 0;
+  if (item.status && item.status !== 'supported') return -1;
+  if (item.tone === 'danger') return 3;
+  if (item.tone === 'warn') return 2;
+  if (item.tone === 'success') return 1;
+  return 0;
+}
+
+function metricMeaning(metric) {
+  if (!metric) return '';
+  if (metric.tone === 'danger') return '偏离较明显';
+  if (metric.tone === 'warn') return '有一定偏离';
+  if (metric.tone === 'success') return '接近参考范围';
+  return '需要结合临床判断';
+}
+
+function frameworkStatusText(item) {
+  if (!item) return '未算出';
+  if (item.status && item.status !== 'supported') return '暂未算出';
+  if (item.tone === 'danger') return '偏离较明显';
+  if (item.tone === 'warn') return '有一定偏离';
+  if (item.tone === 'success') return '接近参考';
+  return '需结合临床';
+}
+
 function buildSummaryText(result) {
   const metrics = extractMetricMap(result);
   const summary = result?.summary || {};
@@ -209,6 +286,121 @@ function buildSummaryText(result) {
 
   lines.push('', '如需继续，请直接再发一张侧位片。这个微信入口只处理 HYFCeph 测量，不提供普通聊天。');
   return lines.join('\n');
+}
+
+function buildQuickConsultationText(cacheEntry) {
+  const result = cacheEntry?.result;
+  if (!result) {
+    return buildUnsupportedText();
+  }
+  const metrics = Array.isArray(result?.analysis?.metrics) ? result.analysis.metrics : [];
+  const topMetrics = metrics
+    .slice()
+    .sort((left, right) => metricSeverityScore(right) - metricSeverityScore(left))
+    .slice(0, 4)
+    .map((metric) => `- ${metric.code} ${metric.valueText}：${metricMeaning(metric)}`);
+  return [
+    result?.analysis?.riskLabel || '最近一次测量结果已找到。',
+    result?.analysis?.insight || '',
+    topMetrics.length ? '' : null,
+    topMetrics.length ? '当前重点指标：' : null,
+    ...topMetrics,
+    '',
+    '你还可以继续问我：Downs、Steiner、北大分析法、ABO、Ricketts、Tweed、McNamara、Jarabak，或者直接发“在线报告”“标点图”“白底轮廓图”。',
+  ].filter(Boolean).join('\n');
+}
+
+function buildFrameworkReply(cacheEntry, frameworkMeta) {
+  const framework = cacheEntry?.result?.analysis?.frameworkReports?.[frameworkMeta.code];
+  if (!framework) {
+    return `${frameworkMeta.label} 目前还没有可用结果。你可以先重新发送一张侧位片。`;
+  }
+  const items = Array.isArray(framework.items) ? framework.items : [];
+  const topItems = items
+    .filter((item) => !item.status || item.status === 'supported')
+    .slice()
+    .sort((left, right) => frameworkItemSeverityScore(right) - frameworkItemSeverityScore(left))
+    .slice(0, 6)
+    .map((item) => `- ${item.label || item.code}：${item.valueText || '-'}（${frameworkStatusText(item)}）`);
+  const supportedCount = Number(framework.supportedItemCount || topItems.length || 0);
+  const unsupportedCount = Number(framework.unsupportedItemCount || 0);
+  return [
+    `${frameworkMeta.label} 分析法`,
+    supportedCount || unsupportedCount ? `已输出 ${supportedCount} 项，未算出 ${unsupportedCount} 项。` : null,
+    framework.note || '',
+    topItems.length ? '' : null,
+    topItems.length ? '当前重点条目：' : null,
+    ...topItems,
+    '',
+    '如果你要，我也可以继续把这一套分析法完整条目再分几条发给你。',
+  ].filter(Boolean).join('\n');
+}
+
+async function ensureCacheDirs() {
+  await fs.mkdir(HYFCEPH_APP_SUPPORT_DIR, { recursive: true });
+  await fs.mkdir(WEIXIN_MEDIA_CACHE_DIR, { recursive: true });
+}
+
+async function saveResultCache() {
+  await ensureCacheDirs();
+  await fs.writeFile(WEIXIN_RESULT_CACHE_PATH, JSON.stringify(latestResultCache, null, 2), 'utf8');
+}
+
+async function persistArtifactBase64(base64, mimeType, prefix) {
+  if (!base64) {
+    return null;
+  }
+  await ensureCacheDirs();
+  const extension = String(mimeType || '').includes('svg')
+    ? '.svg'
+    : '.png';
+  const filePath = path.join(
+    WEIXIN_MEDIA_CACHE_DIR,
+    `${prefix}-${Date.now()}-${randomBytes(4).toString('hex')}${extension}`,
+  );
+  await fs.writeFile(filePath, Buffer.from(base64, 'base64'));
+  return filePath;
+}
+
+async function updateLatestResultCache(conversationId, result) {
+  const key = normalizeConversationKey(conversationId);
+  const annotatedImagePath = await persistArtifactBase64(
+    result?.artifacts?.annotatedPngBase64 || '',
+    result?.artifacts?.annotatedPngMimeType || 'image/png',
+    `${key}-annotated`,
+  );
+  const contourImagePath = await persistArtifactBase64(
+    result?.artifacts?.contourPngBase64 || '',
+    result?.artifacts?.contourPngMimeType || 'image/png',
+    `${key}-contour`,
+  );
+  latestResultCache[key] = {
+    updatedAt: new Date().toISOString(),
+    result: {
+      analysis: {
+        riskLabel: result?.analysis?.riskLabel || '',
+        insight: result?.analysis?.insight || '',
+        metrics: Array.isArray(result?.analysis?.metrics) ? result.analysis.metrics : [],
+        frameworkReports: result?.analysis?.frameworkReports || {},
+      },
+      summary: result?.summary || {},
+      report: result?.report || null,
+      prettyReport: result?.prettyReport || null,
+    },
+    annotatedImagePath,
+    contourImagePath,
+  };
+  const keys = Object.keys(latestResultCache)
+    .sort((left, right) => new Date(latestResultCache[right]?.updatedAt || 0).getTime() - new Date(latestResultCache[left]?.updatedAt || 0).getTime());
+  for (const staleKey of keys.slice(WEIXIN_RESULT_CACHE_LIMIT)) {
+    delete latestResultCache[staleKey];
+  }
+  await saveResultCache();
+  return latestResultCache[key];
+}
+
+function getLatestResultCache(conversationId) {
+  return latestResultCache[normalizeConversationKey(conversationId)] || null;
 }
 
 async function writeBase64Image(base64, mimeType, prefix) {
@@ -296,8 +488,8 @@ async function generateReportsForUser({ apiKey, resultPayload }) {
 
 function buildUnsupportedText() {
   return [
-    '这个微信入口只支持 HYFCeph 侧位片测量。',
-    '请直接发送一张头影侧位片；如果还没绑定，请先回到门户完成微信绑定。',
+    '这个微信入口只处理 HYFCeph 相关内容。',
+    '你可以直接发送一张头影侧位片，或者围绕最近一次测量继续问：分析法、在线报告、标点图、白底轮廓图。',
   ].join('\n');
 }
 
@@ -314,11 +506,71 @@ async function createRestrictedAgent() {
               '1. 先在门户里登录并绑定微信 Clawbot。',
               '2. 直接把一张头影侧位片发给我。',
               '3. 我会返回核心测量结果、标注图和报告链接。',
+              '4. 之后你还可以继续问我分析法、在线报告、标点图、白底轮廓图。',
             ].join('\n'),
           };
         }
+        const cached = getLatestResultCache(request.conversationId);
+        if (!cached) {
+          return {
+            text: buildUnsupportedText(),
+          };
+        }
+
+        const frameworkMeta = findRequestedFramework(text);
+        if (frameworkMeta) {
+          return {
+            text: buildFrameworkReply(cached, frameworkMeta),
+          };
+        }
+
+        if (/在线报告|报告链接|报告地址|报告/.test(text)) {
+          const lines = [];
+          if (cached.result?.report?.reportShareUrl || cached.result?.report?.shortUrl) {
+            lines.push(`在线报告链接：${cached.result.report.reportShareUrl || cached.result.report.shortUrl}`);
+          }
+          if (cached.result?.prettyReport?.reportShareUrl || cached.result?.prettyReport?.shortUrl) {
+            lines.push(`美化报告链接：${cached.result.prettyReport.reportShareUrl || cached.result.prettyReport.shortUrl}`);
+          }
+          return {
+            text: lines.length ? lines.join('\n') : '最近一次测量还没有生成在线报告链接。',
+          };
+        }
+
+        if (/标点图|标注图|标点|标注/.test(text) && cached.annotatedImagePath) {
+          return {
+            text: '这是最近一次测量的标点图。',
+            media: {
+              type: 'image',
+              url: cached.annotatedImagePath,
+              fileName: 'hyfceph-annotated.png',
+            },
+          };
+        }
+
+        if (/轮廓图|白底轮廓/.test(text) && cached.contourImagePath) {
+          return {
+            text: '这是最近一次测量的白底轮廓图。',
+            media: {
+              type: 'image',
+              url: cached.contourImagePath,
+              fileName: 'hyfceph-contour.png',
+            },
+          };
+        }
+
+        if (/怎么看|怎么分析|解读|分析|总结|综合判断|关键值|指标/.test(text)) {
+          return {
+            text: buildQuickConsultationText(cached),
+          };
+        }
+
         return {
-          text: buildUnsupportedText(),
+          text: [
+            buildQuickConsultationText(cached),
+            '',
+            '如果你问的是别的事情，我这里不会普通聊天；但只要和最近这次侧位片测量相关，我都可以继续回答。',
+          ].join('\n'),
         };
       }
 
@@ -352,6 +604,7 @@ async function createRestrictedAgent() {
         } catch (error) {
           console.warn(`[HYFCeph Weixin] report generation skipped: ${error instanceof Error ? error.message : String(error)}`);
         }
+        await updateLatestResultCache(request.conversationId, result);
         const pngBase64 = result?.artifacts?.annotatedPngBase64 || '';
         const pngMimeType = result?.artifacts?.annotatedPngMimeType || 'image/png';
         const mediaReply = pngBase64
