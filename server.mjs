@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import OSS from 'ali-oss';
 import { buildOverlapRender, listSupportedAlignModes } from './scripts/hyfceph-overlap-renderer.mjs';
 import { generateHyfcephHtmlReport, generateHyfcephPdfReport } from './scripts/hyfceph-report-pdf.mjs';
+import { qrcode as createQrCode } from './scripts/vendor/qrcode.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -837,6 +838,7 @@ function publicWeixinBindingSession(session) {
   return {
     sessionKey: session.sessionKey,
     qrcodeUrl: session.qrcodeUrl,
+    qrcodeDataUrl: buildWeixinQrDataUrl(session.qrcodeUrl),
     botType: session.botType,
     status: session.status,
     message: session.message || '',
@@ -845,6 +847,22 @@ function publicWeixinBindingSession(session) {
     expiresAt: session.expiresAt,
     active: isWeixinBindingSessionActive(session),
   };
+}
+
+function buildWeixinQrDataUrl(value) {
+  const source = String(value || '').trim();
+  if (!source) {
+    return null;
+  }
+  try {
+    const qr = createQrCode(0, 'M');
+    qr.addData(source);
+    qr.make();
+    const svgText = qr.createSvgTag(8, 8, 'HYFCeph WeChat binding QR', 'HYFCeph WeChat binding QR');
+    return `data:image/svg+xml;base64,${Buffer.from(svgText, 'utf8').toString('base64')}`;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeStoreRecord(store) {

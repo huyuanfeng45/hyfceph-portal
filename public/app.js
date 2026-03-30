@@ -133,7 +133,7 @@ function renderWeixinBinding() {
   }
 
   if (session?.qrcodeUrl && session?.active && !binding) {
-    weixinBindingQrImage.src = session.qrcodeUrl;
+    weixinBindingQrImage.src = session.qrcodeDataUrl || session.qrcodeUrl;
     weixinBindingQrWrap.classList.remove('hidden');
     weixinBindingQrCaption.textContent = session.message || '二维码已生成，系统会自动轮询绑定状态。';
     weixinBindingSessionCode.textContent = session.sessionKey ? `会话：${session.sessionKey}` : '';
