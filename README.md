@@ -83,6 +83,11 @@ docker run -d \
 - `HYFCEPH_SESSION_SECRET`
 - `HYFCEPH_STORE_BACKEND`
 - `HYFCEPH_STORE_BLOB_PATH`
+- `HYFCEPH_FEISHU_APP_ID`
+- `HYFCEPH_FEISHU_APP_SECRET`
+- `HYFCEPH_FEISHU_BITABLE_APP_TOKEN`
+- `HYFCEPH_FEISHU_BITABLE_TABLE_ID`
+- `HYFCEPH_FEISHU_STORE_KEY`
 
 ## Notes
 
@@ -92,6 +97,22 @@ docker run -d \
 - For Vercel, connect a private Blob store and set `HYFCEPH_STORE_BACKEND=blob`.
 - When using Vercel, authentication uses signed cookies instead of in-memory sessions.
 - Public production use should still prefer self-hosted deployment, because the image measurement path shells out to the bundled Node runner.
+
+## Feishu Bitable storage
+
+If you want to avoid Vercel Blob limits, you can switch the account store to Feishu Bitable.
+
+Required environment variables:
+
+```bash
+HYFCEPH_STORE_BACKEND=feishu-bitable
+HYFCEPH_FEISHU_APP_ID=your_feishu_app_id
+HYFCEPH_FEISHU_APP_SECRET=your_feishu_app_secret
+HYFCEPH_FEISHU_BITABLE_APP_TOKEN=your_bitable_app_token
+HYFCEPH_FEISHU_BITABLE_TABLE_ID=your_bitable_table_id
+```
+
+The portal stores the full HYFCeph JSON state in one Bitable record keyed by `hyfceph-store`.
 
 ## WeChat bot on a local Mac
 

@@ -31,6 +31,14 @@ const BARK_DEVICE_KEY = process.env.HYFCEPH_BARK_KEY || '7ffBf7F85e3WbFyKrJTEcH'
 const BARK_BASE_URL = (process.env.HYFCEPH_BARK_BASE_URL || 'https://api.day.app').replace(/\/+$/, '');
 const STORE_BACKEND = process.env.HYFCEPH_STORE_BACKEND || (process.env.BLOB_READ_WRITE_TOKEN ? 'blob' : 'file');
 const STORE_BLOB_PATH = process.env.HYFCEPH_STORE_BLOB_PATH || 'hyfceph/users.json';
+const FEISHU_APP_ID = process.env.HYFCEPH_FEISHU_APP_ID || '';
+const FEISHU_APP_SECRET = process.env.HYFCEPH_FEISHU_APP_SECRET || '';
+const FEISHU_BITABLE_APP_TOKEN = process.env.HYFCEPH_FEISHU_BITABLE_APP_TOKEN || '';
+const FEISHU_BITABLE_TABLE_ID = process.env.HYFCEPH_FEISHU_BITABLE_TABLE_ID || '';
+const FEISHU_STORE_KEY = process.env.HYFCEPH_FEISHU_STORE_KEY || 'hyfceph-store';
+const FEISHU_API_BASE = (process.env.HYFCEPH_FEISHU_API_BASE || 'https://open.feishu.cn/open-apis').replace(/\/+$/, '');
+const FEISHU_STORE_PAYLOAD_FIELD = process.env.HYFCEPH_FEISHU_STORE_PAYLOAD_FIELD || 'payload';
+const FEISHU_STORE_UPDATED_AT_FIELD = process.env.HYFCEPH_FEISHU_STORE_UPDATED_AT_FIELD || 'updated_at';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
@@ -64,6 +72,8 @@ let blobSdkPromise = null;
 let resvgPromise = null;
 let pdfOssClientPromise = null;
 let pdfOssDownloadClientPromise = null;
+let feishuAppTokenCache = null;
+let feishuSchemaCache = null;
 const execFileAsync = promisify(execFile);
 
 const MIME_TYPES = new Map([
@@ -1141,11 +1151,121 @@ function shouldUseBlobStore() {
   return STORE_BACKEND === 'blob';
 }
 
+function shouldUseFeishuBitableStore() {
+  return STORE_BACKEND === 'feishu-bitable' || STORE_BACKEND === 'feishu';
+}
+
+function isFeishuBitableConfigured() {
+  return Boolean(FEISHU_APP_ID && FEISHU_APP_SECRET && FEISHU_BITABLE_APP_TOKEN && FEISHU_BITABLE_TABLE_ID);
+}
+
 async function loadBlobSdk() {
   if (!blobSdkPromise) {
     blobSdkPromise = import('@vercel/blob');
   }
   return blobSdkPromise;
+}
+
+async function getFeishuAppAccessToken() {
+  if (!isFeishuBitableConfigured()) {
+    throw new Error('飞书多维表格存储未配置完整。');
+  }
+  if (feishuAppTokenCache && feishuAppTokenCache.expiresAt > Date.now() + 60_000) {
+    return feishuAppTokenCache.token;
+  }
+
+  const response = await fetch(`${FEISHU_API_BASE}/auth/v3/app_access_token/internal`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify({
+      app_id: FEISHU_APP_ID,
+      app_secret: FEISHU_APP_SECRET,
+    }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || Number(payload.code || 0) !== 0 || !payload.app_access_token) {
+    throw new Error(payload.msg || '获取飞书 app_access_token 失败。');
+  }
+
+  const expireSeconds = Number(payload.expire || payload.expire_in || 7200);
+  feishuAppTokenCache = {
+    token: String(payload.app_access_token),
+    expiresAt: Date.now() + Math.max(300, expireSeconds) * 1000,
+  };
+  return feishuAppTokenCache.token;
+}
+
+async function callFeishuBitableApi(method, apiPath, body = null) {
+  const accessToken = await getFeishuAppAccessToken();
+  const response = await fetch(`${FEISHU_API_BASE}${apiPath}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || Number(payload.code || 0) !== 0) {
+    throw new Error(payload.msg || `飞书多维表格请求失败（${response.status}）。`);
+  }
+  return payload.data || {};
+}
+
+function readFeishuCellText(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      if (typeof item === 'string') {
+        return item;
+      }
+      if (item && typeof item.text === 'string') {
+        return item.text;
+      }
+      return '';
+    }).join('');
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  return '';
+}
+
+async function ensureFeishuBitableStoreSchema() {
+  if (feishuSchemaCache) {
+    return feishuSchemaCache;
+  }
+  if (!isFeishuBitableConfigured()) {
+    throw new Error('飞书多维表格存储未配置完整。');
+  }
+
+  const basePath = `/bitable/v1/apps/${encodeURIComponent(FEISHU_BITABLE_APP_TOKEN)}/tables/${encodeURIComponent(FEISHU_BITABLE_TABLE_ID)}`;
+  const fieldsData = await callFeishuBitableApi('GET', `${basePath}/fields?page_size=100`);
+  const items = Array.isArray(fieldsData.items) ? fieldsData.items : [];
+  const primaryField = items.find((field) => field?.is_primary) || null;
+  if (!primaryField?.field_name) {
+    throw new Error('飞书多维表格缺少主字段，无法初始化存储。');
+  }
+
+  const fieldNames = new Set(items.map((field) => String(field?.field_name || '').trim()).filter(Boolean));
+  for (const fieldName of [FEISHU_STORE_PAYLOAD_FIELD, FEISHU_STORE_UPDATED_AT_FIELD]) {
+    if (!fieldNames.has(fieldName)) {
+      await callFeishuBitableApi('POST', `${basePath}/fields`, {
+        field_name: fieldName,
+        type: 1,
+      });
+      fieldNames.add(fieldName);
+    }
+  }
+
+  feishuSchemaCache = {
+    basePath,
+    primaryFieldName: String(primaryField.field_name),
+    payloadFieldName: FEISHU_STORE_PAYLOAD_FIELD,
+    updatedAtFieldName: FEISHU_STORE_UPDATED_AT_FIELD,
+  };
+  return feishuSchemaCache;
 }
 
 async function ensureDataFile() {
@@ -1172,6 +1292,63 @@ async function writeStoreToFile(store) {
   const tempPath = `${USERS_FILE}.tmp`;
   await fs.writeFile(tempPath, JSON.stringify(store, null, 2));
   await fs.rename(tempPath, USERS_FILE);
+}
+
+async function findFeishuStoreRecord(schema) {
+  const result = await callFeishuBitableApi('POST', `${schema.basePath}/records/search`, {
+    page_size: 1,
+    filter: {
+      conjunction: 'and',
+      conditions: [
+        {
+          field_name: schema.primaryFieldName,
+          operator: 'is',
+          value: [FEISHU_STORE_KEY],
+        },
+      ],
+    },
+  });
+  const items = Array.isArray(result.items) ? result.items : [];
+  return items[0] || null;
+}
+
+async function readStoreFromFeishuBitable() {
+  const schema = await ensureFeishuBitableStoreSchema();
+  const record = await findFeishuStoreRecord(schema);
+  if (!record?.record_id) {
+    return { users: [] };
+  }
+  const payload = readFeishuCellText(record.fields?.[schema.payloadFieldName]);
+  if (!payload.trim()) {
+    return { users: [] };
+  }
+  try {
+    return JSON.parse(payload);
+  } catch {
+    return { users: [] };
+  }
+}
+
+async function writeStoreToFeishuBitable(store) {
+  const schema = await ensureFeishuBitableStoreSchema();
+  const payloadText = JSON.stringify(store, null, 2);
+  const record = await findFeishuStoreRecord(schema);
+  const fields = {
+    [schema.primaryFieldName]: FEISHU_STORE_KEY,
+    [schema.payloadFieldName]: payloadText,
+    [schema.updatedAtFieldName]: nowIso(),
+  };
+
+  if (record?.record_id) {
+    await callFeishuBitableApi('PUT', `${schema.basePath}/records/${encodeURIComponent(record.record_id)}`, {
+      fields,
+    });
+    return;
+  }
+
+  await callFeishuBitableApi('POST', `${schema.basePath}/records`, {
+    fields,
+  });
 }
 
 async function readStoreFromBlob() {
@@ -1220,6 +1397,9 @@ async function writeStoreToBlob(store) {
 }
 
 async function writeStore(store) {
+  if (shouldUseFeishuBitableStore()) {
+    return writeStoreToFeishuBitable(store);
+  }
   if (shouldUseBlobStore()) {
     return writeStoreToBlob(store);
   }
@@ -1252,7 +1432,11 @@ function ensureAdminUser(store) {
 }
 
 async function readStore() {
-  const parsed = shouldUseBlobStore() ? await readStoreFromBlob() : await readStoreFromFile();
+  const parsed = shouldUseFeishuBitableStore()
+    ? await readStoreFromFeishuBitable()
+    : shouldUseBlobStore()
+      ? await readStoreFromBlob()
+      : await readStoreFromFile();
   const normalized = normalizeStoreRecord(parsed);
   const { store, changed } = ensureAdminUser(normalized);
   if (changed || JSON.stringify(normalized) !== JSON.stringify(store)) {
@@ -2962,6 +3146,7 @@ export async function handleNodeRequest(request, response) {
         service: 'HYFCeph Portal',
         barkConfigured: Boolean(BARK_DEVICE_KEY),
         storeBackend: STORE_BACKEND,
+        feishuStoreConfigured: isFeishuBitableConfigured(),
         operatorSessionActive: isOperatorSessionActive(store.operatorSession),
         pdfOssConfigured: isPdfOssConfigured(),
         pdfOssCustomDomain: PDF_OSS_CUSTOM_DOMAIN ? `https://${PDF_OSS_CUSTOM_DOMAIN}` : null,
