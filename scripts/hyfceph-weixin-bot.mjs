@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 
 import { randomBytes } from 'node:crypto';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { start as startWeixinBot } from './vendor/weixin-agent-sdk-hyf.mjs';
 
-const PORTAL_BASE_URL = (process.env.HYFCEPH_WEIXIN_PORTAL_BASE_URL || 'http://127.0.0.1:3077').replace(/\/+$/, '');
-const WEIXIN_BOT_SECRET = String(process.env.HYFCEPH_WEIXIN_BOT_SECRET || '').trim();
+const DEFAULT_CONFIG_PATH = path.join(os.homedir(), 'Library', 'Application Support', 'HYFCeph', 'weixin-bot.json');
+const WEIXIN_CONFIG_PATH = process.env.HYFCEPH_WEIXIN_CONFIG_PATH?.trim() || DEFAULT_CONFIG_PATH;
 const OPENCLAW_STATE_DIR = process.env.OPENCLAW_STATE_DIR?.trim()
   || process.env.CLAWDBOT_STATE_DIR?.trim()
   || path.join(os.homedir(), '.openclaw');
@@ -16,8 +17,35 @@ const OPENCLAW_WEIXIN_DIR = path.join(OPENCLAW_STATE_DIR, 'openclaw-weixin');
 const OPENCLAW_WEIXIN_ACCOUNTS_DIR = path.join(OPENCLAW_WEIXIN_DIR, 'accounts');
 const MEDIA_OUT_DIR = path.join(os.tmpdir(), 'hyfceph-weixin-bot');
 
-if (!WEIXIN_BOT_SECRET) {
-  throw new Error('缺少 HYFCEPH_WEIXIN_BOT_SECRET，无法启动微信 bot 服务。');
+function readLocalConfig(configPath) {
+  try {
+    const raw = fsSync.readFileSync(configPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+const LOCAL_CONFIG = readLocalConfig(WEIXIN_CONFIG_PATH);
+const PORTAL_BASE_URL = String(
+  process.env.HYFCEPH_WEIXIN_PORTAL_BASE_URL
+  || LOCAL_CONFIG.portalBaseUrl
+  || 'http://127.0.0.1:3077',
+).trim().replace(/\/+$/, '');
+const PORTAL_API_KEY = String(
+  process.env.HYFCEPH_API_KEY
+  || LOCAL_CONFIG.portalApiKey
+  || '',
+).trim();
+const WEIXIN_BOT_SECRET = String(
+  process.env.HYFCEPH_WEIXIN_BOT_SECRET
+  || LOCAL_CONFIG.weixinBotSecret
+  || '',
+).trim();
+
+if (!WEIXIN_BOT_SECRET && !PORTAL_API_KEY) {
+  throw new Error(`缺少 HYFCEPH_WEIXIN_BOT_SECRET 或 HYFCEPH_API_KEY，无法启动微信 bot 服务。可在环境变量中提供，或写入 ${WEIXIN_CONFIG_PATH}`);
 }
 
 function normalizeAccountId(raw) {
@@ -29,7 +57,8 @@ async function requestJson(url, { method = 'GET', headers = {}, body } = {}) {
     method,
     headers: {
       'Content-Type': 'application/json',
-      'x-hyfceph-weixin-secret': WEIXIN_BOT_SECRET,
+      ...(WEIXIN_BOT_SECRET ? { 'x-hyfceph-weixin-secret': WEIXIN_BOT_SECRET } : {}),
+      ...(PORTAL_API_KEY ? { 'x-api-key': PORTAL_API_KEY } : {}),
       ...headers,
     },
     body,

@@ -1844,17 +1844,26 @@ function secureCompareText(left, right) {
   return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function requireWeixinBotSecret(request, response) {
-  const provided = String(
+async function requireWeixinBotAccess(request, response) {
+  const providedSecret = String(
     request.headers['x-hyfceph-weixin-secret']
       || request.headers['x-weixin-bot-secret']
       || '',
   ).trim();
-  if (!provided || !secureCompareText(provided, WEIXIN_BOT_SECRET)) {
-    sendJson(response, 401, { error: '微信 bot 认证失败。' });
-    return false;
+  if (providedSecret && secureCompareText(providedSecret, WEIXIN_BOT_SECRET)) {
+    return true;
   }
-  return true;
+
+  const apiKey = String(request.headers['x-api-key'] || '').trim();
+  if (apiKey) {
+    const { user } = await requireActiveAdminApiKey(apiKey);
+    if (user) {
+      return true;
+    }
+  }
+
+  sendJson(response, 401, { error: '微信 bot 认证失败。' });
+  return false;
 }
 
 async function handleRegister(request, response) {
@@ -2165,7 +2174,7 @@ async function handleWeixinBindingDelete(request, response) {
 }
 
 async function handleWeixinBotConfigGet(request, response) {
-  if (!requireWeixinBotSecret(request, response)) {
+  if (!await requireWeixinBotAccess(request, response)) {
     return;
   }
 
@@ -2177,7 +2186,7 @@ async function handleWeixinBotConfigGet(request, response) {
 }
 
 async function handleWeixinBotResolveUser(request, response) {
-  if (!requireWeixinBotSecret(request, response)) {
+  if (!await requireWeixinBotAccess(request, response)) {
     return;
   }
 

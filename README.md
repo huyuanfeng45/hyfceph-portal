@@ -92,3 +92,42 @@ docker run -d \
 - For Vercel, connect a private Blob store and set `HYFCEPH_STORE_BACKEND=blob`.
 - When using Vercel, authentication uses signed cookies instead of in-memory sessions.
 - Public production use should still prefer self-hosted deployment, because the image measurement path shells out to the bundled Node runner.
+
+## WeChat bot on a local Mac
+
+If you want the WeChat Clawbot bridge to keep running on your own Mac, use the bundled `launchd` installer.
+
+Manual foreground run:
+
+```bash
+HYFCEPH_API_KEY='your-admin-api-key' \
+HYFCEPH_WEIXIN_PORTAL_BASE_URL='https://hyfceph.52ortho.com' \
+npm run weixin:bot
+```
+
+You can also use `HYFCEPH_WEIXIN_BOT_SECRET` instead of `HYFCEPH_API_KEY`. For most setups, using the admin API key is simpler.
+
+Install as a macOS LaunchAgent:
+
+```bash
+HYFCEPH_API_KEY='your-admin-api-key' \
+npm run weixin:bot:install:launchd -- --portal-base-url https://hyfceph.52ortho.com
+```
+
+Check status:
+
+```bash
+npm run weixin:bot:status
+```
+
+Remove LaunchAgent:
+
+```bash
+npm run weixin:bot:uninstall:launchd
+```
+
+The installer writes:
+
+- config: `~/Library/Application Support/HYFCeph/weixin-bot.json`
+- launch agent: `~/Library/LaunchAgents/com.hyf.hyfceph.weixin-bot.plist`
+- logs: `~/Library/Logs/HYFCeph/weixin-bot.out.log` and `~/Library/Logs/HYFCeph/weixin-bot.err.log`

@@ -9,6 +9,9 @@
     "start": "node server.mjs",
     "dev": "node server.mjs",
     "weixin:bot": "node scripts/hyfceph-weixin-bot.mjs",
+    "weixin:bot:install:launchd": "node scripts/hyfceph-weixin-bot-launchd-install.mjs",
+    "weixin:bot:uninstall:launchd": "node scripts/hyfceph-weixin-bot-launchd-uninstall.mjs",
+    "weixin:bot:status": "node scripts/hyfceph-weixin-bot-launchd-status.mjs",
     "publish:skill": "node scripts/publish-skill-package.mjs"
   },
   "engines": {
