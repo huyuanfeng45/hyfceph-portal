@@ -1175,7 +1175,8 @@ async function writeStoreToFile(store) {
 }
 
 async function readStoreFromBlob() {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  if (!token) {
     throw new Error('BLOB_READ_WRITE_TOKEN 未配置，无法使用 Blob 存储。');
   }
 
@@ -1184,6 +1185,7 @@ async function readStoreFromBlob() {
     const result = await get(STORE_BLOB_PATH, {
       access: 'private',
       useCache: false,
+      token,
     });
     if (!result || result.statusCode !== 200 || !result.stream) {
       return { users: [] };
@@ -1194,12 +1196,16 @@ async function readStoreFromBlob() {
     if (error instanceof BlobNotFoundError || error?.name === 'BlobNotFoundError') {
       return { users: [] };
     }
+    if (error instanceof Error && /403|forbidden|token mismatch/i.test(error.message)) {
+      throw new Error('Vercel Blob 读取失败：当前项目连接的私有 Blob Store 或 BLOB_READ_WRITE_TOKEN 不匹配，请重新连接 Blob Store 并 redeploy。');
+    }
     throw error;
   }
 }
 
 async function writeStoreToBlob(store) {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  if (!token) {
     throw new Error('BLOB_READ_WRITE_TOKEN 未配置，无法写入 Blob 存储。');
   }
 
@@ -1209,6 +1215,7 @@ async function writeStoreToBlob(store) {
     addRandomSuffix: false,
     allowOverwrite: true,
     contentType: 'application/json',
+    token,
   });
 }
 
