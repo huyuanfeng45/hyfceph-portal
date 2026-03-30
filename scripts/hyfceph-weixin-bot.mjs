@@ -48,12 +48,18 @@ if (!WEIXIN_BOT_SECRET && !PORTAL_API_KEY) {
   throw new Error(`缺少 HYFCEPH_WEIXIN_BOT_SECRET 或 HYFCEPH_API_KEY，无法启动微信 bot 服务。可在环境变量中提供，或写入 ${WEIXIN_CONFIG_PATH}`);
 }
 
+const PORTAL_RESOLVE_TIMEOUT_MS = 15_000;
+const PORTAL_MEASURE_TIMEOUT_MS = 240_000;
+const PORTAL_REPORT_TIMEOUT_MS = 90_000;
+const PORTAL_RETRY_ATTEMPTS = 3;
+const PORTAL_RETRY_DELAY_MS = 1_500;
+
 function normalizeAccountId(raw) {
   return String(raw || '').trim().toLowerCase().replace(/[@.]/g, '-');
 }
 
 async function requestJson(url, { method = 'GET', headers = {}, body } = {}) {
-  const response = await fetch(url, {
+  return fetchJsonWithRetry(url, {
     method,
     headers: {
       'Content-Type': 'application/json',
@@ -62,12 +68,79 @@ async function requestJson(url, { method = 'GET', headers = {}, body } = {}) {
       ...headers,
     },
     body,
+    timeoutMs: PORTAL_RESOLVE_TIMEOUT_MS,
+    label: `portal request ${method} ${url}`,
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload.error || `请求失败（${response.status}）。`);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetriableStatus(status) {
+  return [408, 425, 429, 500, 502, 503, 504].includes(Number(status));
+}
+
+function isTransientFetchError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  const causeMessage = String(error?.cause?.message || '').toLowerCase();
+  return /fetch failed|socket|econnreset|other side closed|empty reply|timeout|timed out|connect|network/.test(`${message} ${causeMessage}`);
+}
+
+async function readResponsePayload(response) {
+  const rawText = await response.text().catch(() => '');
+  if (!rawText.trim()) {
+    return {};
   }
-  return payload;
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    return { error: rawText.trim() };
+  }
+}
+
+async function fetchJsonWithRetry(url, {
+  method = 'GET',
+  headers = {},
+  body,
+  timeoutMs = PORTAL_RESOLVE_TIMEOUT_MS,
+  label = 'request',
+  attempts = PORTAL_RETRY_ATTEMPTS,
+} = {}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        method,
+        headers,
+        body,
+        signal: controller.signal,
+      });
+      const payload = await readResponsePayload(response);
+      if (!response.ok) {
+        const error = new Error(payload.error || `${label} failed (${response.status})`);
+        error.status = response.status;
+        throw error;
+      }
+      if (attempt > 1) {
+        console.log(`[HYFCeph Weixin] ${label} recovered on retry ${attempt}/${attempts}`);
+      }
+      return payload;
+    } catch (error) {
+      lastError = error;
+      const retriable = (error?.status && isRetriableStatus(error.status)) || isTransientFetchError(error);
+      console.warn(`[HYFCeph Weixin] ${label} failed (${attempt}/${attempts}): ${error instanceof Error ? error.message : String(error)}`);
+      if (!retriable || attempt >= attempts) {
+        break;
+      }
+      await sleep(PORTAL_RETRY_DELAY_MS * attempt);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError || `${label} failed`));
 }
 
 async function ensureWeixinAccountFiles(bot) {
@@ -158,26 +231,67 @@ async function resolvePortalUser(weixinUserId) {
   });
 }
 
+function inferMimeType(filePath, fallback = 'application/octet-stream') {
+  const ext = path.extname(String(filePath || '')).toLowerCase();
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.bmp') return 'image/bmp';
+  if (ext === '.svg') return 'image/svg+xml';
+  return fallback;
+}
+
+function toUserFacingPortalError(error) {
+  const message = String(error?.message || error || '').trim();
+  if (isTransientFetchError(error)) {
+    return '暂时无法连接 HYFCeph 服务端，请稍后再试。';
+  }
+  return message || 'HYFCeph 服务暂时不可用。';
+}
+
 async function measureImageForUser({ apiKey, media }) {
   const fileBuffer = await fs.readFile(media.filePath);
-  const payload = await fetch(`${PORTAL_BASE_URL}/api/measure/image`, {
+  const fileName = media.fileName || path.basename(media.filePath);
+  const mimeType = inferMimeType(media.filePath, media.mimeType || 'application/octet-stream');
+  console.log(`[HYFCeph Weixin] measuring image file=${fileName} mime=${mimeType} bytes=${fileBuffer.byteLength}`);
+  const payload = await fetchJsonWithRetry(`${PORTAL_BASE_URL}/api/measure/image`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
     },
     body: JSON.stringify({
-      fileName: media.fileName || path.basename(media.filePath),
-      mimeType: media.mimeType || 'application/octet-stream',
+      fileName,
+      mimeType,
       imageBase64: fileBuffer.toString('base64'),
-      generateReport: true,
+      generateReport: false,
     }),
+    timeoutMs: PORTAL_MEASURE_TIMEOUT_MS,
+    label: 'portal image measurement request',
   });
-  const result = await payload.json().catch(() => ({}));
-  if (!payload.ok) {
-    throw new Error(result.error || '测量失败。');
-  }
-  return result.result;
+  return payload.result;
+}
+
+async function generateReportsForUser({ apiKey, resultPayload }) {
+  console.log('[HYFCeph Weixin] generating report links');
+  const payload = await fetchJsonWithRetry(`${PORTAL_BASE_URL}/api/report/generate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+    },
+    body: JSON.stringify({
+      reportType: 'image',
+      resultPayload,
+    }),
+    timeoutMs: PORTAL_REPORT_TIMEOUT_MS,
+    label: 'portal html report generation request',
+  });
+  return {
+    report: payload.report || null,
+    prettyReport: payload.prettyReport || null,
+  };
 }
 
 function buildUnsupportedText() {
@@ -224,6 +338,20 @@ async function createRestrictedAgent() {
           apiKey: portalUser.auth.apiKey,
           media: request.media,
         });
+        try {
+          const reports = await generateReportsForUser({
+            apiKey: portalUser.auth.apiKey,
+            resultPayload: result,
+          });
+          if (reports.report) {
+            result.report = reports.report;
+          }
+          if (reports.prettyReport) {
+            result.prettyReport = reports.prettyReport;
+          }
+        } catch (error) {
+          console.warn(`[HYFCeph Weixin] report generation skipped: ${error instanceof Error ? error.message : String(error)}`);
+        }
         const pngBase64 = result?.artifacts?.annotatedPngBase64 || '';
         const pngMimeType = result?.artifacts?.annotatedPngMimeType || 'image/png';
         const mediaReply = pngBase64
@@ -239,7 +367,7 @@ async function createRestrictedAgent() {
         };
       } catch (error) {
         return {
-          text: `HYFCeph 处理失败：${error instanceof Error ? error.message : String(error)}`,
+          text: `HYFCeph 处理失败：${toUserFacingPortalError(error)}`,
         };
       }
     },

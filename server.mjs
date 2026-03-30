@@ -2900,6 +2900,55 @@ async function handleMeasureImage(request, response) {
   }
 }
 
+async function handleGenerateReport(request, response) {
+  const payload = await readRequestJson(request);
+  const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
+  const patientName = String(payload.patientName || '').trim();
+  const reportType = String(payload.reportType || payload.mode || 'image').trim() || 'image';
+  const resultPayload = payload.resultPayload && typeof payload.resultPayload === 'object'
+    ? payload.resultPayload
+    : null;
+
+  if (!apiKey) {
+    return sendJson(response, 400, { error: '缺少 API Key。' });
+  }
+  if (!resultPayload) {
+    return sendJson(response, 400, { error: '缺少 resultPayload。' });
+  }
+
+  const { user } = await requireActiveApiKeyUser(apiKey);
+  if (!user) {
+    return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
+  }
+
+  try {
+    const report = await generateAndUploadHtmlReport({
+      user,
+      resultPayload,
+      patientName,
+      reportType,
+      request,
+      variant: 'standard',
+    });
+    const prettyReport = await generateAndUploadHtmlReport({
+      user,
+      resultPayload,
+      patientName,
+      reportType,
+      request,
+      variant: 'pretty',
+    });
+    return sendJson(response, 200, {
+      ok: true,
+      report,
+      prettyReport,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return sendJson(response, 502, { error: message || '在线报告生成失败。' });
+  }
+}
+
 async function handleMeasureOverlap(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
@@ -3226,6 +3275,9 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'POST' && url.pathname === '/api/measure/image') {
       return await handleMeasureImage(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/report/generate') {
+      return await handleGenerateReport(request, response);
     }
     if (request.method === 'POST' && url.pathname === '/api/measure/overlap') {
       return await handleMeasureOverlap(request, response);
