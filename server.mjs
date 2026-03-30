@@ -9,6 +9,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { gunzipSync, inflateSync } from 'node:zlib';
 import OSS from 'ali-oss';
 import { buildOverlapRender, listSupportedAlignModes } from './scripts/hyfceph-overlap-renderer.mjs';
 import { generateHyfcephHtmlReport, generateHyfcephPdfReport } from './scripts/hyfceph-report-pdf.mjs';
@@ -1450,7 +1451,22 @@ async function readRequestJson(request) {
   for await (const chunk of request) {
     chunks.push(chunk);
   }
-  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  const buffer = Buffer.concat(chunks);
+  if (!buffer.length) {
+    return {};
+  }
+  const encoding = String(request.headers['content-encoding'] || '').trim().toLowerCase();
+  let decodedBuffer = buffer;
+  try {
+    if (encoding === 'gzip') {
+      decodedBuffer = gunzipSync(buffer);
+    } else if (encoding === 'deflate') {
+      decodedBuffer = inflateSync(buffer);
+    }
+  } catch {
+    throw new Error('请求体解压失败。');
+  }
+  const raw = decodedBuffer.toString('utf8').trim();
   if (!raw) {
     return {};
   }

@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { gzipSync } from 'node:zlib';
 import { start as startWeixinBot } from './vendor/weixin-agent-sdk-hyf.mjs';
 
 const DEFAULT_CONFIG_PATH = path.join(os.homedir(), 'Library', 'Application Support', 'HYFCeph', 'weixin-bot.json');
@@ -123,6 +124,7 @@ async function fetchJsonWithRetry(url, {
   method = 'GET',
   headers = {},
   body,
+  compressBody = false,
   timeoutMs = PORTAL_RESOLVE_TIMEOUT_MS,
   label = 'request',
   attempts = PORTAL_RETRY_ATTEMPTS,
@@ -132,10 +134,17 @@ async function fetchJsonWithRetry(url, {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
     try {
+      let requestBody = body;
+      const requestHeaders = { ...headers };
+      if (compressBody && typeof body === 'string' && body.length) {
+        requestBody = gzipSync(Buffer.from(body, 'utf8'));
+        requestHeaders['Content-Encoding'] = 'gzip';
+        requestHeaders['Content-Length'] = String(requestBody.length);
+      }
       const response = await fetch(url, {
         method,
-        headers,
-        body,
+        headers: requestHeaders,
+        body: requestBody,
         signal: controller.signal,
       });
       const payload = await readResponsePayload(response);
@@ -477,6 +486,7 @@ async function generateReportsForUser({ apiKey, resultPayload }) {
       reportType: 'image',
       resultPayload,
     }),
+    compressBody: true,
     timeoutMs: PORTAL_REPORT_TIMEOUT_MS,
     label: 'portal html report generation request',
   });
