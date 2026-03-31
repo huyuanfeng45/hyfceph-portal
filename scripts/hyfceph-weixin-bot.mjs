@@ -76,7 +76,7 @@ const PYTHON_QR_OVERLAY_SCRIPT = `
 import json
 import sys
 from pathlib import Path
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 payload = json.loads(sys.argv[1])
 input_path = payload["inputPath"]
@@ -97,20 +97,40 @@ result = base
 if matrix:
     short_edge = max(1, min(width, height))
     module_count = len(matrix)
-    target_qr_size = max(120, min(220, int(short_edge * 0.19)))
+    target_qr_size = max(110, min(170, int(short_edge * 0.145)))
     quiet_zone_modules = 4
     scale = max(2, target_qr_size // (module_count + quiet_zone_modules * 2))
     qr_size = (module_count + quiet_zone_modules * 2) * scale
     card_padding = max(12, qr_size // 10)
-    card_width = qr_size + card_padding * 2
-    card_height = qr_size + card_padding * 2
+    label = "扫码查看完整分析"
+    label_gap = max(8, qr_size // 16)
+    font_size = max(16, qr_size // 7)
+    font = None
+    for candidate in (
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    ):
+        try:
+            font = ImageFont.truetype(candidate, font_size)
+            break
+        except Exception:
+            continue
+    if font is None:
+        font = ImageFont.load_default()
+    text_bbox = draw_overlay.textbbox((0, 0), label, font=font)
+    text_width = max(1, text_bbox[2] - text_bbox[0])
+    text_height = max(1, text_bbox[3] - text_bbox[1])
+    card_width = max(qr_size, text_width) + card_padding * 2
+    card_height = qr_size + text_height + label_gap + card_padding * 2
     margin = max(20, short_edge // 36)
     radius = max(16, card_padding)
+    top_offset = margin + max(18, short_edge // 24)
 
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
     draw_overlay = ImageDraw.Draw(overlay)
-    x = margin
-    y = height - card_height - margin
+    x = width - card_width - margin
+    y = top_offset
     draw_overlay.rounded_rectangle(
         [x, y, x + card_width, y + card_height],
         radius=radius,
@@ -131,7 +151,17 @@ if matrix:
                     fill=(15, 23, 42, 255),
                 )
 
-    overlay.paste(qr_image, (x + card_padding, y + card_padding), qr_image)
+    qr_x = x + (card_width - qr_size) // 2
+    qr_y = y + card_padding
+    overlay.paste(qr_image, (qr_x, qr_y), qr_image)
+    text_x = x + (card_width - text_width) // 2
+    text_y = qr_y + qr_size + label_gap - text_bbox[1]
+    draw_overlay.text(
+        (text_x, text_y),
+        label,
+        font=font,
+        fill=(30, 41, 59, 255),
+    )
     result = Image.alpha_composite(base, overlay)
 Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 result.save(output_path, format="PNG")
@@ -567,6 +597,7 @@ async function updateLatestResultCache(conversationId, result, options = {}) {
       feishuDoc: result?.feishuDoc || null,
     },
     sourceImagePath,
+    rawAnnotatedImagePath: rawAnnotatedImagePath || previous.rawAnnotatedImagePath || '',
     annotatedImagePath,
     contourImagePath,
   };
@@ -585,15 +616,16 @@ function getLatestResultCache(conversationId) {
 
 async function refreshCachedReportArtifacts(conversationId, cached, result) {
   const key = normalizeConversationKey(conversationId);
-  if (!cached?.annotatedImagePath || !result?.feishuDoc?.docUrl) {
+  const rawAnnotatedImagePath = cached?.rawAnnotatedImagePath || cached?.annotatedImagePath || '';
+  if (!rawAnnotatedImagePath || !result?.feishuDoc?.docUrl) {
     return;
   }
   const refreshedAnnotatedImagePath = await composeAnnotatedImageForReply(
-    cached.annotatedImagePath,
+    rawAnnotatedImagePath,
     result.feishuDoc.docUrl,
     `${key}-annotated-qr-refresh`,
     {
-      baseImagePath: '',
+      baseImagePath: cached?.sourceImagePath || '',
     },
   );
   if (refreshedAnnotatedImagePath) {
