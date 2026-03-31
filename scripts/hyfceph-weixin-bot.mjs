@@ -58,8 +58,9 @@ if (!WEIXIN_BOT_SECRET && !PORTAL_API_KEY) {
 const PORTAL_RESOLVE_TIMEOUT_MS = 15_000;
 const PORTAL_MEASURE_TIMEOUT_MS = 240_000;
 const PORTAL_REPORT_TIMEOUT_MS = 90_000;
-const PORTAL_RETRY_ATTEMPTS = 3;
-const PORTAL_RETRY_DELAY_MS = 1_500;
+const PORTAL_RETRY_ATTEMPTS = 6;
+const PORTAL_RETRY_BASE_DELAY_MS = 1_500;
+const PORTAL_RETRY_MAX_DELAY_MS = 15_000;
 const WEIXIN_RESULT_CACHE_LIMIT = 50;
 const execFileAsync = promisify(execFile);
 const PYTHON_QR_OVERLAY_SCRIPT = `
@@ -176,6 +177,12 @@ function isTransientFetchError(error) {
   return /fetch failed|socket|econnreset|other side closed|empty reply|timeout|timed out|connect|network/.test(`${message} ${causeMessage}`);
 }
 
+function retryDelayMs(attempt) {
+  const jitter = Math.floor(Math.random() * 400);
+  const exponential = PORTAL_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attempt - 1));
+  return Math.min(PORTAL_RETRY_MAX_DELAY_MS, exponential) + jitter;
+}
+
 async function readResponsePayload(response) {
   const rawText = await response.text().catch(() => '');
   if (!rawText.trim()) {
@@ -232,7 +239,7 @@ async function fetchJsonWithRetry(url, {
       if (!retriable || attempt >= attempts) {
         break;
       }
-      await sleep(PORTAL_RETRY_DELAY_MS * attempt);
+      await sleep(retryDelayMs(attempt));
     } finally {
       clearTimeout(timeout);
     }
