@@ -924,21 +924,6 @@ async function createRestrictedAgent() {
         }
 
         try {
-          const feishuDoc = await promiseWithTimeout(
-            generateFeishuDocForUser({
-              apiKey: portalUser.auth.apiKey,
-              resultPayload: result,
-            }),
-            12_000,
-            'feishu doc generation timeout after 12000ms',
-          );
-          if (feishuDoc) {
-            result.feishuDoc = feishuDoc;
-          }
-        } catch (error) {
-          console.warn(`[HYFCeph Weixin] feishu doc generation skipped: ${error instanceof Error ? error.message : String(error)}`);
-        }
-        try {
           const reports = await promiseWithTimeout(
             generateReportsForUser({
               apiKey: portalUser.auth.apiKey,
@@ -958,6 +943,23 @@ async function createRestrictedAgent() {
           }
         } catch (error) {
           console.warn(`[HYFCeph Weixin] report generation skipped: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        try {
+          const feishuDoc = await promiseWithTimeout(
+            generateFeishuDocForUser({
+              apiKey: portalUser.auth.apiKey,
+              resultPayload: result,
+              prettyReportUrl: result?.prettyReport?.reportShareUrl || result?.prettyReport?.shortUrl || '',
+              standardReportUrl: result?.report?.reportShareUrl || result?.report?.shortUrl || '',
+            }),
+            12_000,
+            'feishu doc generation timeout after 12000ms',
+          );
+          if (feishuDoc) {
+            result.feishuDoc = feishuDoc;
+          }
+        } catch (error) {
+          console.warn(`[HYFCeph Weixin] feishu doc generation skipped: ${error instanceof Error ? error.message : String(error)}`);
         }
         await updateLatestResultCache(request.conversationId, result, {
           sourceImagePath: request.media?.filePath || '',
