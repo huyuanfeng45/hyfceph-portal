@@ -525,38 +525,43 @@ async function composeAnnotatedImageForReply(imagePath, feishuDocUrl, prefix, {
 
 async function updateLatestResultCache(conversationId, result, options = {}) {
   const key = normalizeConversationKey(conversationId);
+  const previous = latestResultCache[key] || {};
   const sourceImagePath = await persistOriginalImageFile(
     options.sourceImagePath || '',
     `${key}-source`,
-  );
+  ) || previous.sourceImagePath || '';
   const rawAnnotatedImagePath = await persistArtifactBase64(
     result?.artifacts?.annotatedPngBase64 || '',
     result?.artifacts?.annotatedPngMimeType || 'image/png',
     `${key}-annotated`,
-  );
+  ) || '';
   const annotatedImagePath = await composeAnnotatedImageForReply(
-    rawAnnotatedImagePath,
+    rawAnnotatedImagePath || previous.annotatedImagePath || '',
     result?.feishuDoc?.docUrl || '',
     `${key}-annotated-qr`,
     {
       baseImagePath: sourceImagePath,
     },
-  );
+  ) || previous.annotatedImagePath || '';
   const contourImagePath = await persistArtifactBase64(
     result?.artifacts?.contourPngBase64 || '',
     result?.artifacts?.contourPngMimeType || 'image/png',
     `${key}-contour`,
-  );
+  ) || previous.contourImagePath || '';
   latestResultCache[key] = {
     updatedAt: new Date().toISOString(),
     result: {
+      mode: result?.mode || previous.result?.mode || '',
       analysis: {
         riskLabel: result?.analysis?.riskLabel || '',
         insight: result?.analysis?.insight || '',
         metrics: Array.isArray(result?.analysis?.metrics) ? result.analysis.metrics : [],
         frameworkReports: result?.analysis?.frameworkReports || {},
       },
+      analysisError: result?.analysisError || null,
+      metrics: Array.isArray(result?.metrics) ? result.metrics : [],
       summary: result?.summary || {},
+      reportPayload: result?.reportPayload || previous.result?.reportPayload || null,
       report: result?.report || null,
       prettyReport: result?.prettyReport || null,
       feishuDoc: result?.feishuDoc || null,
@@ -576,6 +581,29 @@ async function updateLatestResultCache(conversationId, result, options = {}) {
 
 function getLatestResultCache(conversationId) {
   return latestResultCache[normalizeConversationKey(conversationId)] || null;
+}
+
+async function refreshCachedReportArtifacts(conversationId, cached, result) {
+  const key = normalizeConversationKey(conversationId);
+  if (!cached?.annotatedImagePath || !result?.feishuDoc?.docUrl) {
+    return;
+  }
+  const refreshedAnnotatedImagePath = await composeAnnotatedImageForReply(
+    cached.annotatedImagePath,
+    result.feishuDoc.docUrl,
+    `${key}-annotated-qr-refresh`,
+    {
+      baseImagePath: '',
+    },
+  );
+  if (refreshedAnnotatedImagePath) {
+    latestResultCache[key] = {
+      ...(latestResultCache[key] || cached),
+      annotatedImagePath: refreshedAnnotatedImagePath,
+      updatedAt: new Date().toISOString(),
+    };
+    await saveResultCache();
+  }
 }
 
 async function writeBase64Image(base64, mimeType, prefix) {
@@ -847,6 +875,78 @@ async function generateFeishuDocForUser({ apiKey, resultPayload, prettyReportUrl
   return payload.feishuDoc || null;
 }
 
+async function hydrateCachedReportsForUser({ conversationId, apiKey, cached }) {
+  if (!cached?.result) {
+    return cached;
+  }
+  const workingResult = JSON.parse(JSON.stringify(cached.result));
+
+  try {
+    const reportPayload = await promiseWithTimeout(
+      ensureReportPayloadKey({
+        apiKey,
+        resultPayload: workingResult,
+      }),
+      REPORT_PAYLOAD_SOFT_TIMEOUT_MS,
+      `report payload upload timeout after ${REPORT_PAYLOAD_SOFT_TIMEOUT_MS}ms`,
+    );
+    if (reportPayload) {
+      workingResult.reportPayload = reportPayload;
+    }
+  } catch (error) {
+    console.warn(`[HYFCeph Weixin] cached report payload upload skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
+    const reports = await promiseWithTimeout(
+      generateReportsForUser({
+        apiKey,
+        resultPayload: workingResult,
+      }),
+      REPORT_GENERATION_SOFT_TIMEOUT_MS,
+      `report generation timeout after ${REPORT_GENERATION_SOFT_TIMEOUT_MS}ms`,
+    );
+    if (reports.report) {
+      workingResult.report = reports.report;
+    }
+    if (reports.prettyReport) {
+      workingResult.prettyReport = reports.prettyReport;
+    }
+    if (reports.feishuDoc && !workingResult.feishuDoc) {
+      workingResult.feishuDoc = reports.feishuDoc;
+    }
+  } catch (error) {
+    console.warn(`[HYFCeph Weixin] cached report generation skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
+    const feishuDoc = await promiseWithTimeout(
+      generateFeishuDocForUser({
+        apiKey,
+        resultPayload: workingResult,
+        prettyReportUrl: workingResult?.prettyReport?.reportShareUrl || workingResult?.prettyReport?.shortUrl || '',
+        standardReportUrl: workingResult?.report?.reportShareUrl || workingResult?.report?.shortUrl || '',
+      }),
+      FEISHU_DOC_SOFT_TIMEOUT_MS,
+      `feishu doc generation timeout after ${FEISHU_DOC_SOFT_TIMEOUT_MS}ms`,
+    );
+    if (feishuDoc) {
+      workingResult.feishuDoc = feishuDoc;
+    }
+  } catch (error) {
+    console.warn(`[HYFCeph Weixin] cached feishu doc generation skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  latestResultCache[normalizeConversationKey(conversationId)] = {
+    ...cached,
+    updatedAt: new Date().toISOString(),
+    result: workingResult,
+  };
+  await saveResultCache();
+  await refreshCachedReportArtifacts(conversationId, cached, workingResult);
+  return getLatestResultCache(conversationId) || cached;
+}
+
 function buildUnsupportedText() {
   return [
     '这个微信入口只处理 HYFCeph 相关内容。',
@@ -886,15 +986,30 @@ async function createRestrictedAgent() {
         }
 
         if (/在线报告|报告链接|报告地址|报告/.test(text)) {
+          let hydrated = cached;
+          const missingAnyLink = !cached.result?.report?.reportShareUrl
+            || !cached.result?.prettyReport?.reportShareUrl
+            || !cached.result?.feishuDoc?.docUrl;
+          if (missingAnyLink) {
+            try {
+              hydrated = await hydrateCachedReportsForUser({
+                conversationId: request.conversationId,
+                apiKey: portalUser.auth.apiKey,
+                cached,
+              });
+            } catch (error) {
+              console.warn(`[HYFCeph Weixin] on-demand report hydration skipped: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
           const lines = [];
-          if (cached.result?.prettyReport?.reportShareUrl || cached.result?.prettyReport?.shortUrl) {
-            lines.push(`美化报告链接：${cached.result.prettyReport.reportShareUrl || cached.result.prettyReport.shortUrl}`);
+          if (hydrated.result?.prettyReport?.reportShareUrl || hydrated.result?.prettyReport?.shortUrl) {
+            lines.push(`美化报告链接：${hydrated.result.prettyReport.reportShareUrl || hydrated.result.prettyReport.shortUrl}`);
           }
-          if (cached.result?.feishuDoc?.docUrl) {
-            lines.push(`飞书文档版：${cached.result.feishuDoc.docUrl}`);
+          if (hydrated.result?.feishuDoc?.docUrl) {
+            lines.push(`飞书文档版：${hydrated.result.feishuDoc.docUrl}`);
           }
-          if (cached.result?.report?.reportShareUrl || cached.result?.report?.shortUrl) {
-            lines.push(`在线报告链接：${cached.result.report.reportShareUrl || cached.result.report.shortUrl}`);
+          if (hydrated.result?.report?.reportShareUrl || hydrated.result?.report?.shortUrl) {
+            lines.push(`在线报告链接：${hydrated.result.report.reportShareUrl || hydrated.result.report.shortUrl}`);
           }
           return {
             text: lines.length ? lines.join('\n') : '最近一次测量还没有生成在线报告链接。',
@@ -1008,6 +1123,47 @@ async function createRestrictedAgent() {
           }
         } catch (error) {
           console.warn(`[HYFCeph Weixin] feishu doc generation skipped: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        if (!result.report && !result.prettyReport && !result.feishuDoc) {
+          try {
+            await sleep(1500);
+            const reports = await promiseWithTimeout(
+              generateReportsForUser({
+                apiKey: portalUser.auth.apiKey,
+                resultPayload: result,
+              }),
+              REPORT_GENERATION_SOFT_TIMEOUT_MS,
+              `report generation timeout after ${REPORT_GENERATION_SOFT_TIMEOUT_MS}ms`,
+            );
+            if (reports.report) {
+              result.report = reports.report;
+            }
+            if (reports.prettyReport) {
+              result.prettyReport = reports.prettyReport;
+            }
+            if (reports.feishuDoc && !result.feishuDoc) {
+              result.feishuDoc = reports.feishuDoc;
+            }
+          } catch (error) {
+            console.warn(`[HYFCeph Weixin] delayed report generation skipped: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          try {
+            const feishuDoc = await promiseWithTimeout(
+              generateFeishuDocForUser({
+                apiKey: portalUser.auth.apiKey,
+                resultPayload: result,
+                prettyReportUrl: result?.prettyReport?.reportShareUrl || result?.prettyReport?.shortUrl || '',
+                standardReportUrl: result?.report?.reportShareUrl || result?.report?.shortUrl || '',
+              }),
+              FEISHU_DOC_SOFT_TIMEOUT_MS,
+              `feishu doc generation timeout after ${FEISHU_DOC_SOFT_TIMEOUT_MS}ms`,
+            );
+            if (feishuDoc) {
+              result.feishuDoc = feishuDoc;
+            }
+          } catch (error) {
+            console.warn(`[HYFCeph Weixin] delayed feishu doc generation skipped: ${error instanceof Error ? error.message : String(error)}`);
+          }
         }
         await updateLatestResultCache(request.conversationId, result, {
           sourceImagePath: request.media?.filePath || '',
