@@ -63,7 +63,9 @@ if (!WEIXIN_BOT_SECRET && !PORTAL_API_KEY) {
 const PORTAL_RESOLVE_TIMEOUT_MS = 15_000;
 const PORTAL_MEASURE_TIMEOUT_MS = 240_000;
 const PORTAL_REPORT_TIMEOUT_MS = 90_000;
-const REPORT_GENERATION_SOFT_TIMEOUT_MS = 15_000;
+const REPORT_GENERATION_SOFT_TIMEOUT_MS = 30_000;
+const REPORT_PAYLOAD_SOFT_TIMEOUT_MS = 20_000;
+const FEISHU_DOC_SOFT_TIMEOUT_MS = 15_000;
 const PORTAL_RETRY_ATTEMPTS = 6;
 const PORTAL_RETRY_BASE_DELAY_MS = 1_500;
 const PORTAL_RETRY_MAX_DELAY_MS = 15_000;
@@ -620,6 +622,31 @@ function toUserFacingPortalError(error) {
   return message || 'HYFCeph 服务暂时不可用。';
 }
 
+function buildPortalReportPayload(resultPayload) {
+  const payload = resultPayload && typeof resultPayload === 'object' ? resultPayload : {};
+  const artifacts = payload.artifacts && typeof payload.artifacts === 'object' ? payload.artifacts : {};
+  return {
+    ...payload,
+    artifacts: {
+      annotatedPngBase64: artifacts.annotatedPngBase64 || null,
+      annotatedPngMimeType: artifacts.annotatedPngMimeType || null,
+      contourPngBase64: artifacts.contourPngBase64 || null,
+      contourPngMimeType: artifacts.contourPngMimeType || null,
+    },
+  };
+}
+
+function buildFeishuDocPayload(resultPayload) {
+  const payload = resultPayload && typeof resultPayload === 'object' ? resultPayload : {};
+  return {
+    mode: payload.mode || '',
+    analysis: payload.analysis || null,
+    analysisError: payload.analysisError || null,
+    summary: payload.summary || null,
+    metrics: payload.metrics || payload.analysis?.metrics || [],
+  };
+}
+
 async function measureImageForUser({ apiKey, media }) {
   void apiKey;
   const operatorSession = await fetchOperatorSessionForBot();
@@ -733,6 +760,7 @@ async function measureImageViaPortal({ apiKey, media }) {
 async function generateReportsForUser({ apiKey, resultPayload }) {
   console.log('[HYFCeph Weixin] generating report links');
   const reportPayloadKey = String(resultPayload?.reportPayload?.objectKey || '').trim();
+  const compactPayload = reportPayloadKey ? null : buildPortalReportPayload(resultPayload);
   const payload = await fetchJsonWithRetry(`${PORTAL_BASE_URL}/api/report/generate`, {
     method: 'POST',
     headers: {
@@ -741,7 +769,7 @@ async function generateReportsForUser({ apiKey, resultPayload }) {
     },
     body: JSON.stringify({
       reportType: 'image',
-      ...(reportPayloadKey ? { resultPayloadKey: reportPayloadKey } : { resultPayload }),
+      ...(reportPayloadKey ? { resultPayloadKey: reportPayloadKey } : { resultPayload: compactPayload }),
     }),
     compressBody: !reportPayloadKey,
     timeoutMs: PORTAL_REPORT_TIMEOUT_MS,
@@ -760,6 +788,7 @@ async function ensureReportPayloadKey({ apiKey, resultPayload }) {
     return resultPayload.reportPayload;
   }
   console.log('[HYFCeph Weixin] uploading result payload key');
+  const compactPayload = buildPortalReportPayload(resultPayload);
   const payload = await fetchJsonWithRetry(`${PORTAL_BASE_URL}/api/report/payload`, {
     method: 'POST',
     headers: {
@@ -768,7 +797,7 @@ async function ensureReportPayloadKey({ apiKey, resultPayload }) {
     },
     body: JSON.stringify({
       reportType: 'image',
-      resultPayload,
+      resultPayload: compactPayload,
     }),
     compressBody: true,
     timeoutMs: PORTAL_REPORT_TIMEOUT_MS,
@@ -780,6 +809,7 @@ async function ensureReportPayloadKey({ apiKey, resultPayload }) {
 async function generateFeishuDocForUser({ apiKey, resultPayload, prettyReportUrl = '', standardReportUrl = '' }) {
   console.log('[HYFCeph Weixin] generating feishu doc');
   const reportPayloadKey = String(resultPayload?.reportPayload?.objectKey || '').trim();
+  const compactPayload = reportPayloadKey ? null : buildFeishuDocPayload(resultPayload);
   const payload = await fetchJsonWithRetry(`${PORTAL_BASE_URL}/api/report/feishu-doc`, {
     method: 'POST',
     headers: {
@@ -790,7 +820,7 @@ async function generateFeishuDocForUser({ apiKey, resultPayload, prettyReportUrl
       reportType: 'image',
       prettyReportUrl,
       standardReportUrl,
-      ...(reportPayloadKey ? { resultPayloadKey: reportPayloadKey } : { resultPayload }),
+      ...(reportPayloadKey ? { resultPayloadKey: reportPayloadKey } : { resultPayload: compactPayload }),
     }),
     compressBody: !reportPayloadKey,
     timeoutMs: PORTAL_REPORT_TIMEOUT_MS,
@@ -913,8 +943,8 @@ async function createRestrictedAgent() {
               apiKey: portalUser.auth.apiKey,
               resultPayload: result,
             }),
-            12_000,
-            'report payload upload timeout after 12000ms',
+            REPORT_PAYLOAD_SOFT_TIMEOUT_MS,
+            `report payload upload timeout after ${REPORT_PAYLOAD_SOFT_TIMEOUT_MS}ms`,
           );
           if (reportPayload) {
             result.reportPayload = reportPayload;
@@ -952,8 +982,8 @@ async function createRestrictedAgent() {
               prettyReportUrl: result?.prettyReport?.reportShareUrl || result?.prettyReport?.shortUrl || '',
               standardReportUrl: result?.report?.reportShareUrl || result?.report?.shortUrl || '',
             }),
-            12_000,
-            'feishu doc generation timeout after 12000ms',
+            FEISHU_DOC_SOFT_TIMEOUT_MS,
+            `feishu doc generation timeout after ${FEISHU_DOC_SOFT_TIMEOUT_MS}ms`,
           );
           if (feishuDoc) {
             result.feishuDoc = feishuDoc;
