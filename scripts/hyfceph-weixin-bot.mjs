@@ -70,10 +70,18 @@ from PIL import Image, ImageDraw
 
 payload = json.loads(sys.argv[1])
 input_path = payload["inputPath"]
+base_image_path = payload.get("baseImagePath") or ""
 output_path = payload["outputPath"]
 matrix = payload["matrix"]
 
-base = Image.open(input_path).convert("RGBA")
+if base_image_path:
+    base = Image.open(base_image_path).convert("RGBA")
+    overlay_source = Image.open(input_path).convert("RGBA")
+    if overlay_source.size != base.size:
+        overlay_source = overlay_source.resize(base.size, Image.Resampling.LANCZOS)
+    base = Image.alpha_composite(base, overlay_source)
+else:
+    base = Image.open(input_path).convert("RGBA")
 width, height = base.size
 short_edge = max(1, min(width, height))
 module_count = max(1, len(matrix))
@@ -442,7 +450,23 @@ async function persistArtifactBase64(base64, mimeType, prefix) {
   return filePath;
 }
 
-async function composeAnnotatedImageWithFeishuQr(imagePath, feishuDocUrl, prefix) {
+async function persistOriginalImageFile(filePath, prefix) {
+  if (!filePath) {
+    return null;
+  }
+  await ensureCacheDirs();
+  const extension = path.extname(String(filePath || '')).trim() || '.png';
+  const outputPath = path.join(
+    WEIXIN_MEDIA_CACHE_DIR,
+    `${prefix}-${Date.now()}-${randomBytes(4).toString('hex')}${extension}`,
+  );
+  await fs.copyFile(filePath, outputPath);
+  return outputPath;
+}
+
+async function composeAnnotatedImageWithFeishuQr(imagePath, feishuDocUrl, prefix, {
+  baseImagePath = null,
+} = {}) {
   const normalizedUrl = String(feishuDocUrl || '').trim();
   if (!imagePath || !normalizedUrl) {
     return imagePath;
@@ -454,6 +478,7 @@ async function composeAnnotatedImageWithFeishuQr(imagePath, feishuDocUrl, prefix
   );
   const payload = {
     inputPath: imagePath,
+    baseImagePath: baseImagePath || '',
     outputPath,
     matrix: buildQrMatrix(normalizedUrl),
   };
@@ -466,8 +491,12 @@ async function composeAnnotatedImageWithFeishuQr(imagePath, feishuDocUrl, prefix
   }
 }
 
-async function updateLatestResultCache(conversationId, result) {
+async function updateLatestResultCache(conversationId, result, options = {}) {
   const key = normalizeConversationKey(conversationId);
+  const sourceImagePath = await persistOriginalImageFile(
+    options.sourceImagePath || '',
+    `${key}-source`,
+  );
   const rawAnnotatedImagePath = await persistArtifactBase64(
     result?.artifacts?.annotatedPngBase64 || '',
     result?.artifacts?.annotatedPngMimeType || 'image/png',
@@ -477,6 +506,9 @@ async function updateLatestResultCache(conversationId, result) {
     rawAnnotatedImagePath,
     result?.feishuDoc?.docUrl || '',
     `${key}-annotated-qr`,
+    {
+      baseImagePath: sourceImagePath,
+    },
   );
   const contourImagePath = await persistArtifactBase64(
     result?.artifacts?.contourPngBase64 || '',
@@ -497,6 +529,7 @@ async function updateLatestResultCache(conversationId, result) {
       prettyReport: result?.prettyReport || null,
       feishuDoc: result?.feishuDoc || null,
     },
+    sourceImagePath,
     annotatedImagePath,
     contourImagePath,
   };
@@ -724,7 +757,9 @@ async function createRestrictedAgent() {
         } catch (error) {
           console.warn(`[HYFCeph Weixin] report generation skipped: ${error instanceof Error ? error.message : String(error)}`);
         }
-        await updateLatestResultCache(request.conversationId, result);
+        await updateLatestResultCache(request.conversationId, result, {
+          sourceImagePath: request.media?.filePath || '',
+        });
         const cached = getLatestResultCache(request.conversationId);
         const pngBase64 = result?.artifacts?.annotatedPngBase64 || '';
         const pngMimeType = result?.artifacts?.annotatedPngMimeType || 'image/png';
