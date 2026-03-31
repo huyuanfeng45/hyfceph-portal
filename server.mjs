@@ -1194,12 +1194,14 @@ function normalizeReportLinkRecord(code, record) {
   }
   const normalizedCode = String(code || '').trim();
   const objectKey = String(record.objectKey || '').trim();
-  if (!normalizedCode || !objectKey) {
+  const payloadObjectKey = String(record.payloadObjectKey || '').trim();
+  if (!normalizedCode || (!objectKey && !payloadObjectKey)) {
     return null;
   }
   return {
     code: normalizedCode,
-    objectKey,
+    objectKey: objectKey || null,
+    payloadObjectKey: payloadObjectKey || null,
     userId: typeof record.userId === 'string' && record.userId.trim() ? record.userId.trim() : null,
     patientName: typeof record.patientName === 'string' && record.patientName.trim() ? record.patientName.trim() : null,
     reportType: typeof record.reportType === 'string' && record.reportType.trim() ? record.reportType.trim() : 'report',
@@ -1306,9 +1308,14 @@ async function issuePdfShortLink({ user, objectKey, patientName, reportType, req
   };
 }
 
-async function createReportShortLinkRecord({ store, user, objectKey, patientName, reportType, variant = 'standard' }) {
+async function createReportShortLinkRecord({ store, user, objectKey = '', payloadObjectKey = '', patientName, reportType, variant = 'standard' }) {
   const normalizedStore = normalizeStoreRecord(store);
   const reportLinks = { ...(normalizedStore.reportLinks || {}) };
+  const normalizedObjectKey = String(objectKey || '').trim();
+  const normalizedPayloadObjectKey = String(payloadObjectKey || '').trim();
+  if (!normalizedObjectKey && !normalizedPayloadObjectKey) {
+    throw new Error('缺少报告内容来源。');
+  }
   let code = '';
   do {
     code = createPdfShortCode();
@@ -1316,7 +1323,8 @@ async function createReportShortLinkRecord({ store, user, objectKey, patientName
 
   reportLinks[code] = {
     code,
-    objectKey,
+    objectKey: normalizedObjectKey || null,
+    payloadObjectKey: normalizedPayloadObjectKey || null,
     userId: user?.id || null,
     patientName: patientName || null,
     reportType: reportType || 'report',
@@ -1339,12 +1347,13 @@ async function createReportShortLinkRecord({ store, user, objectKey, patientName
   };
 }
 
-async function issueReportShortLink({ user, objectKey, patientName, reportType, request = null, variant = 'standard' }) {
+async function issueReportShortLink({ user, objectKey = '', payloadObjectKey = '', patientName, reportType, request = null, variant = 'standard' }) {
   const store = await readStore();
   const created = await createReportShortLinkRecord({
     store,
     user,
     objectKey,
+    payloadObjectKey,
     patientName,
     reportType,
     variant,
@@ -1353,6 +1362,63 @@ async function issueReportShortLink({ user, objectKey, patientName, reportType, 
     code: created.code,
     shortUrl: buildReportShortUrl(created.code, request, variant),
   };
+}
+
+async function handleIssueReportLinks(request, response) {
+  const payload = await readRequestJson(request);
+  const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
+  const patientName = String(payload.patientName || '').trim();
+  const reportType = String(payload.reportType || payload.mode || 'image').trim() || 'image';
+  const resultPayloadKey = String(payload.resultPayloadKey || '').trim();
+
+  if (!apiKey) {
+    return sendJson(response, 400, { error: '缺少 API Key。' });
+  }
+  if (!resultPayloadKey) {
+    return sendJson(response, 400, { error: '缺少 resultPayloadKey。' });
+  }
+
+  const { user } = await requireActiveApiKeyUser(apiKey);
+  if (!user) {
+    return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
+  }
+
+  try {
+    const report = await issueReportShortLink({
+      user,
+      payloadObjectKey: resultPayloadKey,
+      patientName,
+      reportType,
+      request,
+      variant: 'standard',
+    });
+    const prettyReport = await issueReportShortLink({
+      user,
+      payloadObjectKey: resultPayloadKey,
+      patientName,
+      reportType,
+      request,
+      variant: 'pretty',
+    });
+    return sendJson(response, 200, {
+      ok: true,
+      report: {
+        ok: true,
+        shortCode: report.code,
+        shortUrl: report.shortUrl,
+        reportShareUrl: report.shortUrl,
+      },
+      prettyReport: {
+        ok: true,
+        shortCode: prettyReport.code,
+        shortUrl: prettyReport.shortUrl,
+        reportShareUrl: prettyReport.shortUrl,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return sendJson(response, 502, { error: message || '报告短链接生成失败。' });
+  }
 }
 
 function base64UrlEncode(value) {
@@ -3029,7 +3095,29 @@ async function handleReportShortLink(request, response, code) {
   await writeStore(store);
 
   try {
-    const html = await loadTextObjectFromOss(record.objectKey);
+    let html = '';
+    if (record.objectKey) {
+      html = await loadTextObjectFromOss(record.objectKey);
+    } else if (record.payloadObjectKey) {
+      const resultPayload = await loadReportPayloadFromOss(record.payloadObjectKey);
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hyfceph-report-live-'));
+      const resultJsonPath = path.join(tempDir, 'result.json');
+      const htmlOutputPath = path.join(tempDir, `report-${sanitizeFileStem(record.variant || 'standard')}.html`);
+      try {
+        await fs.writeFile(resultJsonPath, JSON.stringify(resultPayload, null, 2), 'utf8');
+        await generateHyfcephHtmlReport({
+          inputPath: resultJsonPath,
+          outputPath: htmlOutputPath,
+          patientName: record.patientName || undefined,
+          variant: record.variant || 'standard',
+        });
+        html = await fs.readFile(htmlOutputPath, 'utf8');
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      }
+    } else {
+      throw new Error('报告内容不存在。');
+    }
     return sendText(response, 200, html, 'text/html; charset=utf-8');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -3703,6 +3791,9 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'POST' && url.pathname === '/api/report/generate') {
       return await handleGenerateReport(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/report/links') {
+      return await handleIssueReportLinks(request, response);
     }
     if (request.method === 'POST' && url.pathname === '/api/report/payload') {
       return await handleUploadReportPayload(request, response);

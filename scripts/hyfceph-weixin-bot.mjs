@@ -760,6 +760,26 @@ async function measureImageViaPortal({ apiKey, media }) {
 async function generateReportsForUser({ apiKey, resultPayload }) {
   console.log('[HYFCeph Weixin] generating report links');
   const reportPayloadKey = String(resultPayload?.reportPayload?.objectKey || '').trim();
+  if (reportPayloadKey) {
+    const payload = await fetchJsonWithRetry(`${PORTAL_BASE_URL}/api/report/links`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+      },
+      body: JSON.stringify({
+        reportType: 'image',
+        resultPayloadKey: reportPayloadKey,
+      }),
+      timeoutMs: PORTAL_REPORT_TIMEOUT_MS,
+      label: 'portal report link issue request',
+    });
+    return {
+      report: payload.report || null,
+      prettyReport: payload.prettyReport || null,
+      feishuDoc: payload.feishuDoc || null,
+    };
+  }
   const compactPayload = reportPayloadKey ? null : buildPortalReportPayload(resultPayload);
   const payload = await fetchJsonWithRetry(`${PORTAL_BASE_URL}/api/report/generate`, {
     method: 'POST',
