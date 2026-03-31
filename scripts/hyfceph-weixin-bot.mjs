@@ -9,9 +9,14 @@ import path from 'node:path';
 import process from 'node:process';
 import { promisify } from 'node:util';
 import { gzipSync } from 'node:zlib';
+import { fileURLToPath } from 'node:url';
 import { qrcode } from './vendor/qrcode.mjs';
 import { start as startWeixinBot } from './vendor/weixin-agent-sdk-hyf.mjs';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const REPO_ROOT = path.resolve(__dirname, '..');
+const SERVICE_RUNNER = path.join(REPO_ROOT, 'scripts', 'hyfceph-remote-runner.mjs');
 const DEFAULT_CONFIG_PATH = path.join(os.homedir(), 'Library', 'Application Support', 'HYFCeph', 'weixin-bot.json');
 const WEIXIN_CONFIG_PATH = process.env.HYFCEPH_WEIXIN_CONFIG_PATH?.trim() || DEFAULT_CONFIG_PATH;
 const HYFCEPH_APP_SUPPORT_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'HYFCeph');
@@ -61,6 +66,7 @@ const PORTAL_REPORT_TIMEOUT_MS = 90_000;
 const PORTAL_RETRY_ATTEMPTS = 6;
 const PORTAL_RETRY_BASE_DELAY_MS = 1_500;
 const PORTAL_RETRY_MAX_DELAY_MS = 15_000;
+const LOCAL_MEASURE_BUFFER_BYTES = 128 * 1024 * 1024;
 const WEIXIN_RESULT_CACHE_LIMIT = 50;
 const execFileAsync = promisify(execFile);
 const PYTHON_QR_OVERLAY_SCRIPT = `
@@ -575,6 +581,11 @@ async function resolvePortalUser(weixinUserId) {
   });
 }
 
+async function fetchOperatorSessionForBot() {
+  const payload = await requestJson(`${PORTAL_BASE_URL}/api/weixin/bot/operator-session`);
+  return payload.operatorSession || null;
+}
+
 function inferMimeType(filePath, fallback = 'application/octet-stream') {
   const ext = path.extname(String(filePath || '')).toLowerCase();
   if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
@@ -595,6 +606,92 @@ function toUserFacingPortalError(error) {
 }
 
 async function measureImageForUser({ apiKey, media }) {
+  void apiKey;
+  const operatorSession = await fetchOperatorSessionForBot();
+  if (!operatorSession?.token || !operatorSession?.pageUrl) {
+    throw new Error('管理员远程会话暂不可用，请稍后再试。');
+  }
+
+  await fs.mkdir(MEDIA_OUT_DIR, { recursive: true });
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hyfceph-weixin-measure-'));
+  const outputPath = path.join(tempDir, 'result.json');
+  const annotatedSvgPath = path.join(tempDir, 'annotated.svg');
+  const annotatedPngPath = path.join(tempDir, 'annotated.png');
+  const contourSvgPath = path.join(tempDir, 'contour.svg');
+  const contourPngPath = path.join(tempDir, 'contour.png');
+  const downloadedImagePath = path.join(tempDir, 'input');
+  const fileName = media.fileName || path.basename(media.filePath);
+  console.log(`[HYFCeph Weixin] measuring locally file=${fileName} via local runner`);
+
+  const args = [
+    SERVICE_RUNNER,
+    '--skip-portal-validation',
+    '--no-session-cache',
+    '--output',
+    outputPath,
+    '--annotated-output',
+    annotatedSvgPath,
+    '--annotated-png-output',
+    annotatedPngPath,
+    '--contour-output',
+    contourSvgPath,
+    '--contour-png-output',
+    contourPngPath,
+    '--downloaded-image-output',
+    downloadedImagePath,
+    '--image',
+    media.filePath,
+    '--token',
+    operatorSession.token,
+    '--page-url',
+    operatorSession.pageUrl,
+  ];
+
+  try {
+    await execFileAsync(process.execPath, args, {
+      cwd: REPO_ROOT,
+      env: {
+        ...process.env,
+      },
+      maxBuffer: LOCAL_MEASURE_BUFFER_BYTES,
+    });
+    const output = JSON.parse(await fs.readFile(outputPath, 'utf8'));
+    const annotatedPngBuffer = await fs.readFile(output.annotatedPngPath || annotatedPngPath).catch(() => null);
+    const annotatedSvgText = await fs.readFile(output.annotatedSvgPath || annotatedSvgPath, 'utf8').catch(() => null);
+    const contourPngBuffer = await fs.readFile(output.contourPngPath || contourPngPath).catch(() => null);
+    const contourSvgText = await fs.readFile(output.contourSvgPath || contourSvgPath, 'utf8').catch(() => null);
+
+    return {
+      analysis: output.analysis || null,
+      analysisError: output.analysisError || null,
+      annotationError: annotatedPngBuffer ? null : (output.annotationError || null),
+      contourError: contourPngBuffer ? null : (output.contourError || null),
+      summary: output.summary || null,
+      metrics: output.analysis?.metrics || [],
+      taskId: output.taskId || null,
+      resultUrl: output.resultUrl || null,
+      artifacts: {
+        annotatedPngBase64: annotatedPngBuffer ? annotatedPngBuffer.toString('base64') : null,
+        annotatedPngMimeType: annotatedPngBuffer ? 'image/png' : null,
+        annotatedSvgBase64: annotatedSvgText ? Buffer.from(annotatedSvgText, 'utf8').toString('base64') : null,
+        annotatedSvgMimeType: annotatedSvgText ? 'image/svg+xml' : null,
+        contourPngBase64: contourPngBuffer ? contourPngBuffer.toString('base64') : null,
+        contourPngMimeType: contourPngBuffer ? 'image/png' : null,
+        contourSvgBase64: contourSvgText ? Buffer.from(contourSvgText, 'utf8').toString('base64') : null,
+        contourSvgMimeType: contourSvgText ? 'image/svg+xml' : null,
+      },
+    };
+  } catch (error) {
+    const stderr = String(error?.stderr || '').trim();
+    const stdout = String(error?.stdout || '').trim();
+    const reason = stderr || stdout || (error instanceof Error ? error.message : String(error));
+    throw new Error(reason || '本机测量失败。');
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function measureImageViaPortal({ apiKey, media }) {
   const fileBuffer = await fs.readFile(media.filePath);
   const fileName = media.fileName || path.basename(media.filePath);
   const mimeType = inferMimeType(media.filePath, media.mimeType || 'application/octet-stream');

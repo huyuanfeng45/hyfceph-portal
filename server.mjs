@@ -2662,6 +2662,35 @@ async function handleWeixinBotConfigGet(request, response) {
   });
 }
 
+async function handleWeixinBotOperatorSessionGet(request, response) {
+  if (!await requireWeixinBotAccess(request, response)) {
+    return;
+  }
+
+  const store = await readStore();
+  const operatorSession = normalizeOperatorSession(store.operatorSession);
+  if (!operatorSession || !isOperatorSessionActive(operatorSession)) {
+    return sendJson(response, 503, { error: '管理员远程会话暂不可用，请先重新同步浏览器会话。' });
+  }
+
+  return sendJson(response, 200, {
+    ok: true,
+    operatorSession: {
+      source: operatorSession.source,
+      syncedAt: operatorSession.syncedAt,
+      expiresAt: operatorSession.expiresAt,
+      href: operatorSession.href,
+      title: operatorSession.title,
+      pageUrl: operatorSession.pageUrl,
+      token: operatorSession.token,
+      accountType: operatorSession.accountType,
+      lang: operatorSession.lang,
+      userName: operatorSession.userName,
+      userAgent: operatorSession.userAgent,
+    },
+  });
+}
+
 async function handleWeixinBotResolveUser(request, response) {
   if (!await requireWeixinBotAccess(request, response)) {
     return;
@@ -3536,6 +3565,9 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'GET' && url.pathname === '/api/weixin/bot/config') {
       return await handleWeixinBotConfigGet(request, response);
+    }
+    if (request.method === 'GET' && url.pathname === '/api/weixin/bot/operator-session') {
+      return await handleWeixinBotOperatorSessionGet(request, response);
     }
     if (request.method === 'POST' && url.pathname === '/api/weixin/bot/resolve-user') {
       return await handleWeixinBotResolveUser(request, response);
