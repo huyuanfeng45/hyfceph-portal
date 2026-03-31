@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 
+import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { promisify } from 'node:util';
 import { gzipSync } from 'node:zlib';
+import { qrcode } from './vendor/qrcode.mjs';
 import { start as startWeixinBot } from './vendor/weixin-agent-sdk-hyf.mjs';
 
 const DEFAULT_CONFIG_PATH = path.join(os.homedir(), 'Library', 'Application Support', 'HYFCeph', 'weixin-bot.json');
@@ -58,6 +61,61 @@ const PORTAL_REPORT_TIMEOUT_MS = 90_000;
 const PORTAL_RETRY_ATTEMPTS = 3;
 const PORTAL_RETRY_DELAY_MS = 1_500;
 const WEIXIN_RESULT_CACHE_LIMIT = 50;
+const execFileAsync = promisify(execFile);
+const PYTHON_QR_OVERLAY_SCRIPT = `
+import json
+import sys
+from pathlib import Path
+from PIL import Image, ImageDraw
+
+payload = json.loads(sys.argv[1])
+input_path = payload["inputPath"]
+output_path = payload["outputPath"]
+matrix = payload["matrix"]
+
+base = Image.open(input_path).convert("RGBA")
+width, height = base.size
+short_edge = max(1, min(width, height))
+module_count = max(1, len(matrix))
+target_qr_size = max(120, min(220, int(short_edge * 0.19)))
+quiet_zone_modules = 4
+scale = max(2, target_qr_size // (module_count + quiet_zone_modules * 2))
+qr_size = (module_count + quiet_zone_modules * 2) * scale
+card_padding = max(12, qr_size // 10)
+card_width = qr_size + card_padding * 2
+card_height = qr_size + card_padding * 2
+margin = max(20, short_edge // 36)
+radius = max(16, card_padding)
+
+overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+draw_overlay = ImageDraw.Draw(overlay)
+x = margin
+y = height - card_height - margin
+draw_overlay.rounded_rectangle(
+    [x, y, x + card_width, y + card_height],
+    radius=radius,
+    fill=(255, 255, 255, 238),
+    outline=(219, 234, 254, 255),
+    width=max(2, radius // 7),
+)
+
+qr_image = Image.new("RGBA", (qr_size, qr_size), (255, 255, 255, 255))
+draw_qr = ImageDraw.Draw(qr_image)
+for row_index, row in enumerate(matrix):
+    for col_index, value in enumerate(row):
+        if value:
+            x0 = (col_index + quiet_zone_modules) * scale
+            y0 = (row_index + quiet_zone_modules) * scale
+            draw_qr.rectangle(
+                [x0, y0, x0 + scale - 1, y0 + scale - 1],
+                fill=(15, 23, 42, 255),
+            )
+
+overlay.paste(qr_image, (x + card_padding, y + card_padding), qr_image)
+result = Image.alpha_composite(base, overlay)
+Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+result.save(output_path, format="PNG")
+`;
 
 function normalizeAccountId(raw) {
   return String(raw || '').trim().toLowerCase().replace(/[@.]/g, '-');
@@ -259,6 +317,16 @@ function metricMeaning(metric) {
   return '需要结合临床判断';
 }
 
+function buildQrMatrix(url) {
+  const qr = qrcode(0, 'M');
+  qr.addData(url);
+  qr.make();
+  const count = qr.getModuleCount();
+  return Array.from({ length: count }, (_, row) => (
+    Array.from({ length: count }, (_, col) => (qr.isDark(row, col) ? 1 : 0))
+  ));
+}
+
 function frameworkStatusText(item) {
   if (!item) return '未算出';
   if (item.status && item.status !== 'supported') return '暂未算出';
@@ -374,12 +442,41 @@ async function persistArtifactBase64(base64, mimeType, prefix) {
   return filePath;
 }
 
+async function composeAnnotatedImageWithFeishuQr(imagePath, feishuDocUrl, prefix) {
+  const normalizedUrl = String(feishuDocUrl || '').trim();
+  if (!imagePath || !normalizedUrl) {
+    return imagePath;
+  }
+  await ensureCacheDirs();
+  const outputPath = path.join(
+    WEIXIN_MEDIA_CACHE_DIR,
+    `${prefix}-${Date.now()}-${randomBytes(4).toString('hex')}.png`,
+  );
+  const payload = {
+    inputPath: imagePath,
+    outputPath,
+    matrix: buildQrMatrix(normalizedUrl),
+  };
+  try {
+    await execFileAsync('python3', ['-c', PYTHON_QR_OVERLAY_SCRIPT, JSON.stringify(payload)]);
+    return outputPath;
+  } catch (error) {
+    console.warn(`[HYFCeph Weixin] failed to compose annotated image QR: ${error instanceof Error ? error.message : String(error)}`);
+    return imagePath;
+  }
+}
+
 async function updateLatestResultCache(conversationId, result) {
   const key = normalizeConversationKey(conversationId);
-  const annotatedImagePath = await persistArtifactBase64(
+  const rawAnnotatedImagePath = await persistArtifactBase64(
     result?.artifacts?.annotatedPngBase64 || '',
     result?.artifacts?.annotatedPngMimeType || 'image/png',
     `${key}-annotated`,
+  );
+  const annotatedImagePath = await composeAnnotatedImageWithFeishuQr(
+    rawAnnotatedImagePath,
+    result?.feishuDoc?.docUrl || '',
+    `${key}-annotated-qr`,
   );
   const contourImagePath = await persistArtifactBase64(
     result?.artifacts?.contourPngBase64 || '',
@@ -398,6 +495,7 @@ async function updateLatestResultCache(conversationId, result) {
       summary: result?.summary || {},
       report: result?.report || null,
       prettyReport: result?.prettyReport || null,
+      feishuDoc: result?.feishuDoc || null,
     },
     annotatedImagePath,
     contourImagePath,
@@ -627,9 +725,16 @@ async function createRestrictedAgent() {
           console.warn(`[HYFCeph Weixin] report generation skipped: ${error instanceof Error ? error.message : String(error)}`);
         }
         await updateLatestResultCache(request.conversationId, result);
+        const cached = getLatestResultCache(request.conversationId);
         const pngBase64 = result?.artifacts?.annotatedPngBase64 || '';
         const pngMimeType = result?.artifacts?.annotatedPngMimeType || 'image/png';
-        const mediaReply = pngBase64
+        const mediaReply = cached?.annotatedImagePath
+          ? {
+              type: 'image',
+              url: cached.annotatedImagePath,
+              fileName: 'hyfceph-annotated.png',
+            }
+          : pngBase64
           ? {
               type: 'image',
               url: await writeBase64Image(pngBase64, pngMimeType, 'hyfceph-weixin-annotated'),
