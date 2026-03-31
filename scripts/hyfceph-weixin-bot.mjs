@@ -63,6 +63,7 @@ if (!WEIXIN_BOT_SECRET && !PORTAL_API_KEY) {
 const PORTAL_RESOLVE_TIMEOUT_MS = 15_000;
 const PORTAL_MEASURE_TIMEOUT_MS = 240_000;
 const PORTAL_REPORT_TIMEOUT_MS = 90_000;
+const REPORT_GENERATION_SOFT_TIMEOUT_MS = 15_000;
 const PORTAL_RETRY_ATTEMPTS = 6;
 const PORTAL_RETRY_BASE_DELAY_MS = 1_500;
 const PORTAL_RETRY_MAX_DELAY_MS = 15_000;
@@ -171,6 +172,20 @@ async function requestJson(url, { method = 'GET', headers = {}, body } = {}) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function promiseWithTimeout(promise, timeoutMs, message) {
+  let timeout = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(message || 'timeout'));
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
 }
 
 function isRetriableStatus(status) {
@@ -847,10 +862,14 @@ async function createRestrictedAgent() {
           media: request.media,
         });
         try {
-          const reports = await generateReportsForUser({
-            apiKey: portalUser.auth.apiKey,
-            resultPayload: result,
-          });
+          const reports = await promiseWithTimeout(
+            generateReportsForUser({
+              apiKey: portalUser.auth.apiKey,
+              resultPayload: result,
+            }),
+            REPORT_GENERATION_SOFT_TIMEOUT_MS,
+            `report generation timeout after ${REPORT_GENERATION_SOFT_TIMEOUT_MS}ms`,
+          );
           if (reports.report) {
             result.report = reports.report;
           }
