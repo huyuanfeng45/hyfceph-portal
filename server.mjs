@@ -694,7 +694,7 @@ async function generateAndUploadHtmlReport({ user, resultPayload, patientName, r
 
 function extensionFromUpload({ fileName, mimeType }) {
   const explicitExt = path.extname(String(fileName || '').trim()).toLowerCase();
-  if (explicitExt) {
+  if (['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff', '.gif'].includes(explicitExt)) {
     return explicitExt;
   }
 
@@ -704,7 +704,41 @@ function extensionFromUpload({ fileName, mimeType }) {
   if (mime === 'image/webp') return '.webp';
   if (mime === 'image/bmp') return '.bmp';
   if (mime === 'image/tiff') return '.tif';
+  if (mime === 'image/gif') return '.gif';
   return '.png';
+}
+
+function sniffImageMimeType(imageBuffer) {
+  if (!Buffer.isBuffer(imageBuffer) || imageBuffer.length < 12) {
+    return '';
+  }
+  if (
+    imageBuffer[0] === 0x89
+    && imageBuffer[1] === 0x50
+    && imageBuffer[2] === 0x4e
+    && imageBuffer[3] === 0x47
+  ) {
+    return 'image/png';
+  }
+  if (imageBuffer[0] === 0xff && imageBuffer[1] === 0xd8 && imageBuffer[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (imageBuffer.toString('ascii', 0, 6) === 'GIF87a' || imageBuffer.toString('ascii', 0, 6) === 'GIF89a') {
+    return 'image/gif';
+  }
+  if (imageBuffer.toString('ascii', 0, 2) === 'BM') {
+    return 'image/bmp';
+  }
+  if (imageBuffer.toString('ascii', 0, 4) === 'RIFF' && imageBuffer.toString('ascii', 8, 12) === 'WEBP') {
+    return 'image/webp';
+  }
+  if (
+    (imageBuffer[0] === 0x49 && imageBuffer[1] === 0x49 && imageBuffer[2] === 0x2a && imageBuffer[3] === 0x00)
+    || (imageBuffer[0] === 0x4d && imageBuffer[1] === 0x4d && imageBuffer[2] === 0x00 && imageBuffer[3] === 0x2a)
+  ) {
+    return 'image/tiff';
+  }
+  return '';
 }
 
 function validatePhone(value) {
@@ -1711,7 +1745,7 @@ async function readRequestJson(request) {
 function decodeUploadedImageFields(fields, label = '图片') {
   const imageBase64 = String(fields?.imageBase64 || '').trim();
   const fileName = String(fields?.fileName || fields?.imageName || '').trim();
-  const mimeType = String(fields?.mimeType || '').trim();
+  const requestedMimeType = String(fields?.mimeType || '').trim();
 
   if (!imageBase64) {
     throw new Error(`缺少${label}数据。`);
@@ -1730,6 +1764,11 @@ function decodeUploadedImageFields(fields, label = '图片') {
   if (imageBuffer.length > MAX_IMAGE_UPLOAD_BYTES) {
     throw new Error(`${label}过大，请控制在 ${Math.floor(MAX_IMAGE_UPLOAD_BYTES / (1024 * 1024))}MB 以内。`);
   }
+
+  const sniffedMimeType = sniffImageMimeType(imageBuffer);
+  const mimeType = requestedMimeType && requestedMimeType !== 'image/*'
+    ? requestedMimeType
+    : sniffedMimeType || requestedMimeType;
 
   return {
     fileName: sanitizeFileStem(path.basename(fileName || 'ceph-image')),
