@@ -1017,11 +1017,20 @@ async function createRestrictedAgent() {
         }
 
         if (/标点图|标注图|标点|标注/.test(text) && cached.annotatedImagePath) {
+          let latestAnnotated = cached;
+          if (cached.result?.feishuDoc?.docUrl) {
+            try {
+              await refreshCachedReportArtifacts(request.conversationId, cached, cached.result);
+              latestAnnotated = getLatestResultCache(request.conversationId) || cached;
+            } catch (error) {
+              console.warn(`[HYFCeph Weixin] annotated image QR refresh skipped: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
           return {
             text: '这是最近一次测量的标点图。',
             media: {
               type: 'image',
-              url: cached.annotatedImagePath,
+              url: latestAnnotated.annotatedImagePath || cached.annotatedImagePath,
               fileName: 'hyfceph-annotated.png',
             },
           };
