@@ -612,7 +612,37 @@ function formatBearer(token) {
   return token.startsWith('Bearer ') ? token : `Bearer ${token}`;
 }
 
-function inferMimeType(filePath) {
+function sniffMimeTypeFromBuffer(fileBuffer) {
+  if (!Buffer.isBuffer(fileBuffer) || fileBuffer.length < 12) {
+    return '';
+  }
+  if (
+    fileBuffer[0] === 0x89
+    && fileBuffer[1] === 0x50
+    && fileBuffer[2] === 0x4e
+    && fileBuffer[3] === 0x47
+  ) {
+    return 'image/png';
+  }
+  if (fileBuffer[0] === 0xff && fileBuffer[1] === 0xd8 && fileBuffer[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (fileBuffer.toString('ascii', 0, 4) === 'RIFF' && fileBuffer.toString('ascii', 8, 12) === 'WEBP') {
+    return 'image/webp';
+  }
+  if (fileBuffer.toString('ascii', 0, 3) === 'GIF') {
+    return 'image/gif';
+  }
+  if (fileBuffer.toString('ascii', 0, 2) === 'BM') {
+    return 'image/bmp';
+  }
+  if ((fileBuffer.toString('ascii', 0, 2) === 'II' || fileBuffer.toString('ascii', 0, 2) === 'MM') && fileBuffer.length >= 4) {
+    return 'image/tiff';
+  }
+  return '';
+}
+
+function inferMimeType(filePath, fileBuffer = null) {
   const ext = path.extname(filePath).toLowerCase();
   switch (ext) {
     case '.png':
@@ -628,7 +658,7 @@ function inferMimeType(filePath) {
     case '.tiff':
       return 'image/tiff';
     default:
-      return 'application/octet-stream';
+      return sniffMimeTypeFromBuffer(fileBuffer) || 'application/octet-stream';
   }
 }
 
@@ -3087,8 +3117,8 @@ async function main() {
     return;
   }
 
-  const imageMimeType = inferMimeType(resolvedImagePath);
   const fileBuffer = await fs.readFile(resolvedImagePath);
+  const imageMimeType = inferMimeType(resolvedImagePath, fileBuffer);
   const fileName = path.basename(resolvedImagePath);
   const fileBlob = new Blob([fileBuffer], { type: imageMimeType });
 
