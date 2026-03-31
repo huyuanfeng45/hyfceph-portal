@@ -458,6 +458,19 @@ function buildFeishuDocUrl(documentId) {
   return `${FEISHU_WEB_BASE}/docx/${encodeURIComponent(documentId)}`;
 }
 
+async function makeFeishuDocPublic(documentId) {
+  await callFeishuBitableApi(
+    'PATCH',
+    `/drive/v2/permissions/${encodeURIComponent(documentId)}/public?type=docx`,
+    {
+      link_share_entity: 'anyone_readable',
+      external_access: true,
+      security_entity: 'anyone_can_view',
+      comment_entity: 'anyone_can_view',
+    },
+  );
+}
+
 function formatMetricValueText(metric) {
   if (!metric) {
     return '-';
@@ -556,6 +569,7 @@ async function createFeishuDocReport({
     if (!documentId) {
       throw new Error('飞书文档创建失败。');
     }
+    await makeFeishuDocPublic(documentId);
 
     const paragraphs = buildFeishuDocParagraphs({
       resultPayload,
