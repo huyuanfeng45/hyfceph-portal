@@ -83,44 +83,46 @@ if base_image_path:
 else:
     base = Image.open(input_path).convert("RGBA")
 width, height = base.size
-short_edge = max(1, min(width, height))
-module_count = max(1, len(matrix))
-target_qr_size = max(120, min(220, int(short_edge * 0.19)))
-quiet_zone_modules = 4
-scale = max(2, target_qr_size // (module_count + quiet_zone_modules * 2))
-qr_size = (module_count + quiet_zone_modules * 2) * scale
-card_padding = max(12, qr_size // 10)
-card_width = qr_size + card_padding * 2
-card_height = qr_size + card_padding * 2
-margin = max(20, short_edge // 36)
-radius = max(16, card_padding)
+result = base
+if matrix:
+    short_edge = max(1, min(width, height))
+    module_count = len(matrix)
+    target_qr_size = max(120, min(220, int(short_edge * 0.19)))
+    quiet_zone_modules = 4
+    scale = max(2, target_qr_size // (module_count + quiet_zone_modules * 2))
+    qr_size = (module_count + quiet_zone_modules * 2) * scale
+    card_padding = max(12, qr_size // 10)
+    card_width = qr_size + card_padding * 2
+    card_height = qr_size + card_padding * 2
+    margin = max(20, short_edge // 36)
+    radius = max(16, card_padding)
 
-overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-draw_overlay = ImageDraw.Draw(overlay)
-x = margin
-y = height - card_height - margin
-draw_overlay.rounded_rectangle(
-    [x, y, x + card_width, y + card_height],
-    radius=radius,
-    fill=(255, 255, 255, 238),
-    outline=(219, 234, 254, 255),
-    width=max(2, radius // 7),
-)
+    overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    draw_overlay = ImageDraw.Draw(overlay)
+    x = margin
+    y = height - card_height - margin
+    draw_overlay.rounded_rectangle(
+        [x, y, x + card_width, y + card_height],
+        radius=radius,
+        fill=(255, 255, 255, 238),
+        outline=(219, 234, 254, 255),
+        width=max(2, radius // 7),
+    )
 
-qr_image = Image.new("RGBA", (qr_size, qr_size), (255, 255, 255, 255))
-draw_qr = ImageDraw.Draw(qr_image)
-for row_index, row in enumerate(matrix):
-    for col_index, value in enumerate(row):
-        if value:
-            x0 = (col_index + quiet_zone_modules) * scale
-            y0 = (row_index + quiet_zone_modules) * scale
-            draw_qr.rectangle(
-                [x0, y0, x0 + scale - 1, y0 + scale - 1],
-                fill=(15, 23, 42, 255),
-            )
+    qr_image = Image.new("RGBA", (qr_size, qr_size), (255, 255, 255, 255))
+    draw_qr = ImageDraw.Draw(qr_image)
+    for row_index, row in enumerate(matrix):
+        for col_index, value in enumerate(row):
+            if value:
+                x0 = (col_index + quiet_zone_modules) * scale
+                y0 = (row_index + quiet_zone_modules) * scale
+                draw_qr.rectangle(
+                    [x0, y0, x0 + scale - 1, y0 + scale - 1],
+                    fill=(15, 23, 42, 255),
+                )
 
-overlay.paste(qr_image, (x + card_padding, y + card_padding), qr_image)
-result = Image.alpha_composite(base, overlay)
+    overlay.paste(qr_image, (x + card_padding, y + card_padding), qr_image)
+    result = Image.alpha_composite(base, overlay)
 Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 result.save(output_path, format="PNG")
 `;
@@ -464,11 +466,10 @@ async function persistOriginalImageFile(filePath, prefix) {
   return outputPath;
 }
 
-async function composeAnnotatedImageWithFeishuQr(imagePath, feishuDocUrl, prefix, {
+async function composeAnnotatedImageForReply(imagePath, feishuDocUrl, prefix, {
   baseImagePath = null,
 } = {}) {
-  const normalizedUrl = String(feishuDocUrl || '').trim();
-  if (!imagePath || !normalizedUrl) {
+  if (!imagePath) {
     return imagePath;
   }
   await ensureCacheDirs();
@@ -476,11 +477,12 @@ async function composeAnnotatedImageWithFeishuQr(imagePath, feishuDocUrl, prefix
     WEIXIN_MEDIA_CACHE_DIR,
     `${prefix}-${Date.now()}-${randomBytes(4).toString('hex')}.png`,
   );
+  const normalizedUrl = String(feishuDocUrl || '').trim();
   const payload = {
     inputPath: imagePath,
     baseImagePath: baseImagePath || '',
     outputPath,
-    matrix: buildQrMatrix(normalizedUrl),
+    matrix: normalizedUrl ? buildQrMatrix(normalizedUrl) : [],
   };
   try {
     await execFileAsync('python3', ['-c', PYTHON_QR_OVERLAY_SCRIPT, JSON.stringify(payload)]);
@@ -502,7 +504,7 @@ async function updateLatestResultCache(conversationId, result, options = {}) {
     result?.artifacts?.annotatedPngMimeType || 'image/png',
     `${key}-annotated`,
   );
-  const annotatedImagePath = await composeAnnotatedImageWithFeishuQr(
+  const annotatedImagePath = await composeAnnotatedImageForReply(
     rawAnnotatedImagePath,
     result?.feishuDoc?.docUrl || '',
     `${key}-annotated-qr`,
