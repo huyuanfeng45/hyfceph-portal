@@ -3280,6 +3280,45 @@ async function handleGenerateReport(request, response) {
   }
 }
 
+async function handleUploadReportPayload(request, response) {
+  const payload = await readRequestJson(request);
+  const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
+  const reportType = String(payload.reportType || payload.mode || 'image').trim() || 'image';
+  const resultPayload = payload.resultPayload && typeof payload.resultPayload === 'object'
+    ? payload.resultPayload
+    : null;
+
+  if (!apiKey) {
+    return sendJson(response, 400, { error: '缺少 API Key。' });
+  }
+  if (!resultPayload) {
+    return sendJson(response, 400, { error: '缺少 resultPayload。' });
+  }
+  if (!isPdfOssConfigured()) {
+    return sendJson(response, 503, { error: '报告存储未配置。' });
+  }
+
+  const { user } = await requireActiveApiKeyUser(apiKey);
+  if (!user) {
+    return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
+  }
+
+  try {
+    const reportPayload = await uploadReportPayloadToOss({
+      user,
+      resultPayload,
+      reportType,
+    });
+    return sendJson(response, 200, {
+      ok: true,
+      reportPayload,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return sendJson(response, 502, { error: message || '报告结果上传失败。' });
+  }
+}
+
 async function handleGenerateFeishuDoc(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
@@ -3664,6 +3703,9 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'POST' && url.pathname === '/api/report/generate') {
       return await handleGenerateReport(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/report/payload') {
+      return await handleUploadReportPayload(request, response);
     }
     if (request.method === 'POST' && url.pathname === '/api/report/feishu-doc') {
       return await handleGenerateFeishuDoc(request, response);

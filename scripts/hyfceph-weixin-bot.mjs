@@ -754,6 +754,29 @@ async function generateReportsForUser({ apiKey, resultPayload }) {
   };
 }
 
+async function ensureReportPayloadKey({ apiKey, resultPayload }) {
+  const existingKey = String(resultPayload?.reportPayload?.objectKey || '').trim();
+  if (existingKey) {
+    return resultPayload.reportPayload;
+  }
+  console.log('[HYFCeph Weixin] uploading result payload key');
+  const payload = await fetchJsonWithRetry(`${PORTAL_BASE_URL}/api/report/payload`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+    },
+    body: JSON.stringify({
+      reportType: 'image',
+      resultPayload,
+    }),
+    compressBody: true,
+    timeoutMs: PORTAL_REPORT_TIMEOUT_MS,
+    label: 'portal report payload upload request',
+  });
+  return payload.reportPayload || null;
+}
+
 async function generateFeishuDocForUser({ apiKey, resultPayload, prettyReportUrl = '', standardReportUrl = '' }) {
   console.log('[HYFCeph Weixin] generating feishu doc');
   const reportPayloadKey = String(resultPayload?.reportPayload?.objectKey || '').trim();
@@ -883,6 +906,23 @@ async function createRestrictedAgent() {
           apiKey: portalUser.auth.apiKey,
           media: request.media,
         });
+
+        try {
+          const reportPayload = await promiseWithTimeout(
+            ensureReportPayloadKey({
+              apiKey: portalUser.auth.apiKey,
+              resultPayload: result,
+            }),
+            12_000,
+            'report payload upload timeout after 12000ms',
+          );
+          if (reportPayload) {
+            result.reportPayload = reportPayload;
+          }
+        } catch (error) {
+          console.warn(`[HYFCeph Weixin] report payload upload skipped: ${error instanceof Error ? error.message : String(error)}`);
+        }
+
         try {
           const feishuDoc = await promiseWithTimeout(
             generateFeishuDocForUser({
