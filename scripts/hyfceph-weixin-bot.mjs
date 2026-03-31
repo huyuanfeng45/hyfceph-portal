@@ -75,10 +75,10 @@ output_path = payload["outputPath"]
 matrix = payload["matrix"]
 
 if base_image_path:
-    base = Image.open(base_image_path).convert("RGBA")
     overlay_source = Image.open(input_path).convert("RGBA")
-    if overlay_source.size != base.size:
-        overlay_source = overlay_source.resize(base.size, Image.Resampling.LANCZOS)
+    base = Image.open(base_image_path).convert("RGBA")
+    if base.size != overlay_source.size:
+        base = base.resize(overlay_source.size, Image.Resampling.LANCZOS)
     base = Image.alpha_composite(base, overlay_source)
 else:
     base = Image.open(input_path).convert("RGBA")
