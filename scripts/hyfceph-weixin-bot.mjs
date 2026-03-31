@@ -624,15 +624,13 @@ function toUserFacingPortalError(error) {
 
 function buildPortalReportPayload(resultPayload) {
   const payload = resultPayload && typeof resultPayload === 'object' ? resultPayload : {};
-  const artifacts = payload.artifacts && typeof payload.artifacts === 'object' ? payload.artifacts : {};
   return {
-    ...payload,
-    artifacts: {
-      annotatedPngBase64: artifacts.annotatedPngBase64 || null,
-      annotatedPngMimeType: artifacts.annotatedPngMimeType || null,
-      contourPngBase64: artifacts.contourPngBase64 || null,
-      contourPngMimeType: artifacts.contourPngMimeType || null,
-    },
+    mode: payload.mode || '',
+    analysis: payload.analysis || null,
+    analysisError: payload.analysisError || null,
+    summary: payload.summary || null,
+    metrics: payload.metrics || payload.analysis?.metrics || [],
+    artifacts: {},
   };
 }
 
