@@ -3280,6 +3280,51 @@ async function handleGenerateReport(request, response) {
   }
 }
 
+async function handleGenerateFeishuDoc(request, response) {
+  const payload = await readRequestJson(request);
+  const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
+  const patientName = String(payload.patientName || '').trim();
+  const reportType = String(payload.reportType || payload.mode || 'image').trim() || 'image';
+  const resultPayloadKey = String(payload.resultPayloadKey || '').trim();
+  let resultPayload = payload.resultPayload && typeof payload.resultPayload === 'object'
+    ? payload.resultPayload
+    : null;
+  const prettyReportUrl = String(payload.prettyReportUrl || '').trim();
+  const standardReportUrl = String(payload.standardReportUrl || '').trim();
+
+  if (!apiKey) {
+    return sendJson(response, 400, { error: '缺少 API Key。' });
+  }
+  if (!resultPayload && !resultPayloadKey) {
+    return sendJson(response, 400, { error: '缺少 resultPayload。' });
+  }
+
+  const { user } = await requireActiveApiKeyUser(apiKey);
+  if (!user) {
+    return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
+  }
+
+  try {
+    if (!resultPayload && resultPayloadKey) {
+      resultPayload = await loadReportPayloadFromOss(resultPayloadKey);
+    }
+    const feishuDoc = await createFeishuDocReport({
+      resultPayload,
+      patientName,
+      reportType,
+      prettyReportUrl,
+      standardReportUrl,
+    });
+    return sendJson(response, 200, {
+      ok: true,
+      feishuDoc,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return sendJson(response, 502, { error: message || '飞书文档生成失败。' });
+  }
+}
+
 async function handleMeasureOverlap(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
@@ -3619,6 +3664,9 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'POST' && url.pathname === '/api/report/generate') {
       return await handleGenerateReport(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/report/feishu-doc') {
+      return await handleGenerateFeishuDoc(request, response);
     }
     if (request.method === 'POST' && url.pathname === '/api/measure/overlap') {
       return await handleMeasureOverlap(request, response);

@@ -754,6 +754,28 @@ async function generateReportsForUser({ apiKey, resultPayload }) {
   };
 }
 
+async function generateFeishuDocForUser({ apiKey, resultPayload, prettyReportUrl = '', standardReportUrl = '' }) {
+  console.log('[HYFCeph Weixin] generating feishu doc');
+  const reportPayloadKey = String(resultPayload?.reportPayload?.objectKey || '').trim();
+  const payload = await fetchJsonWithRetry(`${PORTAL_BASE_URL}/api/report/feishu-doc`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+    },
+    body: JSON.stringify({
+      reportType: 'image',
+      prettyReportUrl,
+      standardReportUrl,
+      ...(reportPayloadKey ? { resultPayloadKey: reportPayloadKey } : { resultPayload }),
+    }),
+    compressBody: !reportPayloadKey,
+    timeoutMs: PORTAL_REPORT_TIMEOUT_MS,
+    label: 'portal feishu doc generation request',
+  });
+  return payload.feishuDoc || null;
+}
+
 function buildUnsupportedText() {
   return [
     '这个微信入口只处理 HYFCeph 相关内容。',
@@ -862,6 +884,21 @@ async function createRestrictedAgent() {
           media: request.media,
         });
         try {
+          const feishuDoc = await promiseWithTimeout(
+            generateFeishuDocForUser({
+              apiKey: portalUser.auth.apiKey,
+              resultPayload: result,
+            }),
+            12_000,
+            'feishu doc generation timeout after 12000ms',
+          );
+          if (feishuDoc) {
+            result.feishuDoc = feishuDoc;
+          }
+        } catch (error) {
+          console.warn(`[HYFCeph Weixin] feishu doc generation skipped: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        try {
           const reports = await promiseWithTimeout(
             generateReportsForUser({
               apiKey: portalUser.auth.apiKey,
@@ -876,7 +913,7 @@ async function createRestrictedAgent() {
           if (reports.prettyReport) {
             result.prettyReport = reports.prettyReport;
           }
-          if (reports.feishuDoc) {
+          if (reports.feishuDoc && !result.feishuDoc) {
             result.feishuDoc = reports.feishuDoc;
           }
         } catch (error) {
