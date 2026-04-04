@@ -13,9 +13,24 @@ const FEISHU_STORE_KEY = process.env.HYFCEPH_FEISHU_STORE_KEY || 'hyfceph-store'
 const FEISHU_API_BASE = (process.env.HYFCEPH_FEISHU_API_BASE || 'https://open.feishu.cn/open-apis').replace(/\/+$/, '');
 const FEISHU_STORE_PAYLOAD_FIELD = process.env.HYFCEPH_FEISHU_STORE_PAYLOAD_FIELD || 'payload';
 const FEISHU_STORE_UPDATED_AT_FIELD = process.env.HYFCEPH_FEISHU_STORE_UPDATED_AT_FIELD || 'updated_at';
+const FEISHU_STORE_KIND_FIELD = process.env.HYFCEPH_FEISHU_STORE_KIND_FIELD || 'kind';
 
 let feishuTokenCache = null;
 let feishuSchemaCache = null;
+const FEISHU_ROW_KIND_USER = 'user';
+const FEISHU_ROW_KIND_OPERATOR_SESSION = 'operator_session';
+const FEISHU_ROW_KIND_PDF_LINK = 'pdf_link';
+const FEISHU_ROW_KIND_REPORT_LINK = 'report_link';
+const FEISHU_ROW_KIND_WEIXIN_BOT = 'weixin_bot';
+const FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION = 'weixin_binding_session';
+const FEISHU_MANAGED_ROW_PREFIXES = [
+  `${FEISHU_ROW_KIND_USER}:`,
+  `${FEISHU_ROW_KIND_OPERATOR_SESSION}:`,
+  `${FEISHU_ROW_KIND_PDF_LINK}:`,
+  `${FEISHU_ROW_KIND_REPORT_LINK}:`,
+  `${FEISHU_ROW_KIND_WEIXIN_BOT}:`,
+  `${FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION}:`,
+];
 
 function parseArgs(argv) {
   const options = {
@@ -235,11 +250,23 @@ async function ensureFeishuSchema() {
     throw new Error('飞书多维表格缺少主字段。');
   }
 
+  const fieldNames = new Set(items.map((field) => String(field?.field_name || '').trim()).filter(Boolean));
+  for (const fieldName of [FEISHU_STORE_PAYLOAD_FIELD, FEISHU_STORE_UPDATED_AT_FIELD, FEISHU_STORE_KIND_FIELD]) {
+    if (!fieldNames.has(fieldName)) {
+      await callFeishuApi('POST', `${basePath}/fields`, {
+        field_name: fieldName,
+        type: 1,
+      });
+      fieldNames.add(fieldName);
+    }
+  }
+
   feishuSchemaCache = {
     basePath,
     primaryFieldName: primaryField.field_name,
     payloadFieldName: FEISHU_STORE_PAYLOAD_FIELD,
     updatedAtFieldName: FEISHU_STORE_UPDATED_AT_FIELD,
+    kindFieldName: FEISHU_STORE_KIND_FIELD,
   };
   return feishuSchemaCache;
 }
@@ -262,33 +289,258 @@ async function findFeishuStoreRecord(schema) {
   return items[0] || null;
 }
 
+function buildFeishuStoreRowKey(kind, identifier = 'default') {
+  return `${kind}:${String(identifier || 'default').trim() || 'default'}`;
+}
+
+function inferFeishuStoreRowKind(primaryKey, fieldKind = '') {
+  const normalizedFieldKind = String(fieldKind || '').trim();
+  if (normalizedFieldKind) {
+    return normalizedFieldKind;
+  }
+  const normalizedPrimaryKey = String(primaryKey || '').trim();
+  if (!normalizedPrimaryKey) {
+    return '';
+  }
+  if (normalizedPrimaryKey === FEISHU_STORE_KEY) {
+    return 'legacy_store';
+  }
+  const separatorIndex = normalizedPrimaryKey.indexOf(':');
+  return separatorIndex > 0 ? normalizedPrimaryKey.slice(0, separatorIndex) : '';
+}
+
+function isManagedFeishuStoreRow(primaryKey, kind = '') {
+  const normalizedPrimaryKey = String(primaryKey || '').trim();
+  const inferredKind = inferFeishuStoreRowKind(normalizedPrimaryKey, kind);
+  return normalizedPrimaryKey === FEISHU_STORE_KEY
+    || FEISHU_MANAGED_ROW_PREFIXES.some((prefix) => normalizedPrimaryKey.startsWith(prefix))
+    || [
+      FEISHU_ROW_KIND_USER,
+      FEISHU_ROW_KIND_OPERATOR_SESSION,
+      FEISHU_ROW_KIND_PDF_LINK,
+      FEISHU_ROW_KIND_REPORT_LINK,
+      FEISHU_ROW_KIND_WEIXIN_BOT,
+      FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION,
+    ].includes(inferredKind);
+}
+
+function parseFeishuPayload(value) {
+  const text = readFeishuCellText(value).trim();
+  if (!text) {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+async function listFeishuRecords(schema) {
+  const items = [];
+  const seenTokens = new Set();
+  let pageToken = '';
+
+  while (true) {
+    const query = new URLSearchParams({ page_size: '500' });
+    if (pageToken) {
+      query.set('page_token', pageToken);
+    }
+    const result = await callFeishuApi('GET', `${schema.basePath}/records?${query.toString()}`);
+    items.push(...(Array.isArray(result.items) ? result.items : []));
+
+    const hasMore = Boolean(result.has_more ?? result.hasMore ?? result.has_more_page);
+    const nextPageToken = String(result.page_token || result.next_page_token || '').trim();
+    if (!hasMore || !nextPageToken || seenTokens.has(nextPageToken)) {
+      break;
+    }
+    seenTokens.add(nextPageToken);
+    pageToken = nextPageToken;
+  }
+
+  return items;
+}
+
+function buildFeishuRows(store) {
+  const normalized = normalizeStoreShape(store);
+  const rows = [];
+
+  for (const user of normalized.users) {
+    rows.push({
+      key: buildFeishuStoreRowKey(FEISHU_ROW_KIND_USER, user.id),
+      kind: FEISHU_ROW_KIND_USER,
+      payload: user,
+      updatedAt: user.updatedAt || nowIso(),
+    });
+  }
+
+  if (normalized.operatorSession) {
+    rows.push({
+      key: buildFeishuStoreRowKey(FEISHU_ROW_KIND_OPERATOR_SESSION),
+      kind: FEISHU_ROW_KIND_OPERATOR_SESSION,
+      payload: normalized.operatorSession,
+      updatedAt: normalized.operatorSession.updatedAt || normalized.operatorSession.syncedAt || nowIso(),
+    });
+  }
+
+  if (normalized.weixinBot) {
+    rows.push({
+      key: buildFeishuStoreRowKey(FEISHU_ROW_KIND_WEIXIN_BOT),
+      kind: FEISHU_ROW_KIND_WEIXIN_BOT,
+      payload: normalized.weixinBot,
+      updatedAt: normalized.weixinBot.updatedAt || nowIso(),
+    });
+  }
+
+  for (const record of Object.values(normalized.pdfLinks || {})) {
+    rows.push({
+      key: buildFeishuStoreRowKey(FEISHU_ROW_KIND_PDF_LINK, record.code),
+      kind: FEISHU_ROW_KIND_PDF_LINK,
+      payload: record,
+      updatedAt: record.updatedAt || nowIso(),
+    });
+  }
+
+  for (const record of Object.values(normalized.reportLinks || {})) {
+    rows.push({
+      key: buildFeishuStoreRowKey(FEISHU_ROW_KIND_REPORT_LINK, record.code),
+      kind: FEISHU_ROW_KIND_REPORT_LINK,
+      payload: record,
+      updatedAt: record.updatedAt || nowIso(),
+    });
+  }
+
+  for (const record of Object.values(normalized.weixinBindingSessions || {})) {
+    rows.push({
+      key: buildFeishuStoreRowKey(FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION, record.sessionKey),
+      kind: FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION,
+      payload: record,
+      updatedAt: record.updatedAt || nowIso(),
+    });
+  }
+
+  return rows;
+}
+
+function buildStoreFromFeishuRows(records, schema) {
+  const users = [];
+  const pdfLinks = {};
+  const reportLinks = {};
+  const weixinBindingSessions = {};
+  let operatorSession = null;
+  let weixinBot = null;
+  let legacyStore = null;
+
+  for (const record of records) {
+    const primaryKey = readFeishuCellText(record.fields?.[schema.primaryFieldName]).trim();
+    if (!primaryKey) {
+      continue;
+    }
+    const kind = inferFeishuStoreRowKind(primaryKey, readFeishuCellText(record.fields?.[schema.kindFieldName]));
+    const payload = parseFeishuPayload(record.fields?.[schema.payloadFieldName]);
+    if (!payload) {
+      continue;
+    }
+
+    if (primaryKey === FEISHU_STORE_KEY) {
+      legacyStore = normalizeStoreShape(payload);
+      continue;
+    }
+
+    if (kind === FEISHU_ROW_KIND_USER) {
+      users.push(payload);
+      continue;
+    }
+
+    if (kind === FEISHU_ROW_KIND_OPERATOR_SESSION) {
+      operatorSession = payload;
+      continue;
+    }
+
+    if (kind === FEISHU_ROW_KIND_WEIXIN_BOT) {
+      weixinBot = payload;
+      continue;
+    }
+
+    if (kind === FEISHU_ROW_KIND_PDF_LINK && payload.code) {
+      pdfLinks[payload.code] = payload;
+      continue;
+    }
+
+    if (kind === FEISHU_ROW_KIND_REPORT_LINK && payload.code) {
+      reportLinks[payload.code] = payload;
+      continue;
+    }
+
+    if (kind === FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION && payload.sessionKey) {
+      weixinBindingSessions[payload.sessionKey] = payload;
+    }
+  }
+
+  const rowBasedStore = normalizeStoreShape({
+    users,
+    operatorSession,
+    pdfLinks,
+    reportLinks,
+    weixinBot,
+    weixinBindingSessions,
+  });
+
+  const hasRowBasedData = rowBasedStore.users.length > 0
+    || Boolean(rowBasedStore.operatorSession)
+    || Boolean(rowBasedStore.weixinBot)
+    || Object.keys(rowBasedStore.pdfLinks).length > 0
+    || Object.keys(rowBasedStore.reportLinks).length > 0
+    || Object.keys(rowBasedStore.weixinBindingSessions).length > 0;
+
+  return hasRowBasedData ? rowBasedStore : normalizeStoreShape(legacyStore || { users: [] });
+}
+
 async function readStoreFromFeishu() {
   const schema = await ensureFeishuSchema();
-  const record = await findFeishuStoreRecord(schema);
-  if (!record?.record_id) {
-    return normalizeStoreShape({ users: [] });
-  }
-  const payloadText = readFeishuCellText(record.fields?.[schema.payloadFieldName]);
-  return normalizeStoreShape(payloadText.trim() ? JSON.parse(payloadText) : { users: [] });
+  const records = await listFeishuRecords(schema);
+  return buildStoreFromFeishuRows(records, schema);
 }
 
 async function writeStoreToFeishu(store) {
   const schema = await ensureFeishuSchema();
-  const record = await findFeishuStoreRecord(schema);
-  const fields = {
-    [schema.primaryFieldName]: FEISHU_STORE_KEY,
-    [schema.payloadFieldName]: JSON.stringify(store, null, 2),
-    [schema.updatedAtFieldName]: nowIso(),
-  };
-
-  if (record?.record_id) {
-    await callFeishuApi('PUT', `${schema.basePath}/records/${encodeURIComponent(record.record_id)}`, {
-      fields,
-    });
-    return;
+  const existingRecords = await listFeishuRecords(schema);
+  const existingByKey = new Map();
+  for (const record of existingRecords) {
+    const primaryKey = readFeishuCellText(record.fields?.[schema.primaryFieldName]).trim();
+    if (primaryKey) {
+      existingByKey.set(primaryKey, record);
+    }
   }
 
-  await callFeishuApi('POST', `${schema.basePath}/records`, { fields });
+  const desiredRows = buildFeishuRows(store);
+  const desiredKeys = new Set(desiredRows.map((row) => row.key));
+
+  for (const row of desiredRows) {
+    const fields = {
+      [schema.primaryFieldName]: row.key,
+      [schema.kindFieldName]: row.kind,
+      [schema.payloadFieldName]: JSON.stringify(row.payload, null, 2),
+      [schema.updatedAtFieldName]: row.updatedAt || nowIso(),
+    };
+    const existing = existingByKey.get(row.key);
+    if (existing?.record_id) {
+      await callFeishuApi('PUT', `${schema.basePath}/records/${encodeURIComponent(existing.record_id)}`, {
+        fields,
+      });
+      continue;
+    }
+    await callFeishuApi('POST', `${schema.basePath}/records`, { fields });
+  }
+
+  for (const record of existingRecords) {
+    const primaryKey = readFeishuCellText(record.fields?.[schema.primaryFieldName]).trim();
+    const kind = readFeishuCellText(record.fields?.[schema.kindFieldName]).trim();
+    if (!record?.record_id || !isManagedFeishuStoreRow(primaryKey, kind) || desiredKeys.has(primaryKey)) {
+      continue;
+    }
+    await callFeishuApi('DELETE', `${schema.basePath}/records/${encodeURIComponent(record.record_id)}`);
+  }
 }
 
 async function readSource(options) {

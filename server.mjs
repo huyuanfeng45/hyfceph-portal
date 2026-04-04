@@ -47,6 +47,7 @@ const FEISHU_WEB_BASE = (() => {
 })();
 const FEISHU_STORE_PAYLOAD_FIELD = process.env.HYFCEPH_FEISHU_STORE_PAYLOAD_FIELD || 'payload';
 const FEISHU_STORE_UPDATED_AT_FIELD = process.env.HYFCEPH_FEISHU_STORE_UPDATED_AT_FIELD || 'updated_at';
+const FEISHU_STORE_KIND_FIELD = process.env.HYFCEPH_FEISHU_STORE_KIND_FIELD || 'kind';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
@@ -84,6 +85,20 @@ let pdfOssDownloadClientPromise = null;
 let feishuAppTokenCache = null;
 let feishuSchemaCache = null;
 const execFileAsync = promisify(execFile);
+const FEISHU_ROW_KIND_USER = 'user';
+const FEISHU_ROW_KIND_OPERATOR_SESSION = 'operator_session';
+const FEISHU_ROW_KIND_PDF_LINK = 'pdf_link';
+const FEISHU_ROW_KIND_REPORT_LINK = 'report_link';
+const FEISHU_ROW_KIND_WEIXIN_BOT = 'weixin_bot';
+const FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION = 'weixin_binding_session';
+const FEISHU_MANAGED_ROW_PREFIXES = [
+  `${FEISHU_ROW_KIND_USER}:`,
+  `${FEISHU_ROW_KIND_OPERATOR_SESSION}:`,
+  `${FEISHU_ROW_KIND_PDF_LINK}:`,
+  `${FEISHU_ROW_KIND_REPORT_LINK}:`,
+  `${FEISHU_ROW_KIND_WEIXIN_BOT}:`,
+  `${FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION}:`,
+];
 
 const MIME_TYPES = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -1195,13 +1210,17 @@ function normalizeReportLinkRecord(code, record) {
   const normalizedCode = String(code || '').trim();
   const objectKey = String(record.objectKey || '').trim();
   const payloadObjectKey = String(record.payloadObjectKey || '').trim();
-  if (!normalizedCode || (!objectKey && !payloadObjectKey)) {
+  const inlinePayload = record.inlinePayload && typeof record.inlinePayload === 'object'
+    ? record.inlinePayload
+    : null;
+  if (!normalizedCode || (!objectKey && !payloadObjectKey && !inlinePayload)) {
     return null;
   }
   return {
     code: normalizedCode,
     objectKey: objectKey || null,
     payloadObjectKey: payloadObjectKey || null,
+    inlinePayload,
     userId: typeof record.userId === 'string' && record.userId.trim() ? record.userId.trim() : null,
     patientName: typeof record.patientName === 'string' && record.patientName.trim() ? record.patientName.trim() : null,
     reportType: typeof record.reportType === 'string' && record.reportType.trim() ? record.reportType.trim() : 'report',
@@ -1308,12 +1327,13 @@ async function issuePdfShortLink({ user, objectKey, patientName, reportType, req
   };
 }
 
-async function createReportShortLinkRecord({ store, user, objectKey = '', payloadObjectKey = '', patientName, reportType, variant = 'standard' }) {
+async function createReportShortLinkRecord({ store, user, objectKey = '', payloadObjectKey = '', inlinePayload = null, patientName, reportType, variant = 'standard' }) {
   const normalizedStore = normalizeStoreRecord(store);
   const reportLinks = { ...(normalizedStore.reportLinks || {}) };
   const normalizedObjectKey = String(objectKey || '').trim();
   const normalizedPayloadObjectKey = String(payloadObjectKey || '').trim();
-  if (!normalizedObjectKey && !normalizedPayloadObjectKey) {
+  const normalizedInlinePayload = inlinePayload && typeof inlinePayload === 'object' ? inlinePayload : null;
+  if (!normalizedObjectKey && !normalizedPayloadObjectKey && !normalizedInlinePayload) {
     throw new Error('缺少报告内容来源。');
   }
   let code = '';
@@ -1325,6 +1345,7 @@ async function createReportShortLinkRecord({ store, user, objectKey = '', payloa
     code,
     objectKey: normalizedObjectKey || null,
     payloadObjectKey: normalizedPayloadObjectKey || null,
+    inlinePayload: normalizedInlinePayload,
     userId: user?.id || null,
     patientName: patientName || null,
     reportType: reportType || 'report',
@@ -1347,13 +1368,14 @@ async function createReportShortLinkRecord({ store, user, objectKey = '', payloa
   };
 }
 
-async function issueReportShortLink({ user, objectKey = '', payloadObjectKey = '', patientName, reportType, request = null, variant = 'standard' }) {
+async function issueReportShortLink({ user, objectKey = '', payloadObjectKey = '', inlinePayload = null, patientName, reportType, request = null, variant = 'standard' }) {
   const store = await readStore();
   const created = await createReportShortLinkRecord({
     store,
     user,
     objectKey,
     payloadObjectKey,
+    inlinePayload,
     patientName,
     reportType,
     variant,
@@ -1370,12 +1392,15 @@ async function handleIssueReportLinks(request, response) {
   const patientName = String(payload.patientName || '').trim();
   const reportType = String(payload.reportType || payload.mode || 'image').trim() || 'image';
   const resultPayloadKey = String(payload.resultPayloadKey || '').trim();
+  const inlinePayload = payload.resultPayload && typeof payload.resultPayload === 'object'
+    ? payload.resultPayload
+    : null;
 
   if (!apiKey) {
     return sendJson(response, 400, { error: '缺少 API Key。' });
   }
-  if (!resultPayloadKey) {
-    return sendJson(response, 400, { error: '缺少 resultPayloadKey。' });
+  if (!resultPayloadKey && !inlinePayload) {
+    return sendJson(response, 400, { error: '缺少 resultPayloadKey 或 resultPayload。' });
   }
 
   const { user } = await requireActiveApiKeyUser(apiKey);
@@ -1387,6 +1412,7 @@ async function handleIssueReportLinks(request, response) {
     const report = await issueReportShortLink({
       user,
       payloadObjectKey: resultPayloadKey,
+      inlinePayload,
       patientName,
       reportType,
       request,
@@ -1395,6 +1421,7 @@ async function handleIssueReportLinks(request, response) {
     const prettyReport = await issueReportShortLink({
       user,
       payloadObjectKey: resultPayloadKey,
+      inlinePayload,
       patientName,
       reportType,
       request,
@@ -1581,7 +1608,7 @@ async function ensureFeishuBitableStoreSchema() {
   }
 
   const fieldNames = new Set(items.map((field) => String(field?.field_name || '').trim()).filter(Boolean));
-  for (const fieldName of [FEISHU_STORE_PAYLOAD_FIELD, FEISHU_STORE_UPDATED_AT_FIELD]) {
+  for (const fieldName of [FEISHU_STORE_PAYLOAD_FIELD, FEISHU_STORE_UPDATED_AT_FIELD, FEISHU_STORE_KIND_FIELD]) {
     if (!fieldNames.has(fieldName)) {
       await callFeishuBitableApi('POST', `${basePath}/fields`, {
         field_name: fieldName,
@@ -1596,6 +1623,7 @@ async function ensureFeishuBitableStoreSchema() {
     primaryFieldName: String(primaryField.field_name),
     payloadFieldName: FEISHU_STORE_PAYLOAD_FIELD,
     updatedAtFieldName: FEISHU_STORE_UPDATED_AT_FIELD,
+    kindFieldName: FEISHU_STORE_KIND_FIELD,
   };
   return feishuSchemaCache;
 }
@@ -1644,43 +1672,278 @@ async function findFeishuStoreRecord(schema) {
   return items[0] || null;
 }
 
-async function readStoreFromFeishuBitable() {
-  const schema = await ensureFeishuBitableStoreSchema();
-  const record = await findFeishuStoreRecord(schema);
-  if (!record?.record_id) {
-    return { users: [] };
+function buildFeishuStoreRowKey(kind, identifier = 'default') {
+  return `${kind}:${String(identifier || 'default').trim() || 'default'}`;
+}
+
+function inferFeishuStoreRowKind(primaryKey, fieldKind = '') {
+  const normalizedFieldKind = String(fieldKind || '').trim();
+  if (normalizedFieldKind) {
+    return normalizedFieldKind;
   }
-  const payload = readFeishuCellText(record.fields?.[schema.payloadFieldName]);
-  if (!payload.trim()) {
-    return { users: [] };
+  const normalizedPrimaryKey = String(primaryKey || '').trim();
+  if (!normalizedPrimaryKey) {
+    return '';
+  }
+  if (normalizedPrimaryKey === FEISHU_STORE_KEY) {
+    return 'legacy_store';
+  }
+  const separatorIndex = normalizedPrimaryKey.indexOf(':');
+  return separatorIndex > 0 ? normalizedPrimaryKey.slice(0, separatorIndex) : '';
+}
+
+function isManagedFeishuStoreRow(primaryKey, kind = '') {
+  const normalizedPrimaryKey = String(primaryKey || '').trim();
+  const inferredKind = inferFeishuStoreRowKind(normalizedPrimaryKey, kind);
+  return normalizedPrimaryKey === FEISHU_STORE_KEY
+    || FEISHU_MANAGED_ROW_PREFIXES.some((prefix) => normalizedPrimaryKey.startsWith(prefix))
+    || [
+      FEISHU_ROW_KIND_USER,
+      FEISHU_ROW_KIND_OPERATOR_SESSION,
+      FEISHU_ROW_KIND_PDF_LINK,
+      FEISHU_ROW_KIND_REPORT_LINK,
+      FEISHU_ROW_KIND_WEIXIN_BOT,
+      FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION,
+    ].includes(inferredKind);
+}
+
+function parseFeishuStorePayload(value) {
+  const text = readFeishuCellText(value).trim();
+  if (!text) {
+    return null;
   }
   try {
-    return JSON.parse(payload);
+    return JSON.parse(text);
   } catch {
-    return { users: [] };
+    return null;
   }
+}
+
+async function listFeishuStoreRecords(schema) {
+  const items = [];
+  const seenTokens = new Set();
+  let pageToken = '';
+
+  while (true) {
+    const query = new URLSearchParams({ page_size: '500' });
+    if (pageToken) {
+      query.set('page_token', pageToken);
+    }
+    const result = await callFeishuBitableApi('GET', `${schema.basePath}/records?${query.toString()}`);
+    items.push(...(Array.isArray(result.items) ? result.items : []));
+
+    const hasMore = Boolean(result.has_more ?? result.hasMore ?? result.has_more_page);
+    const nextPageToken = String(result.page_token || result.next_page_token || '').trim();
+    if (!hasMore || !nextPageToken || seenTokens.has(nextPageToken)) {
+      break;
+    }
+    seenTokens.add(nextPageToken);
+    pageToken = nextPageToken;
+  }
+
+  return items;
+}
+
+function buildFeishuStoreRows(store) {
+  const normalizedStore = normalizeStoreRecord(store);
+  const rows = [];
+
+  for (const user of normalizedStore.users) {
+    rows.push({
+      key: buildFeishuStoreRowKey(FEISHU_ROW_KIND_USER, user.id),
+      kind: FEISHU_ROW_KIND_USER,
+      payload: user,
+      updatedAt: user.updatedAt || nowIso(),
+    });
+  }
+
+  if (normalizedStore.operatorSession) {
+    rows.push({
+      key: buildFeishuStoreRowKey(FEISHU_ROW_KIND_OPERATOR_SESSION),
+      kind: FEISHU_ROW_KIND_OPERATOR_SESSION,
+      payload: normalizedStore.operatorSession,
+      updatedAt: normalizedStore.operatorSession.updatedAt || normalizedStore.operatorSession.syncedAt || nowIso(),
+    });
+  }
+
+  if (normalizedStore.weixinBot) {
+    rows.push({
+      key: buildFeishuStoreRowKey(FEISHU_ROW_KIND_WEIXIN_BOT),
+      kind: FEISHU_ROW_KIND_WEIXIN_BOT,
+      payload: normalizedStore.weixinBot,
+      updatedAt: normalizedStore.weixinBot.updatedAt || nowIso(),
+    });
+  }
+
+  for (const record of Object.values(normalizedStore.pdfLinks || {})) {
+    rows.push({
+      key: buildFeishuStoreRowKey(FEISHU_ROW_KIND_PDF_LINK, record.code),
+      kind: FEISHU_ROW_KIND_PDF_LINK,
+      payload: record,
+      updatedAt: record.updatedAt || nowIso(),
+    });
+  }
+
+  for (const record of Object.values(normalizedStore.reportLinks || {})) {
+    rows.push({
+      key: buildFeishuStoreRowKey(FEISHU_ROW_KIND_REPORT_LINK, record.code),
+      kind: FEISHU_ROW_KIND_REPORT_LINK,
+      payload: record,
+      updatedAt: record.updatedAt || nowIso(),
+    });
+  }
+
+  for (const record of Object.values(normalizedStore.weixinBindingSessions || {})) {
+    rows.push({
+      key: buildFeishuStoreRowKey(FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION, record.sessionKey),
+      kind: FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION,
+      payload: record,
+      updatedAt: record.updatedAt || nowIso(),
+    });
+  }
+
+  return rows;
+}
+
+function buildStoreFromFeishuRows(records, schema) {
+  const users = new Map();
+  const pdfLinks = {};
+  const reportLinks = {};
+  const weixinBindingSessions = {};
+  let operatorSession = null;
+  let weixinBot = null;
+  let legacyStore = null;
+
+  for (const record of records) {
+    const primaryKey = readFeishuCellText(record.fields?.[schema.primaryFieldName]).trim();
+    if (!primaryKey) {
+      continue;
+    }
+    const kind = inferFeishuStoreRowKind(primaryKey, readFeishuCellText(record.fields?.[schema.kindFieldName]));
+    const payload = parseFeishuStorePayload(record.fields?.[schema.payloadFieldName]);
+    if (!payload) {
+      continue;
+    }
+
+    if (primaryKey === FEISHU_STORE_KEY) {
+      legacyStore = normalizeStoreRecord(payload);
+      continue;
+    }
+
+    if (kind === FEISHU_ROW_KIND_USER) {
+      const user = normalizeUserRecord(payload);
+      users.set(user.id, user);
+      continue;
+    }
+
+    if (kind === FEISHU_ROW_KIND_OPERATOR_SESSION) {
+      operatorSession = normalizeOperatorSession(payload);
+      continue;
+    }
+
+    if (kind === FEISHU_ROW_KIND_WEIXIN_BOT) {
+      weixinBot = normalizeWeixinBotRecord(payload);
+      continue;
+    }
+
+    if (kind === FEISHU_ROW_KIND_PDF_LINK) {
+      const pdfLink = normalizePdfLinkRecord(payload.code, payload);
+      if (pdfLink) {
+        pdfLinks[pdfLink.code] = pdfLink;
+      }
+      continue;
+    }
+
+    if (kind === FEISHU_ROW_KIND_REPORT_LINK) {
+      const reportLink = normalizeReportLinkRecord(payload.code, payload);
+      if (reportLink) {
+        reportLinks[reportLink.code] = reportLink;
+      }
+      continue;
+    }
+
+    if (kind === FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION) {
+      const session = normalizeWeixinBindingSessionRecord(payload.sessionKey, payload);
+      if (session) {
+        weixinBindingSessions[session.sessionKey] = session;
+      }
+    }
+  }
+
+  const rowBasedStore = normalizeStoreRecord({
+    users: Array.from(users.values()),
+    operatorSession,
+    pdfLinks,
+    reportLinks,
+    weixinBot,
+    weixinBindingSessions,
+  });
+
+  const hasRowBasedData = rowBasedStore.users.length > 0
+    || Boolean(rowBasedStore.operatorSession)
+    || Boolean(rowBasedStore.weixinBot)
+    || Object.keys(rowBasedStore.pdfLinks).length > 0
+    || Object.keys(rowBasedStore.reportLinks).length > 0
+    || Object.keys(rowBasedStore.weixinBindingSessions).length > 0;
+
+  if (hasRowBasedData) {
+    return rowBasedStore;
+  }
+
+  if (legacyStore) {
+    return legacyStore;
+  }
+
+  return normalizeStoreRecord({ users: [] });
+}
+
+async function readStoreFromFeishuBitable() {
+  const schema = await ensureFeishuBitableStoreSchema();
+  const records = await listFeishuStoreRecords(schema);
+  return buildStoreFromFeishuRows(records, schema);
 }
 
 async function writeStoreToFeishuBitable(store) {
   const schema = await ensureFeishuBitableStoreSchema();
-  const payloadText = JSON.stringify(store, null, 2);
-  const record = await findFeishuStoreRecord(schema);
-  const fields = {
-    [schema.primaryFieldName]: FEISHU_STORE_KEY,
-    [schema.payloadFieldName]: payloadText,
-    [schema.updatedAtFieldName]: nowIso(),
-  };
-
-  if (record?.record_id) {
-    await callFeishuBitableApi('PUT', `${schema.basePath}/records/${encodeURIComponent(record.record_id)}`, {
-      fields,
-    });
-    return;
+  const existingRecords = await listFeishuStoreRecords(schema);
+  const existingByKey = new Map();
+  for (const record of existingRecords) {
+    const primaryKey = readFeishuCellText(record.fields?.[schema.primaryFieldName]).trim();
+    if (primaryKey) {
+      existingByKey.set(primaryKey, record);
+    }
   }
 
-  await callFeishuBitableApi('POST', `${schema.basePath}/records`, {
-    fields,
-  });
+  const desiredRows = buildFeishuStoreRows(store);
+  const desiredKeys = new Set(desiredRows.map((row) => row.key));
+
+  for (const row of desiredRows) {
+    const fields = {
+      [schema.primaryFieldName]: row.key,
+      [schema.kindFieldName]: row.kind,
+      [schema.payloadFieldName]: JSON.stringify(row.payload, null, 2),
+      [schema.updatedAtFieldName]: row.updatedAt || nowIso(),
+    };
+    const existing = existingByKey.get(row.key);
+    if (existing?.record_id) {
+      await callFeishuBitableApi('PUT', `${schema.basePath}/records/${encodeURIComponent(existing.record_id)}`, {
+        fields,
+      });
+      continue;
+    }
+    await callFeishuBitableApi('POST', `${schema.basePath}/records`, {
+      fields,
+    });
+  }
+
+  for (const record of existingRecords) {
+    const primaryKey = readFeishuCellText(record.fields?.[schema.primaryFieldName]).trim();
+    const kind = readFeishuCellText(record.fields?.[schema.kindFieldName]).trim();
+    if (!record?.record_id || !isManagedFeishuStoreRow(primaryKey, kind) || desiredKeys.has(primaryKey)) {
+      continue;
+    }
+    await callFeishuBitableApi('DELETE', `${schema.basePath}/records/${encodeURIComponent(record.record_id)}`);
+  }
 }
 
 async function readStoreFromBlob() {
@@ -3105,6 +3368,22 @@ async function handleReportShortLink(request, response, code) {
       const htmlOutputPath = path.join(tempDir, `report-${sanitizeFileStem(record.variant || 'standard')}.html`);
       try {
         await fs.writeFile(resultJsonPath, JSON.stringify(resultPayload, null, 2), 'utf8');
+        await generateHyfcephHtmlReport({
+          inputPath: resultJsonPath,
+          outputPath: htmlOutputPath,
+          patientName: record.patientName || undefined,
+          variant: record.variant || 'standard',
+        });
+        html = await fs.readFile(htmlOutputPath, 'utf8');
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      }
+    } else if (record.inlinePayload) {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hyfceph-report-inline-'));
+      const resultJsonPath = path.join(tempDir, 'result.json');
+      const htmlOutputPath = path.join(tempDir, `report-${sanitizeFileStem(record.variant || 'standard')}.html`);
+      try {
+        await fs.writeFile(resultJsonPath, JSON.stringify(record.inlinePayload, null, 2), 'utf8');
         await generateHyfcephHtmlReport({
           inputPath: resultJsonPath,
           outputPath: htmlOutputPath,
