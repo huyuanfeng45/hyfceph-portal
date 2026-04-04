@@ -2,11 +2,14 @@ const state = {
   user: null,
   adminUsers: [],
   weixinBindingSession: null,
+  dashboardView: 'weixin',
 };
 
 const flash = document.querySelector('#flash');
 const tabs = Array.from(document.querySelectorAll('.tab'));
 const panels = Array.from(document.querySelectorAll('.tab-panel'));
+const dashboardMenuItems = Array.from(document.querySelectorAll('.dashboard-menu-item'));
+const dashboardViews = Array.from(document.querySelectorAll('.dashboard-view'));
 const registerTab = document.querySelector('[data-tab="register"]');
 const loginTab = document.querySelector('[data-tab="login"]');
 const dashboardTab = document.querySelector('[data-tab="dashboard"]');
@@ -43,6 +46,10 @@ const clearOperatorSyncButton = document.querySelector('#clear-operator-sync-but
 const refreshAdminButton = document.querySelector('#refresh-admin-button');
 const adminPanel = document.querySelector('#admin-panel');
 const adminUsersBody = document.querySelector('#admin-users-body');
+const profileUserName = document.querySelector('#profile-user-name');
+const profileUserRole = document.querySelector('#profile-user-role');
+const profileUserOrganization = document.querySelector('#profile-user-organization');
+const profileUserPhone = document.querySelector('#profile-user-phone');
 let weixinBindingPollTimer = null;
 
 function showFlash(message, type = 'success') {
@@ -66,6 +73,19 @@ function setActiveTab(tabName) {
   panels.forEach((panel) => {
     panel.classList.toggle('active', panel.dataset.panel === tabName);
     panel.classList.toggle('hidden', panel.dataset.panel !== tabName);
+  });
+}
+
+function setDashboardView(viewName) {
+  state.dashboardView = viewName;
+  dashboardMenuItems.forEach((item) => {
+    const isActive = item.dataset.dashboardView === viewName;
+    item.classList.toggle('active', isActive);
+  });
+  dashboardViews.forEach((panel) => {
+    const isActive = panel.dataset.dashboardPanel === viewName;
+    panel.classList.toggle('active', isActive);
+    panel.classList.toggle('hidden', !isActive);
   });
 }
 
@@ -96,6 +116,10 @@ function updateDashboard(user) {
   document.querySelector('#user-organization').textContent = user?.organization || '-';
   document.querySelector('#user-phone').textContent = user?.phone || user?.username || '-';
   document.querySelector('#user-role').textContent = user?.role === 'admin' ? '管理员' : '普通用户';
+  profileUserName.textContent = user?.name || '-';
+  profileUserOrganization.textContent = user?.organization || '-';
+  profileUserPhone.textContent = user?.phone || user?.username || '-';
+  profileUserRole.textContent = user?.role === 'admin' ? '管理员' : '普通用户';
   apiKeyOutput.value = user?.apiKey || '';
   apiKeyOutput.placeholder = user?.apiKey
     ? ''
@@ -401,6 +425,16 @@ async function syncAuthUi() {
   dashboardTab.classList.toggle('hidden', !state.user);
   if (state.user) {
     const isAdmin = state.user.role === 'admin';
+    dashboardMenuItems.forEach((item) => {
+      if (item.dataset.adminOnly === 'true') {
+        item.classList.toggle('hidden', !isAdmin);
+      }
+    });
+    dashboardViews.forEach((panel) => {
+      if (panel.dataset.adminOnly === 'true' && !isAdmin && panel.dataset.dashboardPanel === state.dashboardView) {
+        state.dashboardView = 'weixin';
+      }
+    });
     registerTab.classList.add('hidden');
     loginTab.classList.add('hidden');
     updateDashboard(state.user);
@@ -409,6 +443,7 @@ async function syncAuthUi() {
     operatorSyncPanel.classList.toggle('hidden', !isAdmin);
     adminPanel.classList.toggle('hidden', !isAdmin);
     setActiveTab('dashboard');
+    setDashboardView(state.dashboardView || 'weixin');
     await loadOperatorSyncStatus();
     await loadAdminUsers();
   } else {
@@ -422,6 +457,7 @@ async function syncAuthUi() {
     adminUsersBody.innerHTML = '<tr><td colspan="5" class="empty-cell">暂无数据</td></tr>';
     registerTab.classList.remove('hidden');
     loginTab.classList.remove('hidden');
+    state.dashboardView = 'weixin';
     setActiveTab('register');
   }
 }
@@ -442,6 +478,16 @@ tabs.forEach((tab) => {
   tab.addEventListener('click', () => {
     clearFlash();
     setActiveTab(tab.dataset.tab);
+  });
+});
+
+dashboardMenuItems.forEach((item) => {
+  item.addEventListener('click', () => {
+    if (item.classList.contains('hidden')) {
+      return;
+    }
+    clearFlash();
+    setDashboardView(item.dataset.dashboardView);
   });
 });
 
