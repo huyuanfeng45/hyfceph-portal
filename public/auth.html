@@ -131,6 +131,7 @@
                       <span id="user-phone">-</span>
                     </div>
                   </div>
+                  <div class="dashboard-topbar-note">登录后通过上方菜单切换功能区域，微信绑定二维码会优先显示在中央。</div>
                 </div>
 
                 <div class="dashboard-topbar-actions">
@@ -142,27 +143,27 @@
               <nav class="dashboard-menu dashboard-menu-top" aria-label="控制台菜单">
                 <div class="dashboard-menu-scroll">
                   <button class="dashboard-menu-item active" type="button" data-dashboard-view="weixin">
-                    <span>微信绑定</span>
+                    <span>💬 微信绑定</span>
                     <small>二维码与扫码状态</small>
                   </button>
                   <button class="dashboard-menu-item" type="button" data-dashboard-view="api">
-                    <span>API Key</span>
+                    <span>🔑 API Key</span>
                     <small>生成、复制与下载</small>
                   </button>
                   <button class="dashboard-menu-item" type="button" data-dashboard-view="profile">
-                    <span>用户信息</span>
+                    <span>👤 用户信息</span>
                     <small>查看当前账号资料</small>
                   </button>
                   <button class="dashboard-menu-item hidden" type="button" data-dashboard-view="measure" data-admin-only="true">
-                    <span>图片测量</span>
+                    <span>🩻 图片测量</span>
                     <small>管理员测量入口</small>
                   </button>
                   <button class="dashboard-menu-item hidden" type="button" data-dashboard-view="sync" data-admin-only="true">
-                    <span>浏览器同步</span>
+                    <span>🛰️ 浏览器同步</span>
                     <small>远程会话状态</small>
                   </button>
                   <button class="dashboard-menu-item hidden" type="button" data-dashboard-view="admin" data-admin-only="true">
-                    <span>管理员面板</span>
+                    <span>🛠️ 管理员面板</span>
                     <small>用户与 Key 管理</small>
                   </button>
                 </div>
@@ -174,7 +175,7 @@
                     <div class="dashboard-view-header dashboard-view-header-centered">
                       <div>
                         <div class="section-kicker">WeChat</div>
-                        <div class="api-card-title">绑定微信 Clawbot</div>
+                        <div class="api-card-title">💬 绑定微信 Clawbot</div>
                         <div class="api-tip">扫码后，就可以在微信里直接把侧位片发给 HYFCeph。我们把二维码放在中间，方便直接操作。</div>
                       </div>
                     </div>
@@ -210,7 +211,7 @@
                     <div class="dashboard-view-header">
                       <div>
                         <div class="section-kicker">API Key</div>
-                        <div class="api-card-title">你的调用凭证</div>
+                        <div class="api-card-title">🔑 你的调用凭证</div>
                         <div class="api-tip">注册后在这里生成并复制专属 Key，默认有效期 3 个月。</div>
                       </div>
                     </div>
@@ -237,7 +238,7 @@
                     <div class="dashboard-view-header">
                       <div>
                         <div class="section-kicker">User</div>
-                        <div class="api-card-title">当前账号信息</div>
+                        <div class="api-card-title">👤 当前账号信息</div>
                         <div class="api-tip">这里展示当前登录用户的基础资料，便于确认门户账号是否正确。</div>
                       </div>
                     </div>
@@ -266,7 +267,7 @@
                     <div class="dashboard-view-header">
                       <div>
                         <div class="section-kicker">Measure</div>
-                        <div class="api-card-title">图片测量</div>
+                        <div class="api-card-title">🩻 图片测量</div>
                         <div class="api-tip">直接上传侧位片即可。服务端会复用管理员浏览器保持在线的远程会话完成定点和测量，公开用户无需安装任何插件。</div>
                       </div>
                     </div>
@@ -298,7 +299,7 @@
                     <div class="admin-header">
                       <div>
                         <div class="section-kicker">Bridge</div>
-                        <div class="api-card-title">浏览器同步状态</div>
+                        <div class="api-card-title">🛰️ 浏览器同步状态</div>
                         <div class="api-tip">仅管理员需要使用。请在你自己的 Chrome 中安装 HYFCeph Bridge 扩展，并填入当前管理员 API Key。</div>
                       </div>
                       <button id="refresh-operator-sync-button" class="ghost-button" type="button">刷新状态</button>
@@ -323,7 +324,7 @@
                     <div class="admin-header">
                       <div>
                         <div class="section-kicker">Admin</div>
-                        <div class="api-card-title">管理员面板</div>
+                        <div class="api-card-title">🛠️ 管理员面板</div>
                         <div class="api-tip">管理所有已生成的 API Key，可调整过期时间或删除。</div>
                       </div>
                       <button id="refresh-admin-button" class="ghost-button" type="button">刷新列表</button>
