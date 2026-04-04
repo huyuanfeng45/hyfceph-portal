@@ -48,6 +48,8 @@ const FEISHU_WEB_BASE = (() => {
 const FEISHU_STORE_PAYLOAD_FIELD = process.env.HYFCEPH_FEISHU_STORE_PAYLOAD_FIELD || 'payload';
 const FEISHU_STORE_UPDATED_AT_FIELD = process.env.HYFCEPH_FEISHU_STORE_UPDATED_AT_FIELD || 'updated_at';
 const FEISHU_STORE_KIND_FIELD = process.env.HYFCEPH_FEISHU_STORE_KIND_FIELD || 'kind';
+const FEISHU_STORE_KIND_LABEL_FIELD = process.env.HYFCEPH_FEISHU_STORE_KIND_LABEL_FIELD || 'kind_label';
+const FEISHU_STORE_SUMMARY_FIELD = process.env.HYFCEPH_FEISHU_STORE_SUMMARY_FIELD || 'summary';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
@@ -1608,7 +1610,7 @@ async function ensureFeishuBitableStoreSchema() {
   }
 
   const fieldNames = new Set(items.map((field) => String(field?.field_name || '').trim()).filter(Boolean));
-  for (const fieldName of [FEISHU_STORE_PAYLOAD_FIELD, FEISHU_STORE_UPDATED_AT_FIELD, FEISHU_STORE_KIND_FIELD]) {
+  for (const fieldName of [FEISHU_STORE_PAYLOAD_FIELD, FEISHU_STORE_UPDATED_AT_FIELD, FEISHU_STORE_KIND_FIELD, FEISHU_STORE_KIND_LABEL_FIELD, FEISHU_STORE_SUMMARY_FIELD]) {
     if (!fieldNames.has(fieldName)) {
       await callFeishuBitableApi('POST', `${basePath}/fields`, {
         field_name: fieldName,
@@ -1624,6 +1626,8 @@ async function ensureFeishuBitableStoreSchema() {
     payloadFieldName: FEISHU_STORE_PAYLOAD_FIELD,
     updatedAtFieldName: FEISHU_STORE_UPDATED_AT_FIELD,
     kindFieldName: FEISHU_STORE_KIND_FIELD,
+    kindLabelFieldName: FEISHU_STORE_KIND_LABEL_FIELD,
+    summaryFieldName: FEISHU_STORE_SUMMARY_FIELD,
   };
   return feishuSchemaCache;
 }
@@ -1674,6 +1678,47 @@ async function findFeishuStoreRecord(schema) {
 
 function buildFeishuStoreRowKey(kind, identifier = 'default') {
   return `${kind}:${String(identifier || 'default').trim() || 'default'}`;
+}
+
+function getFeishuStoreKindLabel(kind) {
+  switch (String(kind || '').trim()) {
+    case FEISHU_ROW_KIND_USER:
+      return '用户';
+    case FEISHU_ROW_KIND_OPERATOR_SESSION:
+      return '管理员浏览器会话';
+    case FEISHU_ROW_KIND_PDF_LINK:
+      return 'PDF 短链';
+    case FEISHU_ROW_KIND_REPORT_LINK:
+      return '报告短链';
+    case FEISHU_ROW_KIND_WEIXIN_BOT:
+      return '微信 Bot 配置';
+    case FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION:
+      return '微信绑定会话';
+    case 'legacy_store':
+      return '旧版整库快照';
+    default:
+      return '其他';
+  }
+}
+
+function buildFeishuStoreSummary(kind, payload) {
+  const source = payload && typeof payload === 'object' ? payload : {};
+  switch (String(kind || '').trim()) {
+    case FEISHU_ROW_KIND_USER:
+      return [source.name, source.phone, source.username].filter(Boolean).join(' / ') || String(source.id || '').trim() || '用户';
+    case FEISHU_ROW_KIND_OPERATOR_SESSION:
+      return [source.userName, source.accountType, source.expiresAt].filter(Boolean).join(' / ') || '管理员浏览器会话';
+    case FEISHU_ROW_KIND_PDF_LINK:
+      return [source.patientName, source.variant, source.code].filter(Boolean).join(' / ') || String(source.code || '').trim() || 'PDF 短链';
+    case FEISHU_ROW_KIND_REPORT_LINK:
+      return [source.patientName, source.variant, source.code].filter(Boolean).join(' / ') || String(source.code || '').trim() || '报告短链';
+    case FEISHU_ROW_KIND_WEIXIN_BOT:
+      return [source.accountId, source.botType].filter(Boolean).join(' / ') || '微信 Bot 配置';
+    case FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION:
+      return [source.userId, source.status, source.sessionKey].filter(Boolean).join(' / ') || String(source.sessionKey || '').trim() || '微信绑定会话';
+    default:
+      return String(source.code || source.id || source.sessionKey || '').trim() || getFeishuStoreKindLabel(kind);
+  }
 }
 
 function inferFeishuStoreRowKind(primaryKey, fieldKind = '') {
@@ -1921,6 +1966,8 @@ async function writeStoreToFeishuBitable(store) {
     const fields = {
       [schema.primaryFieldName]: row.key,
       [schema.kindFieldName]: row.kind,
+      [schema.kindLabelFieldName]: getFeishuStoreKindLabel(row.kind),
+      [schema.summaryFieldName]: buildFeishuStoreSummary(row.kind, row.payload),
       [schema.payloadFieldName]: JSON.stringify(row.payload, null, 2),
       [schema.updatedAtFieldName]: row.updatedAt || nowIso(),
     };
