@@ -45,6 +45,16 @@ const PORTAL_BASE_URL = String(
   || LOCAL_CONFIG.portalBaseUrl
   || 'http://127.0.0.1:3077',
 ).trim().replace(/\/+$/, '');
+const BARK_DEVICE_KEY = String(
+  process.env.HYFCEPH_BARK_KEY
+  || LOCAL_CONFIG.barkKey
+  || '7ffBf7F85e3WbFyKrJTEcH',
+).trim();
+const BARK_BASE_URL = String(
+  process.env.HYFCEPH_BARK_BASE_URL
+  || LOCAL_CONFIG.barkBaseUrl
+  || 'https://api.day.app',
+).trim().replace(/\/+$/, '');
 const PORTAL_API_KEY = String(
   process.env.HYFCEPH_API_KEY
   || LOCAL_CONFIG.portalApiKey
@@ -83,6 +93,7 @@ input_path = payload["inputPath"]
 base_image_path = payload.get("baseImagePath") or ""
 output_path = payload["outputPath"]
 matrix = payload["matrix"]
+position = (payload.get("position") or "top-right").strip().lower()
 
 if base_image_path:
     overlay_source = Image.open(input_path).convert("RGBA")
@@ -118,7 +129,8 @@ if matrix:
             continue
     if font is None:
         font = ImageFont.load_default()
-    text_bbox = draw_overlay.textbbox((0, 0), label, font=font)
+    temp_draw = ImageDraw.Draw(Image.new("RGBA", (8, 8), (0, 0, 0, 0)))
+    text_bbox = temp_draw.textbbox((0, 0), label, font=font)
     text_width = max(1, text_bbox[2] - text_bbox[0])
     text_height = max(1, text_bbox[3] - text_bbox[1])
     card_width = max(qr_size, text_width) + card_padding * 2
@@ -129,8 +141,12 @@ if matrix:
 
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
     draw_overlay = ImageDraw.Draw(overlay)
-    x = width - card_width - margin
-    y = top_offset
+    if position == "bottom-left":
+        x = margin
+        y = height - card_height - margin
+    else:
+        x = width - card_width - margin
+        y = top_offset
     draw_overlay.rounded_rectangle(
         [x, y, x + card_width, y + card_height],
         radius=radius,
@@ -204,6 +220,46 @@ async function requestJson(url, { method = 'GET', headers = {}, body } = {}) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shortenConversationId(value) {
+  const text = normalizeConversationKey(value);
+  if (text.length <= 12) {
+    return text;
+  }
+  return `${text.slice(0, 6)}...${text.slice(-4)}`;
+}
+
+async function sendBarkPush(title, body) {
+  if (!BARK_DEVICE_KEY) {
+    return;
+  }
+  const url = new URL(`${BARK_BASE_URL}/${encodeURIComponent(BARK_DEVICE_KEY)}/${encodeURIComponent(title)}/${encodeURIComponent(body)}`);
+  url.searchParams.set('group', 'HYFCeph');
+  url.searchParams.set('isArchive', '1');
+  try {
+    await fetch(url, { method: 'GET' });
+  } catch (error) {
+    console.warn(`[HYFCeph Weixin] bark push failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function notifyImageReceived(request, pending) {
+  const modeText = pending?.images?.length >= 2 ? '重叠候选（第 2 张）' : '单图候选（第 1 张）';
+  const fileName = String(request?.media?.fileName || '').trim() || '未命名图片';
+  let userLabel = shortenConversationId(request?.conversationId);
+  try {
+    const portalUser = await resolvePortalUser(request?.conversationId);
+    userLabel = portalUser?.user?.name || userLabel;
+  } catch {
+    // 非阻塞：拿不到绑定用户时，退回到会话标识
+  }
+  const body = [
+    `用户：${userLabel}`,
+    `模式：${modeText}`,
+    `文件：${fileName}`,
+  ].join('\n');
+  await sendBarkPush('HYFCeph 微信收到侧位片', body);
 }
 
 function promiseWithTimeout(promise, timeoutMs, message) {
@@ -406,11 +462,46 @@ function frameworkStatusText(item) {
   return '需结合临床';
 }
 
+function isOverlapResult(result) {
+  return String(result?.mode || result?.summary?.mode || result?.analysis?.type || '').trim().toLowerCase() === 'overlap';
+}
+
 function buildSummaryText(result) {
   const metrics = extractMetricMap(result);
   const summary = result?.summary || {};
   const analysis = result?.analysis || {};
+  const patientName = String(result?.patientName || '').trim();
+  const isOverlap = isOverlapResult(result);
+  if (isOverlap) {
+    const baseMetricValues = summary?.baseMetricValues || {};
+    const compareMetricValues = summary?.compareMetricValues || {};
+    const keyCodes = ['SNA', 'SNB', 'ANB', 'GoGn-SN', 'FMA', 'U1-SN', 'IMPA', 'Wits'];
+    const changedLines = keyCodes
+      .filter((code) => baseMetricValues?.[code] || compareMetricValues?.[code])
+      .map((code) => `${code} ${baseMetricValues?.[code] || '-'} → ${compareMetricValues?.[code] || '-'}`);
+    const lines = [
+      patientName ? `患者：${patientName}` : '',
+      `重叠对比完成（${summary.alignLabel || summary.alignMode || 'SN'} 对齐）。`,
+      summary?.baseRiskLabel ? `基准图：${summary.baseRiskLabel}` : '',
+      summary?.compareRiskLabel ? `对照图：${summary.compareRiskLabel}` : '',
+    ].filter(Boolean);
+    if (changedLines.length) {
+      lines.push('', '关键值对比：', changedLines.join('；'));
+    }
+    if (result?.prettyReport?.shortUrl) {
+      lines.push('', `美化报告链接：${result.prettyReport.shortUrl}`);
+    }
+    if (result?.feishuDoc?.docUrl) {
+      lines.push(`飞书文档版：${result.feishuDoc.docUrl}`);
+    }
+    if (result?.report?.shortUrl) {
+      lines.push(`在线报告链接：${result.report.shortUrl}`);
+    }
+    lines.push('', '如需继续，你可以继续问我：Downs、Steiner、北大分析法，或者直接发“在线报告”“标点图”。');
+    return lines.join('\n');
+  }
   const lines = [
+    patientName ? `患者：${patientName}` : '',
     analysis.riskLabel || summary.riskLabel || '测量完成。',
     analysis.insight || summary.insight || '',
   ].filter(Boolean);
@@ -443,6 +534,24 @@ function buildQuickConsultationText(cacheEntry) {
   if (!result) {
     return buildUnsupportedText();
   }
+  if (String(result?.mode || result?.summary?.mode || '').trim().toLowerCase() === 'overlap') {
+    const summary = result?.summary || {};
+    const keyCodes = ['SNA', 'SNB', 'ANB', 'GoGn-SN', 'FMA', 'U1-SN', 'IMPA', 'Wits'];
+    const keyLines = keyCodes
+      .filter((code) => summary?.baseMetricValues?.[code] || summary?.compareMetricValues?.[code])
+      .slice(0, 4)
+      .map((code) => `- ${code}：${summary?.baseMetricValues?.[code] || '-'} → ${summary?.compareMetricValues?.[code] || '-'}`);
+    return [
+      `这是最近一次重叠结果（${summary.alignLabel || summary.alignMode || 'SN'} 对齐）。`,
+      summary?.baseRiskLabel ? `基准图：${summary.baseRiskLabel}` : '',
+      summary?.compareRiskLabel ? `对照图：${summary.compareRiskLabel}` : '',
+      keyLines.length ? '' : null,
+      keyLines.length ? '当前重点变化：' : null,
+      ...keyLines,
+      '',
+      '你还可以继续问我：Downs、Steiner、北大分析法、ABO、Ricketts、Tweed、McNamara、Jarabak，或者直接发“在线报告”“标点图”。',
+    ].filter(Boolean).join('\n');
+  }
   const metrics = Array.isArray(result?.analysis?.metrics) ? result.analysis.metrics : [];
   const topMetrics = metrics
     .slice()
@@ -460,8 +569,137 @@ function buildQuickConsultationText(cacheEntry) {
   ].filter(Boolean).join('\n');
 }
 
+function normalizePatientName(raw) {
+  return String(raw || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+}
+
+function isSkipPatientNameText(text) {
+  return /^(匿名|无名|不写|不填|跳过|无需填写|不用写|直接开始|开始测量)$/i.test(String(text || '').trim());
+}
+
+function isMeasurementCommandText(text) {
+  return /^(帮助|help|怎么用|如何使用|在线报告|报告链接|报告地址|报告|标点图|标注图|标点|标注|轮廓图|白底轮廓|怎么看|怎么分析|解读|分析|总结|综合判断|关键值|指标|Downs|Steiner|北大分析法|ABO|Ricketts|Tweed|McNamara|Jarabak)$/i.test(String(text || '').trim());
+}
+
+function normalizePendingMeasurement(pendingMeasurement) {
+  if (!pendingMeasurement || typeof pendingMeasurement !== 'object') {
+    return null;
+  }
+  const normalizeEntry = (entry) => {
+    if (!entry || typeof entry !== 'object' || !entry.filePath) {
+      return null;
+    }
+    return {
+      filePath: String(entry.filePath),
+      fileName: String(entry.fileName || path.basename(String(entry.filePath))),
+      mimeType: inferMimeType(String(entry.filePath), entry.mimeType || 'application/octet-stream'),
+      receivedAt: entry.receivedAt || new Date().toISOString(),
+    };
+  };
+  const images = Array.isArray(pendingMeasurement.images)
+    ? pendingMeasurement.images.map(normalizeEntry).filter(Boolean).slice(-2)
+    : [normalizeEntry(pendingMeasurement)].filter(Boolean);
+  if (!images.length) {
+    return null;
+  }
+  return {
+    mode: images.length >= 2 ? 'overlap' : 'single',
+    images,
+  };
+}
+
+function hasPendingMeasurement(conversationId) {
+  return Boolean(normalizePendingMeasurement(getLatestResultCache(conversationId)?.pendingMeasurement)?.images?.length);
+}
+
+async function setPendingMeasurement(conversationId, media) {
+  const key = normalizeConversationKey(conversationId);
+  const previous = latestResultCache[key] || {};
+  const persistedPath = await persistOriginalImageFile(
+    media?.filePath || '',
+    `${key}-pending-source`,
+  );
+  const nextEntry = persistedPath ? {
+    filePath: persistedPath,
+    fileName: media?.fileName || path.basename(persistedPath),
+    mimeType: inferMimeType(persistedPath, media?.mimeType || 'application/octet-stream'),
+    receivedAt: new Date().toISOString(),
+  } : null;
+  const previousPending = normalizePendingMeasurement(previous.pendingMeasurement);
+  let images = previousPending?.images ? [...previousPending.images] : [];
+  if (nextEntry) {
+    if (images.length >= 2) {
+      images = [nextEntry];
+    } else {
+      images.push(nextEntry);
+      images = images.slice(-2);
+    }
+  }
+  latestResultCache[key] = {
+    ...previous,
+    updatedAt: new Date().toISOString(),
+    pendingMeasurement: images.length ? {
+      mode: images.length >= 2 ? 'overlap' : 'single',
+      images,
+    } : previous.pendingMeasurement || null,
+  };
+  await saveResultCache();
+  return latestResultCache[key];
+}
+
+async function clearPendingMeasurement(conversationId) {
+  const key = normalizeConversationKey(conversationId);
+  const current = latestResultCache[key];
+  if (!current) {
+    return;
+  }
+  latestResultCache[key] = {
+    ...current,
+    updatedAt: new Date().toISOString(),
+    pendingMeasurement: null,
+  };
+  await saveResultCache();
+}
+
 function buildFrameworkReply(cacheEntry, frameworkMeta) {
-  const framework = cacheEntry?.result?.analysis?.frameworkReports?.[frameworkMeta.code];
+  const result = cacheEntry?.result;
+  const isOverlap = String(result?.mode || result?.summary?.mode || '').trim().toLowerCase() === 'overlap';
+  if (isOverlap) {
+    const baseFramework = result?.analysis?.base?.frameworkReports?.[frameworkMeta.code];
+    const compareFramework = result?.analysis?.compare?.frameworkReports?.[frameworkMeta.code];
+    if (!baseFramework && !compareFramework) {
+      return `${frameworkMeta.label} 目前还没有可用结果。你可以先重新发送两张侧位片。`;
+    }
+    const formatSide = (framework, label) => {
+      if (!framework) {
+        return `${label}：暂无可用结果。`;
+      }
+      const items = Array.isArray(framework.items) ? framework.items : [];
+      const topItems = items
+        .filter((item) => !item.status || item.status === 'supported')
+        .slice()
+        .sort((left, right) => frameworkItemSeverityScore(right) - frameworkItemSeverityScore(left))
+        .slice(0, 4)
+        .map((item) => `- ${item.label || item.code}：${item.valueText || '-'}（${frameworkStatusText(item)}）`);
+      const supportedCount = Number(framework.supportedItemCount || topItems.length || 0);
+      const unsupportedCount = Number(framework.unsupportedItemCount || 0);
+      return [
+        `${label}：已输出 ${supportedCount} 项，未算出 ${unsupportedCount} 项。`,
+        framework.note || '',
+        ...topItems,
+      ].filter(Boolean).join('\n');
+    };
+    return [
+      `${frameworkMeta.label} 分析法（重叠对比）`,
+      '',
+      formatSide(baseFramework, '基准图'),
+      '',
+      formatSide(compareFramework, '对照图'),
+      '',
+      '如果你要，我也可以继续把这一套分析法的变化重点再展开讲。',
+    ].filter(Boolean).join('\n');
+  }
+  const framework = result?.analysis?.frameworkReports?.[frameworkMeta.code];
   if (!framework) {
     return `${frameworkMeta.label} 目前还没有可用结果。你可以先重新发送一张侧位片。`;
   }
@@ -512,6 +750,53 @@ async function persistArtifactBase64(base64, mimeType, prefix) {
   return filePath;
 }
 
+function rewriteOverlapSvgForWechat(svgText) {
+  if (!svgText || !svgText.includes('HYF Ceph Overlap')) {
+    return svgText;
+  }
+  const svgOpenTagMatch = svgText.match(/<svg\b[^>]*width="(\d+)"[^>]*height="(\d+)"[^>]*>/i);
+  let rewritten = svgText;
+  if (svgOpenTagMatch && !/<rect x="0" y="0" width="[^"]+" height="[^"]+" fill="#ffffff"\s*\/>/.test(rewritten)) {
+    const [, width, height] = svgOpenTagMatch;
+    rewritten = rewritten.replace(
+      svgOpenTagMatch[0],
+      `${svgOpenTagMatch[0]}<rect x="0" y="0" width="${width}" height="${height}" fill="#ffffff" />`,
+    );
+  }
+  rewritten = rewritten
+    .replace(/<rect x="[^"]+" y="44" width="196" height="130" rx="16" fill="#ffffff" fill-opacity="0\.88" stroke="#d8dcf7" stroke-width="1"\s*\/>/, '<rect x="32" y="44" width="196" height="130" rx="16" fill="#ffffff" fill-opacity="0.92" stroke="#d8dcf7" stroke-width="1" />')
+    .replace(/<line x1="[^"]+" y1="60" x2="[^"]+" y2="60" stroke="#f59e0b" stroke-width="3\.5" stroke-linecap="round" opacity="0\.95"\s*\/>/, '<line x1="52" y1="60" x2="96" y2="60" stroke="#f59e0b" stroke-width="3.5" stroke-linecap="round" opacity="0.95" />')
+    .replace(/<line x1="[^"]+" y1="60" x2="[^"]+" y2="60" stroke="#22d3ee" stroke-width="3\.5" stroke-linecap="round" opacity="0\.95"\s*\/>/, '<line x1="128" y1="60" x2="172" y2="60" stroke="#22d3ee" stroke-width="3.5" stroke-linecap="round" opacity="0.95" />')
+    .replace(/<text x="[^"]+" y="42"([^>]*)>HYF Ceph Overlap<\/text>/, '<text x="50" y="42"$1>HYF Ceph Overlap</text>')
+    .replace(/<text x="[^"]+" y="66"([^>]*)>(.*?)<\/text>/, '<text x="50" y="66"$1>$2</text>')
+    .replace(/<text x="[^"]+" y="90"([^>]*)>基准: /, '<text x="50" y="90"$1>治疗前: ')
+    .replace(/<text x="[^"]+" y="114"([^>]*)>对照: /, '<text x="50" y="114"$1>治疗后: ');
+  return rewritten;
+}
+
+async function convertSvgTextToPngForWechat(svgText, prefix) {
+  if (!svgText) {
+    return null;
+  }
+  await ensureCacheDirs();
+  const svgPath = path.join(
+    WEIXIN_MEDIA_CACHE_DIR,
+    `${prefix}-${Date.now()}-${randomBytes(4).toString('hex')}.svg`,
+  );
+  const pngPath = path.join(
+    WEIXIN_MEDIA_CACHE_DIR,
+    `${prefix}-${Date.now()}-${randomBytes(4).toString('hex')}.png`,
+  );
+  await fs.writeFile(svgPath, svgText, 'utf8');
+  try {
+    await execFileAsync('sips', ['-s', 'format', 'png', svgPath, '--out', pngPath]);
+    return pngPath;
+  } catch (error) {
+    console.warn(`[HYFCeph Weixin] failed to convert overlap svg locally: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
 async function persistOriginalImageFile(filePath, prefix) {
   if (!filePath) {
     return null;
@@ -528,6 +813,7 @@ async function persistOriginalImageFile(filePath, prefix) {
 
 async function composeAnnotatedImageForReply(imagePath, feishuDocUrl, prefix, {
   baseImagePath = null,
+  qrPosition = 'top-right',
 } = {}) {
   if (!imagePath) {
     return imagePath;
@@ -543,6 +829,7 @@ async function composeAnnotatedImageForReply(imagePath, feishuDocUrl, prefix, {
     baseImagePath: baseImagePath || '',
     outputPath,
     matrix: normalizedUrl ? buildQrMatrix(normalizedUrl) : [],
+    position: qrPosition || 'top-right',
   };
   try {
     await execFileAsync('python3', ['-c', PYTHON_QR_OVERLAY_SCRIPT, JSON.stringify(payload)]);
@@ -560,17 +847,25 @@ async function updateLatestResultCache(conversationId, result, options = {}) {
     options.sourceImagePath || '',
     `${key}-source`,
   ) || previous.sourceImagePath || '';
+  const isOverlap = isOverlapResult(result);
+  let overlapRebuiltPngPath = null;
+  if (isOverlap && result?.artifacts?.annotatedSvgBase64) {
+    const overlapSvgText = Buffer.from(result.artifacts.annotatedSvgBase64, 'base64').toString('utf8');
+    const rewrittenSvgText = rewriteOverlapSvgForWechat(overlapSvgText);
+    overlapRebuiltPngPath = await convertSvgTextToPngForWechat(rewrittenSvgText, `${key}-overlap`);
+  }
   const rawAnnotatedImagePath = await persistArtifactBase64(
-    result?.artifacts?.annotatedPngBase64 || '',
+    !overlapRebuiltPngPath ? (result?.artifacts?.annotatedPngBase64 || '') : '',
     result?.artifacts?.annotatedPngMimeType || 'image/png',
     `${key}-annotated`,
-  ) || '';
+  ) || overlapRebuiltPngPath || '';
   const annotatedImagePath = await composeAnnotatedImageForReply(
     rawAnnotatedImagePath || previous.annotatedImagePath || '',
     result?.feishuDoc?.docUrl || '',
     `${key}-annotated-qr`,
     {
-      baseImagePath: sourceImagePath,
+      baseImagePath: isOverlap ? '' : sourceImagePath,
+      qrPosition: isOverlap ? 'bottom-left' : 'top-right',
     },
   ) || previous.annotatedImagePath || '';
   const contourImagePath = await persistArtifactBase64(
@@ -589,6 +884,7 @@ async function updateLatestResultCache(conversationId, result, options = {}) {
         frameworkReports: result?.analysis?.frameworkReports || {},
       },
       analysisError: result?.analysisError || null,
+      patientName: normalizePatientName(result?.patientName || previous.result?.patientName || ''),
       metrics: Array.isArray(result?.metrics) ? result.metrics : [],
       summary: result?.summary || {},
       reportPayload: result?.reportPayload || previous.result?.reportPayload || null,
@@ -625,7 +921,12 @@ async function refreshCachedReportArtifacts(conversationId, cached, result) {
     result.feishuDoc.docUrl,
     `${key}-annotated-qr-refresh`,
     {
-      baseImagePath: cached?.sourceImagePath || '',
+      baseImagePath: String(result?.mode || cached?.result?.mode || '').trim().toLowerCase() === 'overlap'
+        ? ''
+        : (cached?.sourceImagePath || ''),
+      qrPosition: String(result?.mode || cached?.result?.mode || '').trim().toLowerCase() === 'overlap'
+        ? 'bottom-left'
+        : 'top-right',
     },
   );
   if (refreshedAnnotatedImagePath) {
@@ -815,7 +1116,44 @@ async function measureImageViaPortal({ apiKey, media }) {
   return payload.result;
 }
 
-async function generateReportsForUser({ apiKey, resultPayload }) {
+async function measureOverlapForUser({ apiKey, baseMedia, compareMedia, alignMode = 'SN' }) {
+  const [baseBuffer, compareBuffer] = await Promise.all([
+    fs.readFile(baseMedia.filePath),
+    fs.readFile(compareMedia.filePath),
+  ]);
+  const baseFileName = baseMedia.fileName || path.basename(baseMedia.filePath);
+  const compareFileName = compareMedia.fileName || path.basename(compareMedia.filePath);
+  const baseMimeType = inferMimeType(baseMedia.filePath, baseMedia.mimeType || 'application/octet-stream');
+  const compareMimeType = inferMimeType(compareMedia.filePath, compareMedia.mimeType || 'application/octet-stream');
+  console.log(`[HYFCeph Weixin] measuring overlap base=${baseFileName} compare=${compareFileName} align=${alignMode}`);
+  const payload = await fetchJsonWithRetry(`${PORTAL_BASE_URL}/api/measure/overlap`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+    },
+    body: JSON.stringify({
+      baseFileName,
+      baseMimeType,
+      baseImageBase64: baseBuffer.toString('base64'),
+      compareFileName,
+      compareMimeType,
+      compareImageBase64: compareBuffer.toString('base64'),
+      alignMode,
+      generateReport: false,
+    }),
+    compressBody: true,
+    timeoutMs: PORTAL_MEASURE_TIMEOUT_MS,
+    label: 'portal overlap measurement request',
+  });
+  return payload.result;
+}
+
+function inferReportType(resultPayload) {
+  return String(resultPayload?.mode || '').trim().toLowerCase() === 'overlap' ? 'overlap' : 'image';
+}
+
+async function generateReportsForUser({ apiKey, resultPayload, patientName = '', reportType = inferReportType(resultPayload) }) {
   console.log('[HYFCeph Weixin] generating report links');
   const reportPayloadKey = String(resultPayload?.reportPayload?.objectKey || '').trim();
   if (reportPayloadKey) {
@@ -826,8 +1164,9 @@ async function generateReportsForUser({ apiKey, resultPayload }) {
         'x-api-key': apiKey,
       },
       body: JSON.stringify({
-        reportType: 'image',
+        reportType,
         resultPayloadKey: reportPayloadKey,
+        patientName,
       }),
       timeoutMs: PORTAL_REPORT_TIMEOUT_MS,
       label: 'portal report link issue request',
@@ -846,7 +1185,8 @@ async function generateReportsForUser({ apiKey, resultPayload }) {
       'x-api-key': apiKey,
     },
     body: JSON.stringify({
-      reportType: 'image',
+      reportType,
+      patientName,
       ...(reportPayloadKey ? { resultPayloadKey: reportPayloadKey } : { resultPayload: compactPayload }),
     }),
     compressBody: !reportPayloadKey,
@@ -867,6 +1207,7 @@ async function ensureReportPayloadKey({ apiKey, resultPayload }) {
   }
   console.log('[HYFCeph Weixin] uploading result payload key');
   const compactPayload = buildPortalReportPayload(resultPayload);
+  const reportType = inferReportType(resultPayload);
   const payload = await fetchJsonWithRetry(`${PORTAL_BASE_URL}/api/report/payload`, {
     method: 'POST',
     headers: {
@@ -874,7 +1215,7 @@ async function ensureReportPayloadKey({ apiKey, resultPayload }) {
       'x-api-key': apiKey,
     },
     body: JSON.stringify({
-      reportType: 'image',
+      reportType,
       resultPayload: compactPayload,
     }),
     compressBody: true,
@@ -884,7 +1225,7 @@ async function ensureReportPayloadKey({ apiKey, resultPayload }) {
   return payload.reportPayload || null;
 }
 
-async function generateFeishuDocForUser({ apiKey, resultPayload, prettyReportUrl = '', standardReportUrl = '' }) {
+async function generateFeishuDocForUser({ apiKey, resultPayload, prettyReportUrl = '', standardReportUrl = '', patientName = '', reportType = inferReportType(resultPayload) }) {
   console.log('[HYFCeph Weixin] generating feishu doc');
   const reportPayloadKey = String(resultPayload?.reportPayload?.objectKey || '').trim();
   const compactPayload = reportPayloadKey ? null : buildFeishuDocPayload(resultPayload);
@@ -895,7 +1236,8 @@ async function generateFeishuDocForUser({ apiKey, resultPayload, prettyReportUrl
       'x-api-key': apiKey,
     },
     body: JSON.stringify({
-      reportType: 'image',
+      reportType,
+      patientName,
       prettyReportUrl,
       standardReportUrl,
       ...(reportPayloadKey ? { resultPayloadKey: reportPayloadKey } : { resultPayload: compactPayload }),
@@ -907,11 +1249,118 @@ async function generateFeishuDocForUser({ apiKey, resultPayload, prettyReportUrl
   return payload.feishuDoc || null;
 }
 
+async function enrichResultForUser({ apiKey, result }) {
+  try {
+    const reportPayload = await promiseWithTimeout(
+      ensureReportPayloadKey({
+        apiKey,
+        resultPayload: result,
+      }),
+      REPORT_PAYLOAD_SOFT_TIMEOUT_MS,
+      `report payload upload timeout after ${REPORT_PAYLOAD_SOFT_TIMEOUT_MS}ms`,
+    );
+    if (reportPayload) {
+      result.reportPayload = reportPayload;
+    }
+  } catch (error) {
+    console.warn(`[HYFCeph Weixin] report payload upload skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
+    const reports = await promiseWithTimeout(
+      generateReportsForUser({
+        apiKey,
+        resultPayload: result,
+        patientName: result.patientName,
+      }),
+      REPORT_GENERATION_SOFT_TIMEOUT_MS,
+      `report generation timeout after ${REPORT_GENERATION_SOFT_TIMEOUT_MS}ms`,
+    );
+    if (reports.report) {
+      result.report = reports.report;
+    }
+    if (reports.prettyReport) {
+      result.prettyReport = reports.prettyReport;
+    }
+    if (reports.feishuDoc && !result.feishuDoc) {
+      result.feishuDoc = reports.feishuDoc;
+    }
+  } catch (error) {
+    console.warn(`[HYFCeph Weixin] report generation skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
+    const feishuDoc = await promiseWithTimeout(
+      generateFeishuDocForUser({
+        apiKey,
+        resultPayload: result,
+        prettyReportUrl: result?.prettyReport?.reportShareUrl || result?.prettyReport?.shortUrl || '',
+        standardReportUrl: result?.report?.reportShareUrl || result?.report?.shortUrl || '',
+        patientName: result.patientName,
+      }),
+      FEISHU_DOC_SOFT_TIMEOUT_MS,
+      `feishu doc generation timeout after ${FEISHU_DOC_SOFT_TIMEOUT_MS}ms`,
+    );
+    if (feishuDoc) {
+      result.feishuDoc = feishuDoc;
+    }
+  } catch (error) {
+    console.warn(`[HYFCeph Weixin] feishu doc generation skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  if (!result.report && !result.prettyReport && !result.feishuDoc) {
+    try {
+      await sleep(1500);
+      const reports = await promiseWithTimeout(
+        generateReportsForUser({
+          apiKey,
+          resultPayload: result,
+          patientName: result.patientName,
+        }),
+        REPORT_GENERATION_SOFT_TIMEOUT_MS,
+        `report generation timeout after ${REPORT_GENERATION_SOFT_TIMEOUT_MS}ms`,
+      );
+      if (reports.report) {
+        result.report = reports.report;
+      }
+      if (reports.prettyReport) {
+        result.prettyReport = reports.prettyReport;
+      }
+      if (reports.feishuDoc && !result.feishuDoc) {
+        result.feishuDoc = reports.feishuDoc;
+      }
+    } catch (error) {
+      console.warn(`[HYFCeph Weixin] delayed report generation skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    try {
+      const feishuDoc = await promiseWithTimeout(
+        generateFeishuDocForUser({
+          apiKey,
+          resultPayload: result,
+          prettyReportUrl: result?.prettyReport?.reportShareUrl || result?.prettyReport?.shortUrl || '',
+          standardReportUrl: result?.report?.reportShareUrl || result?.report?.shortUrl || '',
+          patientName: result.patientName,
+        }),
+        FEISHU_DOC_SOFT_TIMEOUT_MS,
+        `feishu doc generation timeout after ${FEISHU_DOC_SOFT_TIMEOUT_MS}ms`,
+      );
+      if (feishuDoc) {
+        result.feishuDoc = feishuDoc;
+      }
+    } catch (error) {
+      console.warn(`[HYFCeph Weixin] delayed feishu doc generation skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  return result;
+}
+
 async function hydrateCachedReportsForUser({ conversationId, apiKey, cached }) {
   if (!cached?.result) {
     return cached;
   }
   const workingResult = JSON.parse(JSON.stringify(cached.result));
+  const patientName = normalizePatientName(workingResult?.patientName || '');
 
   try {
     const reportPayload = await promiseWithTimeout(
@@ -934,6 +1383,7 @@ async function hydrateCachedReportsForUser({ conversationId, apiKey, cached }) {
       generateReportsForUser({
         apiKey,
         resultPayload: workingResult,
+        patientName,
       }),
       REPORT_GENERATION_SOFT_TIMEOUT_MS,
       `report generation timeout after ${REPORT_GENERATION_SOFT_TIMEOUT_MS}ms`,
@@ -958,6 +1408,7 @@ async function hydrateCachedReportsForUser({ conversationId, apiKey, cached }) {
         resultPayload: workingResult,
         prettyReportUrl: workingResult?.prettyReport?.reportShareUrl || workingResult?.prettyReport?.shortUrl || '',
         standardReportUrl: workingResult?.report?.reportShareUrl || workingResult?.report?.shortUrl || '',
+        patientName,
       }),
       FEISHU_DOC_SOFT_TIMEOUT_MS,
       `feishu doc generation timeout after ${FEISHU_DOC_SOFT_TIMEOUT_MS}ms`,
@@ -992,6 +1443,83 @@ async function createRestrictedAgent() {
       const text = String(request.text || '').trim();
 
       if (!request.media || request.media.type !== 'image') {
+        if (hasPendingMeasurement(request.conversationId)) {
+          const pendingEntry = getLatestResultCache(request.conversationId);
+          if (isMeasurementCommandText(text) && !isSkipPatientNameText(text)) {
+            const pending = normalizePendingMeasurement(pendingEntry?.pendingMeasurement);
+            return {
+              text: pending?.images?.length >= 2
+                ? '我已经连续收到两张侧位片了，默认会做重叠图。先回复患者姓名；如果不想填写，直接回复“匿名”就可以，我再开始测量。'
+                : '我已经收到侧位片了。先回复患者姓名；如果不想填写，直接回复“匿名”就可以，我再开始测量。',
+            };
+          }
+          const patientName = isSkipPatientNameText(text) ? '' : normalizePatientName(text);
+          if (!patientName && !isSkipPatientNameText(text)) {
+            const pending = normalizePendingMeasurement(pendingEntry?.pendingMeasurement);
+            return {
+              text: pending?.images?.length >= 2
+                ? '我已经连续收到两张侧位片了，默认会做重叠图。先告诉我患者姓名；如果不想填写，直接回复“匿名”就可以，我再开始测量。'
+                : '我已经收到侧位片了。先告诉我患者姓名；如果不想填写，直接回复“匿名”就可以，我再开始测量。',
+            };
+          }
+
+          let portalUser;
+          try {
+            portalUser = await resolvePortalUser(request.conversationId);
+          } catch (error) {
+            return {
+              text: error instanceof Error
+                ? `${error.message}\n请先回到门户注册并完成微信绑定。`
+                : '这个微信尚未绑定 HYFCeph 账号，请先回到门户完成绑定。',
+            };
+          }
+
+          const pendingMedia = normalizePendingMeasurement(pendingEntry?.pendingMeasurement);
+          if (!pendingMedia?.images?.length) {
+            return {
+              text: '这次待测的侧位片缓存已经失效了，你再发一张新的侧位片给我就行。',
+            };
+          }
+
+          try {
+            const result = pendingMedia.images.length >= 2
+              ? await measureOverlapForUser({
+                  apiKey: portalUser.auth.apiKey,
+                  baseMedia: pendingMedia.images[0],
+                  compareMedia: pendingMedia.images[1],
+                })
+              : await measureImageForUser({
+                  apiKey: portalUser.auth.apiKey,
+                  media: pendingMedia.images[0],
+                });
+            result.patientName = patientName || '匿名';
+            await enrichResultForUser({
+              apiKey: portalUser.auth.apiKey,
+              result,
+            });
+
+            await updateLatestResultCache(request.conversationId, result, {
+              sourceImagePath: pendingMedia.images[0]?.filePath || '',
+            });
+            await clearPendingMeasurement(request.conversationId);
+            const cached = getLatestResultCache(request.conversationId);
+            return {
+              text: buildSummaryText(result),
+              media: cached?.annotatedImagePath
+                ? {
+                    type: 'image',
+                    url: cached.annotatedImagePath,
+                    fileName: 'hyfceph-annotated.png',
+                  }
+                : undefined,
+            };
+          } catch (error) {
+            return {
+              text: `HYFCeph 处理失败：${toUserFacingPortalError(error)}`,
+            };
+          }
+        }
+
         if (/^(帮助|help|怎么用|如何使用)$/i.test(text)) {
           return {
             text: [
@@ -1024,6 +1552,7 @@ async function createRestrictedAgent() {
             || !cached.result?.feishuDoc?.docUrl;
           if (missingAnyLink) {
             try {
+              const portalUser = await resolvePortalUser(request.conversationId);
               hydrated = await hydrateCachedReportsForUser({
                 conversationId: request.conversationId,
                 apiKey: portalUser.auth.apiKey,
@@ -1094,140 +1623,22 @@ async function createRestrictedAgent() {
         };
       }
 
-      let portalUser;
       try {
-        portalUser = await resolvePortalUser(request.conversationId);
-      } catch (error) {
+        const pendingEntry = await setPendingMeasurement(request.conversationId, request.media);
+        const pending = normalizePendingMeasurement(pendingEntry?.pendingMeasurement);
+        await notifyImageReceived(request, pending);
         return {
-          text: error instanceof Error
-            ? `${error.message}\n请先回到门户注册并完成微信绑定。`
-            : '这个微信尚未绑定 HYFCeph 账号，请先回到门户完成绑定。',
-        };
-      }
-
-      try {
-        const result = await measureImageForUser({
-          apiKey: portalUser.auth.apiKey,
-          media: request.media,
-        });
-
-        try {
-          const reportPayload = await promiseWithTimeout(
-            ensureReportPayloadKey({
-              apiKey: portalUser.auth.apiKey,
-              resultPayload: result,
-            }),
-            REPORT_PAYLOAD_SOFT_TIMEOUT_MS,
-            `report payload upload timeout after ${REPORT_PAYLOAD_SOFT_TIMEOUT_MS}ms`,
-          );
-          if (reportPayload) {
-            result.reportPayload = reportPayload;
-          }
-        } catch (error) {
-          console.warn(`[HYFCeph Weixin] report payload upload skipped: ${error instanceof Error ? error.message : String(error)}`);
-        }
-
-        try {
-          const reports = await promiseWithTimeout(
-            generateReportsForUser({
-              apiKey: portalUser.auth.apiKey,
-              resultPayload: result,
-            }),
-            REPORT_GENERATION_SOFT_TIMEOUT_MS,
-            `report generation timeout after ${REPORT_GENERATION_SOFT_TIMEOUT_MS}ms`,
-          );
-          if (reports.report) {
-            result.report = reports.report;
-          }
-          if (reports.prettyReport) {
-            result.prettyReport = reports.prettyReport;
-          }
-          if (reports.feishuDoc && !result.feishuDoc) {
-            result.feishuDoc = reports.feishuDoc;
-          }
-        } catch (error) {
-          console.warn(`[HYFCeph Weixin] report generation skipped: ${error instanceof Error ? error.message : String(error)}`);
-        }
-        try {
-          const feishuDoc = await promiseWithTimeout(
-            generateFeishuDocForUser({
-              apiKey: portalUser.auth.apiKey,
-              resultPayload: result,
-              prettyReportUrl: result?.prettyReport?.reportShareUrl || result?.prettyReport?.shortUrl || '',
-              standardReportUrl: result?.report?.reportShareUrl || result?.report?.shortUrl || '',
-            }),
-            FEISHU_DOC_SOFT_TIMEOUT_MS,
-            `feishu doc generation timeout after ${FEISHU_DOC_SOFT_TIMEOUT_MS}ms`,
-          );
-          if (feishuDoc) {
-            result.feishuDoc = feishuDoc;
-          }
-        } catch (error) {
-          console.warn(`[HYFCeph Weixin] feishu doc generation skipped: ${error instanceof Error ? error.message : String(error)}`);
-        }
-        if (!result.report && !result.prettyReport && !result.feishuDoc) {
-          try {
-            await sleep(1500);
-            const reports = await promiseWithTimeout(
-              generateReportsForUser({
-                apiKey: portalUser.auth.apiKey,
-                resultPayload: result,
-              }),
-              REPORT_GENERATION_SOFT_TIMEOUT_MS,
-              `report generation timeout after ${REPORT_GENERATION_SOFT_TIMEOUT_MS}ms`,
-            );
-            if (reports.report) {
-              result.report = reports.report;
-            }
-            if (reports.prettyReport) {
-              result.prettyReport = reports.prettyReport;
-            }
-            if (reports.feishuDoc && !result.feishuDoc) {
-              result.feishuDoc = reports.feishuDoc;
-            }
-          } catch (error) {
-            console.warn(`[HYFCeph Weixin] delayed report generation skipped: ${error instanceof Error ? error.message : String(error)}`);
-          }
-          try {
-            const feishuDoc = await promiseWithTimeout(
-              generateFeishuDocForUser({
-                apiKey: portalUser.auth.apiKey,
-                resultPayload: result,
-                prettyReportUrl: result?.prettyReport?.reportShareUrl || result?.prettyReport?.shortUrl || '',
-                standardReportUrl: result?.report?.reportShareUrl || result?.report?.shortUrl || '',
-              }),
-              FEISHU_DOC_SOFT_TIMEOUT_MS,
-              `feishu doc generation timeout after ${FEISHU_DOC_SOFT_TIMEOUT_MS}ms`,
-            );
-            if (feishuDoc) {
-              result.feishuDoc = feishuDoc;
-            }
-          } catch (error) {
-            console.warn(`[HYFCeph Weixin] delayed feishu doc generation skipped: ${error instanceof Error ? error.message : String(error)}`);
-          }
-        }
-        await updateLatestResultCache(request.conversationId, result, {
-          sourceImagePath: request.media?.filePath || '',
-        });
-        const cached = getLatestResultCache(request.conversationId);
-        const pngBase64 = result?.artifacts?.annotatedPngBase64 || '';
-        const pngMimeType = result?.artifacts?.annotatedPngMimeType || 'image/png';
-        const mediaReply = cached?.annotatedImagePath
-          ? {
-              type: 'image',
-              url: cached.annotatedImagePath,
-              fileName: 'hyfceph-annotated.png',
-            }
-          : pngBase64
-          ? {
-              type: 'image',
-              url: await writeBase64Image(pngBase64, pngMimeType, 'hyfceph-weixin-annotated'),
-              fileName: 'hyfceph-annotated.png',
-            }
-          : undefined;
-        return {
-          text: buildSummaryText(result),
-          media: mediaReply,
+          text: pending?.images?.length >= 2
+            ? [
+                '我已经连续收到两张侧位片了。',
+                '这次我会默认按治疗前后重叠图来做。',
+                '开始测量前，先告诉我患者姓名；如果不想填写，直接回复“匿名”就可以。',
+              ].join('\n')
+            : [
+                '我已经收到这张侧位片了。',
+                '如果你还想做重叠图，可以继续再发第二张侧位片；否则直接回复患者姓名就可以开始测量。',
+                '如果不想填写姓名，直接回复“匿名”也可以。',
+              ].join('\n'),
         };
       } catch (error) {
         return {
