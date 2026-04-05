@@ -50,6 +50,7 @@ const FEISHU_STORE_UPDATED_AT_FIELD = process.env.HYFCEPH_FEISHU_STORE_UPDATED_A
 const FEISHU_STORE_KIND_FIELD = process.env.HYFCEPH_FEISHU_STORE_KIND_FIELD || 'kind';
 const FEISHU_STORE_KIND_LABEL_FIELD = process.env.HYFCEPH_FEISHU_STORE_KIND_LABEL_FIELD || 'kind_label';
 const FEISHU_STORE_SUMMARY_FIELD = process.env.HYFCEPH_FEISHU_STORE_SUMMARY_FIELD || 'summary';
+const FEISHU_STORE_MAX_RECORDS = Math.max(100, Number(process.env.HYFCEPH_FEISHU_MAX_RECORDS || 1500) || 1500);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
@@ -1246,6 +1247,91 @@ function normalizeReportLinkMap(value) {
   return out;
 }
 
+function getSortableIsoTimestamp(record) {
+  const createdAt = String(record?.createdAt || '').trim();
+  if (isIsoDate(createdAt)) {
+    return new Date(createdAt).toISOString();
+  }
+  const updatedAt = String(record?.updatedAt || '').trim();
+  if (isIsoDate(updatedAt)) {
+    return new Date(updatedAt).toISOString();
+  }
+  const expiresAt = String(record?.expiresAt || '').trim();
+  if (isIsoDate(expiresAt)) {
+    return new Date(expiresAt).toISOString();
+  }
+  return nowIso();
+}
+
+function pruneStoreForFeishuRecordLimit(store, maxRecords = FEISHU_STORE_MAX_RECORDS) {
+  const normalizedStore = normalizeStoreRecord(store);
+  if (!Number.isFinite(maxRecords) || maxRecords < 1) {
+    return {
+      store: normalizedStore,
+      prunedCount: 0,
+    };
+  }
+
+  const currentRows = buildFeishuStoreRows(normalizedStore);
+  if (currentRows.length < maxRecords) {
+    return {
+      store: normalizedStore,
+      prunedCount: 0,
+    };
+  }
+
+  const targetRows = Math.max(1, maxRecords - 1);
+  const pruneCount = currentRows.length - targetRows;
+  if (pruneCount <= 0) {
+    return {
+      store: normalizedStore,
+      prunedCount: 0,
+    };
+  }
+
+  const reportEntries = Object.entries(normalizedStore.reportLinks || {})
+    .map(([code, record]) => [code, normalizeReportLinkRecord(code, record)])
+    .filter(([, record]) => Boolean(record))
+    .sort((left, right) => {
+      const leftTime = new Date(getSortableIsoTimestamp(left[1])).getTime();
+      const rightTime = new Date(getSortableIsoTimestamp(right[1])).getTime();
+      if (leftTime !== rightTime) {
+        return leftTime - rightTime;
+      }
+      return String(left[0]).localeCompare(String(right[0]));
+    });
+
+  if (!reportEntries.length) {
+    return {
+      store: normalizedStore,
+      prunedCount: 0,
+    };
+  }
+
+  const deleteCodes = new Set(reportEntries.slice(0, pruneCount).map(([code]) => code));
+  if (!deleteCodes.size) {
+    return {
+      store: normalizedStore,
+      prunedCount: 0,
+    };
+  }
+
+  const nextReportLinks = {};
+  for (const [code, record] of Object.entries(normalizedStore.reportLinks || {})) {
+    if (!deleteCodes.has(code)) {
+      nextReportLinks[code] = record;
+    }
+  }
+
+  return {
+    store: {
+      ...normalizedStore,
+      reportLinks: nextReportLinks,
+    },
+    prunedCount: deleteCodes.size,
+  };
+}
+
 function createPdfShortCode() {
   return randomBytes(6).toString('base64url').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 8);
 }
@@ -1966,6 +2052,10 @@ async function readStoreFromFeishuBitable() {
 
 async function writeStoreToFeishuBitable(store) {
   const schema = await ensureFeishuBitableStoreSchema();
+  const { store: prunedStore, prunedCount } = pruneStoreForFeishuRecordLimit(store);
+  if (prunedCount > 0) {
+    console.warn(`[HYFCeph Portal] Feishu store reached ${FEISHU_STORE_MAX_RECORDS} rows, pruned ${prunedCount} oldest report link record(s).`);
+  }
   const existingRecords = await listFeishuStoreRecords(schema);
   const existingByKey = new Map();
   for (const record of existingRecords) {
@@ -1975,7 +2065,7 @@ async function writeStoreToFeishuBitable(store) {
     }
   }
 
-  const desiredRows = buildFeishuStoreRows(store);
+  const desiredRows = buildFeishuStoreRows(prunedStore);
   const desiredKeys = new Set(desiredRows.map((row) => row.key));
 
   for (const row of desiredRows) {
