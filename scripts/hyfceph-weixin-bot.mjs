@@ -600,6 +600,10 @@ function isMeasurementCommandText(text) {
   return /^(帮助|help|怎么用|如何使用|在线报告|报告链接|报告地址|报告|标点图|标注图|标点|标注|轮廓图|白底轮廓|怎么看|怎么分析|解读|分析|总结|综合判断|关键值|指标|Downs|Steiner|北大分析法|ABO|Ricketts|Tweed|McNamara|Jarabak)$/i.test(String(text || '').trim());
 }
 
+function isResetConversationText(text) {
+  return /^(重置|重新开始|重新对话|新对话|清空|清除缓存|重新来过)$/i.test(String(text || '').trim());
+}
+
 function normalizePendingMeasurement(pendingMeasurement) {
   if (!pendingMeasurement || typeof pendingMeasurement !== 'object') {
     return null;
@@ -678,6 +682,16 @@ async function clearPendingMeasurement(conversationId) {
     pendingMeasurement: null,
   };
   await saveResultCache();
+}
+
+async function resetConversationState(conversationId) {
+  const key = normalizeConversationKey(conversationId);
+  if (!latestResultCache[key]) {
+    return false;
+  }
+  delete latestResultCache[key];
+  await saveResultCache();
+  return true;
 }
 
 function buildFrameworkReply(cacheEntry, frameworkMeta) {
@@ -1462,6 +1476,15 @@ async function createRestrictedAgent() {
       const text = String(request.text || '').trim();
 
       if (!request.media || request.media.type !== 'image') {
+        if (isResetConversationText(text)) {
+          const cleared = await resetConversationState(request.conversationId);
+          return {
+            text: cleared
+              ? '已经帮你清空上一轮缓存了。现在直接发新的侧位片就可以重新开始。'
+              : '当前没有需要清空的缓存。你现在直接发新的侧位片就可以开始。',
+          };
+        }
+
         if (hasPendingMeasurement(request.conversationId)) {
           const pendingEntry = getLatestResultCache(request.conversationId);
           if (isMeasurementCommandText(text) && !isSkipPatientNameText(text)) {
