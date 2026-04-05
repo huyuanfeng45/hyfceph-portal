@@ -212,6 +212,18 @@ function buildOperatorSessionUrl(portalBaseUrl) {
   return new URL('api/admin/operator-session', portalBaseUrl).toString();
 }
 
+function listOperatorSessionUrls(portalBaseUrl) {
+  const primary = ensureTrailingSlash(String(portalBaseUrl || DEFAULT_PORTAL_BASE_URL).trim() || DEFAULT_PORTAL_BASE_URL);
+  const fallbacks = [primary];
+  if (primary !== DEFAULT_PORTAL_BASE_URL) {
+    fallbacks.push(DEFAULT_PORTAL_BASE_URL);
+  }
+  return Array.from(new Set(fallbacks)).map((baseUrl) => ({
+    baseUrl,
+    url: buildOperatorSessionUrl(baseUrl),
+  }));
+}
+
 async function parseJsonResponse(response) {
   const text = await response.text();
   try {
@@ -251,22 +263,33 @@ async function syncOperatorSession(payload, reason = 'capture', sourceTab = null
 
   let response;
   let data;
-  try {
-    response = await fetch(buildOperatorSessionUrl(config.portalBaseUrl), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': config.operatorApiKey,
-      },
-      body: JSON.stringify(payload),
-    });
-    data = await parseJsonResponse(response);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+  let resolvedBaseUrl = config.portalBaseUrl;
+  let lastErrorMessage = '';
+  const candidates = listOperatorSessionUrls(config.portalBaseUrl);
+  for (const candidate of candidates) {
+    try {
+      response = await fetch(candidate.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': config.operatorApiKey,
+        },
+        body: JSON.stringify(payload),
+      });
+      data = await parseJsonResponse(response);
+      resolvedBaseUrl = candidate.baseUrl;
+      break;
+    } catch (error) {
+      lastErrorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  if (!response) {
+    const message = lastErrorMessage || '网络异常';
     const status = {
       ok: false,
       reason,
-      message: message || '网络异常',
+      message,
       syncedAt: null,
       operatorSession: null,
     };
@@ -294,6 +317,12 @@ async function syncOperatorSession(payload, reason = 'capture', sourceTab = null
       fingerprint: `sync-http:${response.status}:${status.message}:${payload?.pageUrl || ''}`,
     });
     throw new Error(status.message);
+  }
+
+  if (resolvedBaseUrl !== config.portalBaseUrl) {
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.portalBaseUrl]: resolvedBaseUrl,
+    });
   }
 
   const status = {
