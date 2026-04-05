@@ -1942,6 +1942,22 @@ function buildStoreFromFeishuRows(records, schema) {
   return normalizeStoreRecord({ users: [] });
 }
 
+function buildFeishuStoreRowFields(schema, row) {
+  return {
+    [schema.primaryFieldName]: row.key,
+    [schema.kindFieldName]: row.kind,
+    [schema.kindLabelFieldName]: getFeishuStoreKindLabel(row.kind),
+    [schema.summaryFieldName]: buildFeishuStoreSummary(row.kind, row.payload),
+    [schema.payloadFieldName]: JSON.stringify(row.payload, null, 2),
+    [schema.updatedAtFieldName]: row.updatedAt || nowIso(),
+  };
+}
+
+function areFeishuStoreRowFieldsEqual(existingFields, expectedFields) {
+  const keys = Object.keys(expectedFields);
+  return keys.every((fieldName) => readFeishuCellText(existingFields?.[fieldName]) === String(expectedFields[fieldName] || ''));
+}
+
 async function readStoreFromFeishuBitable() {
   const schema = await ensureFeishuBitableStoreSchema();
   const records = await listFeishuStoreRecords(schema);
@@ -1963,16 +1979,12 @@ async function writeStoreToFeishuBitable(store) {
   const desiredKeys = new Set(desiredRows.map((row) => row.key));
 
   for (const row of desiredRows) {
-    const fields = {
-      [schema.primaryFieldName]: row.key,
-      [schema.kindFieldName]: row.kind,
-      [schema.kindLabelFieldName]: getFeishuStoreKindLabel(row.kind),
-      [schema.summaryFieldName]: buildFeishuStoreSummary(row.kind, row.payload),
-      [schema.payloadFieldName]: JSON.stringify(row.payload, null, 2),
-      [schema.updatedAtFieldName]: row.updatedAt || nowIso(),
-    };
+    const fields = buildFeishuStoreRowFields(schema, row);
     const existing = existingByKey.get(row.key);
     if (existing?.record_id) {
+      if (areFeishuStoreRowFieldsEqual(existing.fields, fields)) {
+        continue;
+      }
       await callFeishuBitableApi('PUT', `${schema.basePath}/records/${encodeURIComponent(existing.record_id)}`, {
         fields,
       });
