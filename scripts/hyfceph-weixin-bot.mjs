@@ -262,6 +262,25 @@ async function notifyImageReceived(request, pending) {
   await sendBarkPush('HYFCeph 微信收到侧位片', body);
 }
 
+async function notifyMeasurementCompleted({ conversationId, portalUser, result }) {
+  const isOverlap = String(result?.mode || '').trim().toLowerCase() === 'overlap';
+  const userLabel = portalUser?.user?.name || shortenConversationId(conversationId);
+  const patientName = normalizePatientName(result?.patientName || '') || '匿名';
+  const title = isOverlap ? 'HYFCeph 微信重叠测量完成' : 'HYFCeph 微信测量完成';
+  const summary = isOverlap
+    ? (result?.analysis?.summary?.compareRiskLabel || result?.analysis?.compare?.riskLabel || result?.summary?.compareRiskLabel || '')
+    : (result?.analysis?.riskLabel || result?.summary?.riskLabel || '');
+  const docUrl = String(result?.feishuDoc?.docUrl || '').trim();
+  const bodyLines = [
+    `用户：${userLabel}`,
+    `患者：${patientName}`,
+    `模式：${isOverlap ? '重叠图' : '单图'}`,
+    summary ? `结论：${summary}` : '',
+    docUrl ? `飞书：${docUrl}` : '飞书：未生成',
+  ].filter(Boolean);
+  await sendBarkPush(title, bodyLines.join('\n'));
+}
+
 function promiseWithTimeout(promise, timeoutMs, message) {
   let timeout = null;
   const timeoutPromise = new Promise((_, reject) => {
@@ -1503,6 +1522,11 @@ async function createRestrictedAgent() {
             });
             await clearPendingMeasurement(request.conversationId);
             const cached = getLatestResultCache(request.conversationId);
+            await notifyMeasurementCompleted({
+              conversationId: request.conversationId,
+              portalUser,
+              result: cached?.result || result,
+            });
             return {
               text: buildSummaryText(result),
               media: cached?.annotatedImagePath
