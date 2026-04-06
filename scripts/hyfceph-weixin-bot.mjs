@@ -79,6 +79,7 @@ const FEISHU_DOC_SOFT_TIMEOUT_MS = 15_000;
 const PORTAL_RETRY_ATTEMPTS = 6;
 const PORTAL_RETRY_BASE_DELAY_MS = 1_500;
 const PORTAL_RETRY_MAX_DELAY_MS = 15_000;
+const BOT_CONFIG_REFRESH_MS = 30_000;
 const LOCAL_MEASURE_BUFFER_BYTES = 128 * 1024 * 1024;
 const WEIXIN_RESULT_CACHE_LIMIT = 50;
 const execFileAsync = promisify(execFile);
@@ -378,9 +379,18 @@ async function fetchJsonWithRetry(url, {
 async function ensureWeixinAccountFiles(bot) {
   const normalizedAccountId = normalizeAccountId(bot.accountId);
   await fs.mkdir(OPENCLAW_WEIXIN_ACCOUNTS_DIR, { recursive: true });
+  let existingAccounts = [];
+  try {
+    const raw = await fs.readFile(path.join(OPENCLAW_WEIXIN_DIR, 'accounts.json'), 'utf8');
+    const parsed = JSON.parse(raw);
+    existingAccounts = Array.isArray(parsed) ? parsed.map((item) => normalizeAccountId(item)).filter(Boolean) : [];
+  } catch {
+    existingAccounts = [];
+  }
+  const nextAccounts = [...new Set([...existingAccounts, normalizedAccountId])];
   await fs.writeFile(
     path.join(OPENCLAW_WEIXIN_DIR, 'accounts.json'),
-    JSON.stringify([normalizedAccountId], null, 2),
+    JSON.stringify(nextAccounts, null, 2),
     'utf8',
   );
   await fs.writeFile(
@@ -396,17 +406,131 @@ async function ensureWeixinAccountFiles(bot) {
   return normalizedAccountId;
 }
 
-async function syncBotConfigFromPortal() {
+function botFingerprint(bot) {
+  return JSON.stringify([
+    String(bot.accountId || '').trim(),
+    String(bot.token || '').trim(),
+    String(bot.baseUrl || '').trim(),
+    String(bot.botType || '').trim(),
+  ]);
+}
+
+function normalizeBotConfigEntries(entries) {
+  const deduped = new Map();
+  for (const item of Array.isArray(entries) ? entries : []) {
+    const accountId = String(item?.accountId || '').trim();
+    const token = String(item?.token || '').trim();
+    if (!accountId || !token) {
+      continue;
+    }
+    deduped.set(normalizeAccountId(accountId), {
+      ...item,
+      accountId,
+      token,
+      baseUrl: String(item?.baseUrl || 'https://ilinkai.weixin.qq.com').trim().replace(/\/+$/, ''),
+      botType: String(item?.botType || '').trim() || '3',
+    });
+  }
+  return [...deduped.values()];
+}
+
+async function syncBotConfigsFromPortal() {
+  try {
+    const payload = await requestJson(`${PORTAL_BASE_URL}/api/weixin/bot/configs`);
+    const configs = normalizeBotConfigEntries(payload.configs);
+    if (configs.length) {
+      const synced = [];
+      for (const bot of configs) {
+        const normalizedAccountId = await ensureWeixinAccountFiles(bot);
+        synced.push({
+          ...bot,
+          normalizedAccountId,
+          fingerprint: botFingerprint(bot),
+        });
+      }
+      return synced;
+    }
+  } catch (error) {
+    console.warn(`[HYFCeph Weixin] bot config list unavailable, fallback to single config: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
   const payload = await requestJson(`${PORTAL_BASE_URL}/api/weixin/bot/config`);
   const bot = payload.bot || null;
   if (!bot?.configured || !bot?.accountId || !bot?.token) {
     throw new Error('门户里还没有可用的微信 Clawbot 配置，请先在认证中心完成一次扫码绑定。');
   }
   const normalizedAccountId = await ensureWeixinAccountFiles(bot);
-  return {
+  return [{
     ...bot,
     normalizedAccountId,
-  };
+    fingerprint: botFingerprint(bot),
+  }];
+}
+
+async function stopRuntime(runtime, reason = '') {
+  if (!runtime) {
+    return;
+  }
+  runtime.controller.abort();
+  try {
+    await Promise.race([
+      runtime.promise.catch(() => {}),
+      sleep(1_500),
+    ]);
+  } catch {
+    // ignore shutdown race
+  }
+  if (reason) {
+    console.log(`[HYFCeph Weixin] stopped bot account ${runtime.accountId}${reason ? ` (${reason})` : ''}`);
+  }
+}
+
+async function reconcileBotRuntimes(agent, runtimes) {
+  const configs = await syncBotConfigsFromPortal();
+  const desired = new Map(configs.map((item) => [item.normalizedAccountId, item]));
+
+  for (const [accountId, runtime] of [...runtimes.entries()]) {
+    if (!desired.has(accountId)) {
+      await stopRuntime(runtime, 'binding removed');
+      runtimes.delete(accountId);
+    }
+  }
+
+  for (const config of configs) {
+    const current = runtimes.get(config.normalizedAccountId);
+    if (current?.fingerprint === config.fingerprint) {
+      continue;
+    }
+    if (current) {
+      await stopRuntime(current, 'config updated');
+      runtimes.delete(config.normalizedAccountId);
+    }
+
+    const controller = new AbortController();
+    const accountId = config.normalizedAccountId;
+    console.log(`[HYFCeph Weixin] using bot account ${accountId}${config.userName ? ` for ${config.userName}` : ''}`);
+    const promise = startWeixinBot(agent, {
+      accountId,
+      abortSignal: controller.signal,
+      log: (message) => console.log(`[HYFCeph Weixin][${accountId}] ${message}`),
+    }).catch((error) => {
+      if (!controller.signal.aborted) {
+        console.error(`[HYFCeph Weixin] bot account ${accountId} exited: ${error instanceof Error ? error.stack || error.message : String(error)}`);
+      }
+    }).finally(() => {
+      const latest = runtimes.get(accountId);
+      if (latest?.controller === controller) {
+        runtimes.delete(accountId);
+      }
+    });
+
+    runtimes.set(accountId, {
+      accountId,
+      fingerprint: config.fingerprint,
+      controller,
+      promise,
+    });
+  }
 }
 
 function extractMetricMap(result) {
@@ -1700,13 +1824,29 @@ async function createRestrictedAgent() {
 }
 
 async function main() {
-  const bot = await syncBotConfigFromPortal();
   const agent = await createRestrictedAgent();
-  console.log(`[HYFCeph Weixin] using bot account ${bot.normalizedAccountId}`);
-  await startWeixinBot(agent, {
-    accountId: bot.normalizedAccountId,
-    log: (message) => console.log(`[HYFCeph Weixin] ${message}`),
-  });
+  const runtimes = new Map();
+  const shutdown = new AbortController();
+  const handleShutdown = () => shutdown.abort();
+  process.on('SIGINT', handleShutdown);
+  process.on('SIGTERM', handleShutdown);
+
+  try {
+    while (!shutdown.signal.aborted) {
+      try {
+        await reconcileBotRuntimes(agent, runtimes);
+      } catch (error) {
+        console.error(`[HYFCeph Weixin] runtime reconcile failed: ${error instanceof Error ? error.stack || error.message : String(error)}`);
+      }
+      if (!shutdown.signal.aborted) {
+        await sleep(BOT_CONFIG_REFRESH_MS);
+      }
+    }
+  } finally {
+    process.off('SIGINT', handleShutdown);
+    process.off('SIGTERM', handleShutdown);
+    await Promise.allSettled([...runtimes.values()].map((runtime) => stopRuntime(runtime, 'shutdown')));
+  }
 }
 
 main().catch((error) => {

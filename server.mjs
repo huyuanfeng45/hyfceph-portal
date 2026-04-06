@@ -854,6 +854,7 @@ function publicWeixinBinding(binding) {
     boundAt: binding.boundAt,
     updatedAt: binding.updatedAt,
     botAccountId: binding.botAccountId || null,
+    botType: binding.botType || null,
     displayUserId: maskWeixinUserId(binding.weixinUserId),
     active: true,
   };
@@ -893,9 +894,75 @@ function normalizeWeixinBindingRecord(binding) {
     botAccountId: typeof binding.botAccountId === 'string' && binding.botAccountId.trim()
       ? binding.botAccountId.trim()
       : null,
+    botToken: typeof binding.botToken === 'string' && binding.botToken.trim()
+      ? binding.botToken.trim()
+      : null,
+    botBaseUrl: typeof binding.botBaseUrl === 'string' && binding.botBaseUrl.trim()
+      ? binding.botBaseUrl.trim().replace(/\/+$/, '')
+      : WEIXIN_FIXED_BASE_URL,
+    botType: typeof binding.botType === 'string' && binding.botType.trim()
+      ? binding.botType.trim()
+      : WEIXIN_BOT_TYPE,
     boundAt: isIsoDate(binding.boundAt) ? new Date(binding.boundAt).toISOString() : nowIso(),
     updatedAt: isIsoDate(binding.updatedAt) ? new Date(binding.updatedAt).toISOString() : nowIso(),
   };
+}
+
+function buildWeixinBotConfigFromBinding(user, binding, fallbackBot = null) {
+  if (!user || !binding?.weixinUserId) {
+    return null;
+  }
+  const accountId = String(binding.botAccountId || '').trim();
+  const fallbackAccountId = String(fallbackBot?.accountId || '').trim();
+  const token = String(
+    binding.botToken
+    || ((accountId && accountId === fallbackAccountId) ? (fallbackBot?.token || '') : '')
+    || '',
+  ).trim();
+  if (!accountId || !token) {
+    return null;
+  }
+  const normalizedBot = normalizeWeixinBotRecord({
+    accountId,
+    token,
+    baseUrl: binding.botBaseUrl || fallbackBot?.baseUrl || WEIXIN_FIXED_BASE_URL,
+    botType: binding.botType || fallbackBot?.botType || WEIXIN_BOT_TYPE,
+    configuredAt: binding.boundAt || fallbackBot?.configuredAt || nowIso(),
+    updatedAt: binding.updatedAt || fallbackBot?.updatedAt || nowIso(),
+    lastLinkedUserId: binding.weixinUserId,
+  });
+  if (!normalizedBot) {
+    return null;
+  }
+  return {
+    ...normalizedBot,
+    userId: user.id,
+    userName: user.name,
+    organization: user.organization,
+    weixinUserId: binding.weixinUserId,
+    apiKeyActive: isApiKeyActive(user),
+  };
+}
+
+function collectWeixinBotConfigs(store) {
+  const fallbackBot = normalizeWeixinBotRecord(store?.weixinBot);
+  const deduped = new Map();
+
+  for (const user of store?.users || []) {
+    const binding = normalizeWeixinBindingRecord(user?.weixinBinding);
+    const config = buildWeixinBotConfigFromBinding(user, binding, fallbackBot);
+    if (!config) {
+      continue;
+    }
+    const existing = deduped.get(config.accountId);
+    if (!existing || new Date(config.updatedAt).getTime() >= new Date(existing.updatedAt).getTime()) {
+      deduped.set(config.accountId, config);
+    }
+  }
+
+  return [...deduped.values()].sort((left, right) => {
+    return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
+  });
 }
 
 function normalizeUserRecord(user) {
@@ -3052,6 +3119,9 @@ async function handleWeixinBindingStatus(request, response, sessionKey) {
         source: 'weixin-clawbot',
         weixinUserId: polled.weixinUserId,
         botAccountId: polled.accountId || store.weixinBot?.accountId || null,
+        botToken: polled.botToken || user.weixinBinding?.botToken || null,
+        botBaseUrl: polled.baseUrl || user.weixinBinding?.botBaseUrl || WEIXIN_FIXED_BASE_URL,
+        botType: session.botType || user.weixinBinding?.botType || WEIXIN_BOT_TYPE,
         boundAt: user.weixinBinding?.boundAt || nowIso(),
         updatedAt: nowIso(),
       });
@@ -3137,6 +3207,34 @@ async function handleWeixinBotConfigGet(request, response) {
   return sendJson(response, 200, {
     ok: true,
     bot: publicWeixinBotRecord(store.weixinBot),
+  });
+}
+
+async function handleWeixinBotConfigsGet(request, response) {
+  if (!await requireWeixinBotAccess(request, response)) {
+    return;
+  }
+
+  const store = await readStore();
+  const configs = collectWeixinBotConfigs(store).map((config) => ({
+    configured: true,
+    accountId: config.accountId,
+    baseUrl: config.baseUrl,
+    botType: config.botType,
+    configuredAt: config.configuredAt,
+    updatedAt: config.updatedAt,
+    lastLinkedUserId: maskWeixinUserId(config.lastLinkedUserId),
+    token: config.token,
+    userId: config.userId,
+    userName: config.userName,
+    organization: config.organization,
+    weixinUserId: config.weixinUserId,
+    apiKeyActive: config.apiKeyActive,
+  }));
+
+  return sendJson(response, 200, {
+    ok: true,
+    configs,
   });
 }
 
@@ -4168,6 +4266,9 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'GET' && url.pathname === '/api/weixin/bot/config') {
       return await handleWeixinBotConfigGet(request, response);
+    }
+    if (request.method === 'GET' && url.pathname === '/api/weixin/bot/configs') {
+      return await handleWeixinBotConfigsGet(request, response);
     }
     if (request.method === 'GET' && url.pathname === '/api/weixin/bot/operator-session') {
       return await handleWeixinBotOperatorSessionGet(request, response);
