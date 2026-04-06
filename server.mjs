@@ -3186,7 +3186,10 @@ async function handleWeixinBotResolveUser(request, response) {
     return sendJson(response, 404, { error: '这个微信尚未绑定 HYFCeph 账号。' });
   }
   if (!isApiKeyActive(user)) {
-    return sendJson(response, 403, { error: '绑定账号缺少有效 API Key，请先回到门户生成 API Key。' });
+    user.apiKey = generateApiKey();
+    user.apiKeyExpiresAt = addDaysIso(DEFAULT_API_KEY_DAYS);
+    user.updatedAt = nowIso();
+    await writeStore(store);
   }
 
   return sendJson(response, 200, {
