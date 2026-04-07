@@ -984,6 +984,147 @@ function normalizeUserRecord(user) {
   };
 }
 
+function toIsoTimestampOrZero(value) {
+  return isIsoDate(value) ? new Date(value).getTime() : 0;
+}
+
+function getUserDeduplicationKey(user) {
+  const normalized = normalizeUserRecord(user);
+  if (normalized.role === 'admin' || normalized.username) {
+    return `username:${String(normalized.username || ADMIN_USERNAME).trim().toLowerCase()}`;
+  }
+  if (normalized.phone) {
+    return `phone:${normalized.phone}`;
+  }
+  return `id:${normalized.id}`;
+}
+
+function scoreUserForDedup(user) {
+  const normalized = normalizeUserRecord(user);
+  let score = 0;
+  if (normalized.role === 'admin') {
+    score += 1_000_000;
+  }
+  if (normalized.weixinBinding?.weixinUserId) {
+    score += 100_000;
+  }
+  if (normalized.apiKey) {
+    score += 50_000;
+  }
+  if (normalized.currentCaseBridge) {
+    score += 10_000;
+  }
+  if (normalized.lastLoginAt) {
+    score += 5_000;
+  }
+  if (normalized.passwordHash) {
+    score += 1_000;
+  }
+  score += Math.floor(toIsoTimestampOrZero(normalized.updatedAt) / 1_000_000);
+  score += Math.floor(toIsoTimestampOrZero(normalized.createdAt) / 10_000_000);
+  return score;
+}
+
+function pickPreferredUserRecord(left, right) {
+  const normalizedLeft = normalizeUserRecord(left);
+  const normalizedRight = normalizeUserRecord(right);
+  const leftScore = scoreUserForDedup(normalizedLeft);
+  const rightScore = scoreUserForDedup(normalizedRight);
+  if (leftScore !== rightScore) {
+    return leftScore >= rightScore ? normalizedLeft : normalizedRight;
+  }
+  return toIsoTimestampOrZero(normalizedLeft.updatedAt) >= toIsoTimestampOrZero(normalizedRight.updatedAt)
+    ? normalizedLeft
+    : normalizedRight;
+}
+
+function mergeDuplicateUserRecords(primaryUser, secondaryUser) {
+  const primary = normalizeUserRecord(primaryUser);
+  const secondary = normalizeUserRecord(secondaryUser);
+  const preferred = pickPreferredUserRecord(primary, secondary);
+  const fallback = preferred.id === primary.id ? secondary : primary;
+  const mergedBinding = (() => {
+    if (preferred.weixinBinding?.weixinUserId && fallback.weixinBinding?.weixinUserId) {
+      return toIsoTimestampOrZero(preferred.weixinBinding.updatedAt) >= toIsoTimestampOrZero(fallback.weixinBinding.updatedAt)
+        ? preferred.weixinBinding
+        : fallback.weixinBinding;
+    }
+    return preferred.weixinBinding || fallback.weixinBinding || null;
+  })();
+  const mergedBridge = preferred.currentCaseBridge || fallback.currentCaseBridge || null;
+  const lastLoginAt = [preferred.lastLoginAt, fallback.lastLoginAt]
+    .filter(Boolean)
+    .sort((left, right) => toIsoTimestampOrZero(right) - toIsoTimestampOrZero(left))[0] || null;
+  const updatedAt = [preferred.updatedAt, fallback.updatedAt]
+    .filter(Boolean)
+    .sort((left, right) => toIsoTimestampOrZero(right) - toIsoTimestampOrZero(left))[0] || nowIso();
+  const createdAt = [preferred.createdAt, fallback.createdAt]
+    .filter(Boolean)
+    .sort((left, right) => toIsoTimestampOrZero(left) - toIsoTimestampOrZero(right))[0] || nowIso();
+  return normalizeUserRecord({
+    ...preferred,
+    role: preferred.role === 'admin' || fallback.role === 'admin' ? 'admin' : preferred.role,
+    username: preferred.username || fallback.username || null,
+    name: preferred.name || fallback.name || '',
+    organization: preferred.organization || fallback.organization || '',
+    phone: preferred.phone || fallback.phone || '',
+    passwordHash: preferred.passwordHash || fallback.passwordHash || '',
+    apiKey: preferred.apiKey || fallback.apiKey || null,
+    apiKeyExpiresAt: preferred.apiKeyExpiresAt || fallback.apiKeyExpiresAt || null,
+    currentCaseBridge: mergedBridge,
+    weixinBinding: mergedBinding,
+    lastLoginAt,
+    updatedAt,
+    createdAt,
+  });
+}
+
+function dedupeUsersByIdentity(users) {
+  const source = Array.isArray(users) ? users : [];
+  const deduped = new Map();
+  let changed = false;
+  for (const item of source) {
+    const normalized = normalizeUserRecord(item);
+    const key = getUserDeduplicationKey(normalized);
+    const existing = deduped.get(key);
+    if (!existing) {
+      deduped.set(key, normalized);
+      continue;
+    }
+    changed = true;
+    deduped.set(key, mergeDuplicateUserRecords(existing, normalized));
+  }
+  return {
+    users: [...deduped.values()],
+    changed,
+  };
+}
+
+function findUserForSessionContext(store, sessionUser) {
+  if (!store || !sessionUser) {
+    return null;
+  }
+  const directMatch = store.users.find((item) => item.id === sessionUser.id);
+  if (directMatch) {
+    return directMatch;
+  }
+  const normalizedPhone = normalizePhone(sessionUser.phone || '');
+  if (normalizedPhone) {
+    const phoneMatches = store.users.filter((item) => item.phone === normalizedPhone);
+    if (phoneMatches.length > 0) {
+      return phoneMatches.reduce((best, candidate) => pickPreferredUserRecord(best, candidate));
+    }
+  }
+  const normalizedUsername = String(sessionUser.username || '').trim().toLowerCase();
+  if (normalizedUsername) {
+    const usernameMatch = store.users.find((item) => String(item.username || '').trim().toLowerCase() === normalizedUsername);
+    if (usernameMatch) {
+      return usernameMatch;
+    }
+  }
+  return null;
+}
+
 function normalizeBridgeState(bridgeState) {
   if (!bridgeState || typeof bridgeState !== 'object') {
     return null;
@@ -2249,8 +2390,12 @@ async function readStore() {
       ? await readStoreFromBlob()
       : await readStoreFromFile();
   const normalized = normalizeStoreRecord(parsed);
-  const { store, changed } = ensureAdminUser(normalized);
-  if (changed || JSON.stringify(normalized) !== JSON.stringify(store)) {
+  const deduped = dedupeUsersByIdentity(normalized.users);
+  const normalizedWithDedup = deduped.changed
+    ? { ...normalized, users: deduped.users }
+    : normalized;
+  const { store, changed } = ensureAdminUser(normalizedWithDedup);
+  if (deduped.changed || changed || JSON.stringify(normalizedWithDedup) !== JSON.stringify(store)) {
     await writeStore(store);
   }
   return store;
@@ -2984,7 +3129,7 @@ async function handleWeixinBindingStart(request, response) {
   }
 
   const store = await readStore();
-  const user = store.users.find((item) => item.id === currentUser.id);
+  const user = findUserForSessionContext(store, currentUser);
   if (!user) {
     return sendJson(response, 404, { error: '用户不存在。' });
   }
@@ -3068,9 +3213,28 @@ async function handleWeixinBindingStatus(request, response, sessionKey) {
 
   try {
     const polled = await pollWeixinBindingStatus(session);
-    const nextSessions = { ...(store.weixinBindingSessions || {}) };
+    const latestStore = await readStore();
+    const latestUser = findUserForSessionContext(latestStore, user);
+    if (!latestUser) {
+      return sendJson(response, 404, { error: '用户不存在。' });
+    }
+    const latestSessions = { ...(latestStore.weixinBindingSessions || {}) };
+    const latestSession = normalizeWeixinBindingSessionRecord(
+      normalizedSessionKey,
+      latestSessions[normalizedSessionKey],
+    );
+    if (!latestSession && latestUser.weixinBinding?.weixinUserId) {
+      return sendJson(response, 200, {
+        ok: true,
+        connected: true,
+        binding: publicWeixinBinding(latestUser.weixinBinding),
+        user: publicUser(latestUser),
+        weixinBot: publicWeixinBotRecord(latestStore.weixinBot),
+      });
+    }
+    const baseSession = latestSession || session;
     const nextSession = normalizeWeixinBindingSessionRecord(normalizedSessionKey, {
-      ...session,
+      ...baseSession,
       status: polled.status || session.status,
       message: polled.status === 'scaned'
         ? '已扫码，请在微信中继续确认。'
@@ -3079,27 +3243,27 @@ async function handleWeixinBindingStatus(request, response, sessionKey) {
           : polled.status === 'expired'
             ? '二维码已过期。'
             : session.message,
-      currentApiBaseUrl: polled.redirectHost ? `https://${polled.redirectHost}` : (polled.baseUrl || session.currentApiBaseUrl),
-      redirectHost: polled.redirectHost || session.redirectHost,
+      currentApiBaseUrl: polled.redirectHost ? `https://${polled.redirectHost}` : (polled.baseUrl || baseSession.currentApiBaseUrl),
+      redirectHost: polled.redirectHost || baseSession.redirectHost,
       updatedAt: nowIso(),
     });
 
     if (polled.status === 'scaned_but_redirect' && polled.redirectHost) {
-      nextSessions[normalizedSessionKey] = nextSession;
-      store.weixinBindingSessions = nextSessions;
-      await writeStore(store);
+      latestSessions[normalizedSessionKey] = nextSession;
+      latestStore.weixinBindingSessions = latestSessions;
+      await writeStore(latestStore);
       return sendJson(response, 200, {
         ok: true,
         connected: false,
         session: publicWeixinBindingSession(nextSession),
-        binding: publicWeixinBinding(user.weixinBinding),
+        binding: publicWeixinBinding(latestUser.weixinBinding),
       });
     }
 
     if (polled.status === 'expired') {
-      delete nextSessions[normalizedSessionKey];
-      store.weixinBindingSessions = nextSessions;
-      await writeStore(store);
+      delete latestSessions[normalizedSessionKey];
+      latestStore.weixinBindingSessions = latestSessions;
+      await writeStore(latestStore);
       return sendJson(response, 410, {
         ok: false,
         expired: true,
@@ -3108,59 +3272,59 @@ async function handleWeixinBindingStatus(request, response, sessionKey) {
     }
 
     if (polled.status === 'confirmed' && polled.weixinUserId) {
-      const existing = findUserByWeixinUserId(store, polled.weixinUserId);
-      if (existing && existing.id !== user.id) {
+      const existing = findUserByWeixinUserId(latestStore, polled.weixinUserId);
+      if (existing && existing.id !== latestUser.id) {
         return sendJson(response, 409, {
           error: '这个微信已经绑定到其他 HYFCeph 账号，请先解绑后再试。',
         });
       }
 
-      user.weixinBinding = normalizeWeixinBindingRecord({
+      latestUser.weixinBinding = normalizeWeixinBindingRecord({
         source: 'weixin-clawbot',
         weixinUserId: polled.weixinUserId,
-        botAccountId: polled.accountId || store.weixinBot?.accountId || null,
-        botToken: polled.botToken || user.weixinBinding?.botToken || null,
-        botBaseUrl: polled.baseUrl || user.weixinBinding?.botBaseUrl || WEIXIN_FIXED_BASE_URL,
-        botType: session.botType || user.weixinBinding?.botType || WEIXIN_BOT_TYPE,
-        boundAt: user.weixinBinding?.boundAt || nowIso(),
+        botAccountId: polled.accountId || latestStore.weixinBot?.accountId || latestUser.weixinBinding?.botAccountId || null,
+        botToken: polled.botToken || latestUser.weixinBinding?.botToken || null,
+        botBaseUrl: polled.baseUrl || latestUser.weixinBinding?.botBaseUrl || WEIXIN_FIXED_BASE_URL,
+        botType: baseSession.botType || latestUser.weixinBinding?.botType || WEIXIN_BOT_TYPE,
+        boundAt: latestUser.weixinBinding?.boundAt || nowIso(),
         updatedAt: nowIso(),
       });
-      user.updatedAt = nowIso();
+      latestUser.updatedAt = nowIso();
 
       if (polled.botToken && polled.accountId) {
-        const existingBot = normalizeWeixinBotRecord(store.weixinBot);
-        store.weixinBot = normalizeWeixinBotRecord({
+        const existingBot = normalizeWeixinBotRecord(latestStore.weixinBot);
+        latestStore.weixinBot = normalizeWeixinBotRecord({
           accountId: polled.accountId,
           token: polled.botToken,
           baseUrl: polled.baseUrl || existingBot?.baseUrl || WEIXIN_FIXED_BASE_URL,
-          botType: session.botType || WEIXIN_BOT_TYPE,
+          botType: baseSession.botType || WEIXIN_BOT_TYPE,
           configuredAt: existingBot?.configuredAt || nowIso(),
           updatedAt: nowIso(),
           lastLinkedUserId: polled.weixinUserId,
         });
       }
 
-      delete nextSessions[normalizedSessionKey];
-      store.weixinBindingSessions = nextSessions;
-      await writeStore(store);
+      delete latestSessions[normalizedSessionKey];
+      latestStore.weixinBindingSessions = latestSessions;
+      await writeStore(latestStore);
 
       return sendJson(response, 200, {
         ok: true,
         connected: true,
-        binding: publicWeixinBinding(user.weixinBinding),
-        user: publicUser(user),
-        weixinBot: publicWeixinBotRecord(store.weixinBot),
+        binding: publicWeixinBinding(latestUser.weixinBinding),
+        user: publicUser(latestUser),
+        weixinBot: publicWeixinBotRecord(latestStore.weixinBot),
       });
     }
 
-    nextSessions[normalizedSessionKey] = nextSession;
-    store.weixinBindingSessions = nextSessions;
-    await writeStore(store);
+    latestSessions[normalizedSessionKey] = nextSession;
+    latestStore.weixinBindingSessions = latestSessions;
+    await writeStore(latestStore);
     return sendJson(response, 200, {
       ok: true,
       connected: false,
       session: publicWeixinBindingSession(nextSession),
-      binding: publicWeixinBinding(user.weixinBinding),
+      binding: publicWeixinBinding(latestUser.weixinBinding),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

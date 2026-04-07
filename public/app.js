@@ -51,6 +51,7 @@ const profileUserRole = document.querySelector('#profile-user-role');
 const profileUserOrganization = document.querySelector('#profile-user-organization');
 const profileUserPhone = document.querySelector('#profile-user-phone');
 let weixinBindingPollTimer = null;
+let weixinBindingPollInFlight = false;
 
 function showFlash(message, type = 'success') {
   flash.textContent = message;
@@ -133,6 +134,7 @@ function stopWeixinBindingPolling() {
     window.clearInterval(weixinBindingPollTimer);
     weixinBindingPollTimer = null;
   }
+  weixinBindingPollInFlight = false;
 }
 
 function renderWeixinBinding() {
@@ -170,12 +172,16 @@ function renderWeixinBinding() {
 }
 
 async function refreshWeixinBindingStatus() {
+  if (weixinBindingPollInFlight) {
+    return;
+  }
   const sessionKey = state.weixinBindingSession?.sessionKey;
   if (!sessionKey) {
     renderWeixinBinding();
     return;
   }
 
+  weixinBindingPollInFlight = true;
   try {
     const payload = await requestJson(`/api/weixin/binding/status?sessionKey=${encodeURIComponent(sessionKey)}`, {
       method: 'GET',
@@ -198,6 +204,8 @@ async function refreshWeixinBindingStatus() {
       renderWeixinBinding();
     }
     throw error;
+  } finally {
+    weixinBindingPollInFlight = false;
   }
 }
 
