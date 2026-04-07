@@ -51,6 +51,13 @@ const FEISHU_STORE_KIND_FIELD = process.env.HYFCEPH_FEISHU_STORE_KIND_FIELD || '
 const FEISHU_STORE_KIND_LABEL_FIELD = process.env.HYFCEPH_FEISHU_STORE_KIND_LABEL_FIELD || 'kind_label';
 const FEISHU_STORE_SUMMARY_FIELD = process.env.HYFCEPH_FEISHU_STORE_SUMMARY_FIELD || 'summary';
 const FEISHU_STORE_MAX_RECORDS = Math.max(100, Number(process.env.HYFCEPH_FEISHU_MAX_RECORDS || 1500) || 1500);
+const FEISHU_METRICS_TABLE_NAME = process.env.HYFCEPH_FEISHU_METRICS_TABLE_NAME || '📊 运营指标';
+const FEISHU_METRICS_PRIMARY_FIELD = process.env.HYFCEPH_FEISHU_METRICS_PRIMARY_FIELD || '指标';
+const FEISHU_METRICS_KEY_FIELD = process.env.HYFCEPH_FEISHU_METRICS_KEY_FIELD || 'metric_key';
+const FEISHU_METRICS_VALUE_FIELD = process.env.HYFCEPH_FEISHU_METRICS_VALUE_FIELD || '数值';
+const FEISHU_METRICS_UNIT_FIELD = process.env.HYFCEPH_FEISHU_METRICS_UNIT_FIELD || '单位';
+const FEISHU_METRICS_DESCRIPTION_FIELD = process.env.HYFCEPH_FEISHU_METRICS_DESCRIPTION_FIELD || '说明';
+const FEISHU_METRICS_UPDATED_AT_FIELD = process.env.HYFCEPH_FEISHU_METRICS_UPDATED_AT_FIELD || 'updated_at';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
@@ -87,6 +94,7 @@ let pdfOssClientPromise = null;
 let pdfOssDownloadClientPromise = null;
 let feishuAppTokenCache = null;
 let feishuSchemaCache = null;
+let feishuMetricsSchemaCache = null;
 const execFileAsync = promisify(execFile);
 const FEISHU_ROW_KIND_USER = 'user';
 const FEISHU_ROW_KIND_OPERATOR_SESSION = 'operator_session';
@@ -101,6 +109,38 @@ const FEISHU_MANAGED_ROW_PREFIXES = [
   `${FEISHU_ROW_KIND_REPORT_LINK}:`,
   `${FEISHU_ROW_KIND_WEIXIN_BOT}:`,
   `${FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION}:`,
+];
+const FEISHU_METRIC_DEFINITIONS = [
+  {
+    key: 'user_total',
+    label: '用户总数',
+    unit: '人',
+    description: '当前注册用户总数（不含管理员）。',
+  },
+  {
+    key: 'users_today',
+    label: '今日新增用户',
+    unit: '人',
+    description: '今天新注册的用户数量（按 Asia/Shanghai 统计）。',
+  },
+  {
+    key: 'reports_today',
+    label: '今日报告数',
+    unit: '份',
+    description: '今天新增的标准在线报告数量（按 Asia/Shanghai 统计）。',
+  },
+  {
+    key: 'weixin_bindings_success',
+    label: '微信绑定成功数',
+    unit: '人',
+    description: '已成功绑定微信 Clawbot 的用户数量（不含管理员）。',
+  },
+  {
+    key: 'report_shortlinks_total',
+    label: '报告短链总数',
+    unit: '条',
+    description: '当前已保存的在线报告短链总数（标准版和美化版均计入）。',
+  },
 ];
 
 const MIME_TYPES = new Map([
@@ -129,6 +169,17 @@ function addMinutesIso(minutes) {
   const value = new Date();
   value.setMinutes(value.getMinutes() + minutes);
   return value.toISOString();
+}
+
+function getDateKeyInTimeZone(value = new Date(), timeZone = 'Asia/Shanghai') {
+  const date = value instanceof Date ? value : new Date(value);
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return formatter.format(date);
 }
 
 function normalizePhone(value) {
@@ -1869,6 +1920,14 @@ async function callFeishuBitableApi(method, apiPath, body = null) {
   return payload.data || {};
 }
 
+async function listFeishuTables() {
+  const result = await callFeishuBitableApi(
+    'GET',
+    `/bitable/v1/apps/${encodeURIComponent(FEISHU_BITABLE_APP_TOKEN)}/tables?page_size=100`,
+  );
+  return Array.isArray(result.items) ? result.items : [];
+}
+
 function readFeishuCellText(value) {
   if (Array.isArray(value)) {
     return value.map((item) => {
@@ -1924,6 +1983,72 @@ async function ensureFeishuBitableStoreSchema() {
     summaryFieldName: FEISHU_STORE_SUMMARY_FIELD,
   };
   return feishuSchemaCache;
+}
+
+async function ensureFeishuMetricsSchema() {
+  if (feishuMetricsSchemaCache) {
+    return feishuMetricsSchemaCache;
+  }
+  if (!isFeishuBitableConfigured()) {
+    throw new Error('飞书多维表格存储未配置完整。');
+  }
+
+  const tables = await listFeishuTables();
+  let table = tables.find((item) => String(item?.name || '').trim() === FEISHU_METRICS_TABLE_NAME) || null;
+  if (!table?.table_id) {
+    const created = await callFeishuBitableApi(
+      'POST',
+      `/bitable/v1/apps/${encodeURIComponent(FEISHU_BITABLE_APP_TOKEN)}/tables`,
+      {
+        table: {
+          name: FEISHU_METRICS_TABLE_NAME,
+        },
+      },
+    );
+    table = {
+      table_id: created.table_id,
+      name: FEISHU_METRICS_TABLE_NAME,
+    };
+  }
+
+  const basePath = `/bitable/v1/apps/${encodeURIComponent(FEISHU_BITABLE_APP_TOKEN)}/tables/${encodeURIComponent(table.table_id)}`;
+  const fieldsData = await callFeishuBitableApi('GET', `${basePath}/fields?page_size=100`);
+  const items = Array.isArray(fieldsData.items) ? fieldsData.items : [];
+  const primaryField = items.find((field) => field?.is_primary) || null;
+  if (!primaryField?.field_name) {
+    throw new Error('飞书运营指标表缺少主字段。');
+  }
+
+  const fieldNames = new Set(items.map((field) => String(field?.field_name || '').trim()).filter(Boolean));
+  const desiredFields = [
+    [FEISHU_METRICS_KEY_FIELD, 1],
+    [FEISHU_METRICS_VALUE_FIELD, 2],
+    [FEISHU_METRICS_UNIT_FIELD, 1],
+    [FEISHU_METRICS_DESCRIPTION_FIELD, 1],
+    [FEISHU_METRICS_UPDATED_AT_FIELD, 1],
+  ];
+  for (const [fieldName, fieldType] of desiredFields) {
+    if (!fieldNames.has(fieldName)) {
+      await callFeishuBitableApi('POST', `${basePath}/fields`, {
+        field_name: fieldName,
+        type: fieldType,
+      });
+      fieldNames.add(fieldName);
+    }
+  }
+
+  feishuMetricsSchemaCache = {
+    tableId: table.table_id,
+    tableName: FEISHU_METRICS_TABLE_NAME,
+    basePath,
+    primaryFieldName: String(primaryField.field_name),
+    metricKeyFieldName: FEISHU_METRICS_KEY_FIELD,
+    metricValueFieldName: FEISHU_METRICS_VALUE_FIELD,
+    unitFieldName: FEISHU_METRICS_UNIT_FIELD,
+    descriptionFieldName: FEISHU_METRICS_DESCRIPTION_FIELD,
+    updatedAtFieldName: FEISHU_METRICS_UPDATED_AT_FIELD,
+  };
+  return feishuMetricsSchemaCache;
 }
 
 async function ensureDataFile() {
@@ -2080,6 +2205,28 @@ async function listFeishuStoreRecords(schema) {
     pageToken = nextPageToken;
   }
 
+  return items;
+}
+
+async function listFeishuTableRecords(schema) {
+  const items = [];
+  const seenTokens = new Set();
+  let pageToken = '';
+  while (true) {
+    const query = new URLSearchParams({ page_size: '500' });
+    if (pageToken) {
+      query.set('page_token', pageToken);
+    }
+    const result = await callFeishuBitableApi('GET', `${schema.basePath}/records?${query.toString()}`);
+    items.push(...(Array.isArray(result.items) ? result.items : []));
+    const hasMore = Boolean(result.has_more ?? result.hasMore ?? result.has_more_page);
+    const nextPageToken = String(result.page_token || result.next_page_token || '').trim();
+    if (!hasMore || !nextPageToken || seenTokens.has(nextPageToken)) {
+      break;
+    }
+    seenTokens.add(nextPageToken);
+    pageToken = nextPageToken;
+  }
   return items;
 }
 
@@ -2297,6 +2444,104 @@ async function writeStoreToFeishuBitable(store) {
     const primaryKey = readFeishuCellText(record.fields?.[schema.primaryFieldName]).trim();
     const kind = readFeishuCellText(record.fields?.[schema.kindFieldName]).trim();
     if (!record?.record_id || !isManagedFeishuStoreRow(primaryKey, kind) || desiredKeys.has(primaryKey)) {
+      continue;
+    }
+    await callFeishuBitableApi('DELETE', `${schema.basePath}/records/${encodeURIComponent(record.record_id)}`);
+  }
+
+  try {
+    await syncFeishuMetricsTable(prunedStore);
+  } catch (error) {
+    console.warn(`[HYFCeph Portal] Feishu metrics sync failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function buildFeishuMetricRows(store) {
+  const normalizedStore = normalizeStoreRecord(store);
+  const shanghaiToday = getDateKeyInTimeZone(new Date(), 'Asia/Shanghai');
+  const users = normalizedStore.users.filter((item) => item.role !== 'admin');
+  const usersToday = users.filter((item) => getDateKeyInTimeZone(item.createdAt, 'Asia/Shanghai') === shanghaiToday);
+  const reportLinks = Object.values(normalizedStore.reportLinks || {});
+  const reportsToday = reportLinks.filter((item) => {
+    if ((item.variant || 'standard') !== 'standard') {
+      return false;
+    }
+    return getDateKeyInTimeZone(item.createdAt, 'Asia/Shanghai') === shanghaiToday;
+  });
+  const bindings = users.filter((item) => item.weixinBinding?.weixinUserId);
+  const metrics = {
+    user_total: users.length,
+    users_today: usersToday.length,
+    reports_today: reportsToday.length,
+    weixin_bindings_success: bindings.length,
+    report_shortlinks_total: reportLinks.length,
+  };
+  const updatedAt = nowIso();
+  return FEISHU_METRIC_DEFINITIONS.map((definition) => ({
+    metricKey: definition.key,
+    metricName: definition.label,
+    value: Number(metrics[definition.key] || 0),
+    unit: definition.unit,
+    description: definition.description,
+    updatedAt,
+  }));
+}
+
+function buildFeishuMetricFields(schema, row) {
+  return {
+    [schema.primaryFieldName]: row.metricName,
+    [schema.metricKeyFieldName]: row.metricKey,
+    [schema.metricValueFieldName]: row.value,
+    [schema.unitFieldName]: row.unit,
+    [schema.descriptionFieldName]: row.description,
+    [schema.updatedAtFieldName]: row.updatedAt,
+  };
+}
+
+function areFeishuMetricFieldsEqual(existingFields, expectedFields) {
+  return Object.keys(expectedFields).every((fieldName) => {
+    const expected = expectedFields[fieldName];
+    const currentValue = existingFields?.[fieldName];
+    if (typeof expected === 'number') {
+      return Number(currentValue ?? 0) === expected;
+    }
+    return readFeishuCellText(currentValue) === String(expected || '');
+  });
+}
+
+async function syncFeishuMetricsTable(store) {
+  const schema = await ensureFeishuMetricsSchema();
+  const existingRecords = await listFeishuTableRecords(schema);
+  const existingByMetricKey = new Map();
+  for (const record of existingRecords) {
+    const metricKey = readFeishuCellText(record.fields?.[schema.metricKeyFieldName]).trim();
+    if (metricKey) {
+      existingByMetricKey.set(metricKey, record);
+    }
+  }
+
+  const desiredRows = buildFeishuMetricRows(store);
+  const desiredKeys = new Set(desiredRows.map((row) => row.metricKey));
+  for (const row of desiredRows) {
+    const fields = buildFeishuMetricFields(schema, row);
+    const existing = existingByMetricKey.get(row.metricKey);
+    if (existing?.record_id) {
+      if (areFeishuMetricFieldsEqual(existing.fields, fields)) {
+        continue;
+      }
+      await callFeishuBitableApi('PUT', `${schema.basePath}/records/${encodeURIComponent(existing.record_id)}`, {
+        fields,
+      });
+      continue;
+    }
+    await callFeishuBitableApi('POST', `${schema.basePath}/records`, {
+      fields,
+    });
+  }
+
+  for (const record of existingRecords) {
+    const metricKey = readFeishuCellText(record.fields?.[schema.metricKeyFieldName]).trim();
+    if (!record?.record_id || !metricKey || desiredKeys.has(metricKey)) {
       continue;
     }
     await callFeishuBitableApi('DELETE', `${schema.basePath}/records/${encodeURIComponent(record.record_id)}`);
