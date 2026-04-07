@@ -58,6 +58,7 @@ const FEISHU_METRICS_VALUE_FIELD = process.env.HYFCEPH_FEISHU_METRICS_VALUE_FIEL
 const FEISHU_METRICS_UNIT_FIELD = process.env.HYFCEPH_FEISHU_METRICS_UNIT_FIELD || '单位';
 const FEISHU_METRICS_DESCRIPTION_FIELD = process.env.HYFCEPH_FEISHU_METRICS_DESCRIPTION_FIELD || '说明';
 const FEISHU_METRICS_UPDATED_AT_FIELD = process.env.HYFCEPH_FEISHU_METRICS_UPDATED_AT_FIELD || 'updated_at';
+const FEISHU_METRICS_VIEW_NAMES = ['📌 当前指标', '📈 用户与报告'];
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
@@ -1928,6 +1929,45 @@ async function listFeishuTables() {
   return Array.isArray(result.items) ? result.items : [];
 }
 
+async function listFeishuTableViews(tableId) {
+  const result = await callFeishuBitableApi(
+    'GET',
+    `/bitable/v1/apps/${encodeURIComponent(FEISHU_BITABLE_APP_TOKEN)}/tables/${encodeURIComponent(tableId)}/views?page_size=100`,
+  );
+  return Array.isArray(result.items) ? result.items : [];
+}
+
+async function ensureFeishuTableViews(tableId, viewNames = []) {
+  const desiredNames = Array.from(new Set(
+    (Array.isArray(viewNames) ? viewNames : [])
+      .map((item) => String(item || '').trim())
+      .filter(Boolean),
+  ));
+  if (!desiredNames.length) {
+    return;
+  }
+
+  const existingViews = await listFeishuTableViews(tableId);
+  const existingNames = new Set(
+    existingViews.map((item) => String(item?.view_name || '').trim()).filter(Boolean),
+  );
+
+  for (const viewName of desiredNames) {
+    if (existingNames.has(viewName)) {
+      continue;
+    }
+    await callFeishuBitableApi(
+      'POST',
+      `/bitable/v1/apps/${encodeURIComponent(FEISHU_BITABLE_APP_TOKEN)}/tables/${encodeURIComponent(tableId)}/views`,
+      {
+        view_name: viewName,
+        view_type: 'grid',
+      },
+    );
+    existingNames.add(viewName);
+  }
+}
+
 function readFeishuCellText(value) {
   if (Array.isArray(value)) {
     return value.map((item) => {
@@ -2036,6 +2076,8 @@ async function ensureFeishuMetricsSchema() {
       fieldNames.add(fieldName);
     }
   }
+
+  await ensureFeishuTableViews(table.table_id, FEISHU_METRICS_VIEW_NAMES);
 
   feishuMetricsSchemaCache = {
     tableId: table.table_id,
