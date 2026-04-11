@@ -4,6 +4,7 @@ const state = {
   adminInviteCodes: [],
   selectedAdminInviteCodes: new Set(),
   inviteCodes: [],
+  selectedInviteCodes: new Set(),
   weixinBindingSession: null,
   dashboardView: 'weixin',
 };
@@ -29,6 +30,10 @@ const inviteQuotaText = document.querySelector('#invite-quota-text');
 const inviteCodeNote = document.querySelector('#invite-code-note');
 const generateInviteCodeButton = document.querySelector('#generate-invite-code-button');
 const inviteCodesBody = document.querySelector('#invite-codes-body');
+const inviteFilterSummary = document.querySelector('#invite-filter-summary');
+const inviteSelectAll = document.querySelector('#invite-select-all');
+const inviteExportAllButton = document.querySelector('#invite-export-all-button');
+const inviteExportSelectedButton = document.querySelector('#invite-export-selected-button');
 const weixinBindingStatus = document.querySelector('#weixin-binding-status');
 const weixinBindingDetail = document.querySelector('#weixin-binding-detail');
 const weixinBindingStartButton = document.querySelector('#weixin-binding-start-button');
@@ -513,6 +518,7 @@ function renderAdminUsers(users) {
 }
 
 function renderInviteCodes(inviteCodes, inviteQuota) {
+  sanitizeInviteSelection();
   const quota = inviteQuota || state.user?.inviteQuota || null;
 
   if (quota?.isUnlimited) {
@@ -534,8 +540,10 @@ function renderInviteCodes(inviteCodes, inviteQuota) {
     generateInviteCodeButton.disabled = false;
   }
 
+  updateInviteExportControls(inviteCodes);
+
   if (!inviteCodes.length) {
-    inviteCodesBody.innerHTML = '<tr><td colspan="5" class="empty-cell">暂无邀请码</td></tr>';
+    inviteCodesBody.innerHTML = '<tr><td colspan="6" class="empty-cell">暂无邀请码</td></tr>';
     return;
   }
 
@@ -549,16 +557,50 @@ function renderInviteCodes(inviteCodes, inviteQuota) {
 
     return `
       <tr>
+        <td class="admin-table-check">
+          <input class="js-invite-select" type="checkbox" data-code="${invite.code}" ${state.selectedInviteCodes.has(invite.code) ? 'checked' : ''} />
+        </td>
         <td><code>${invite.code}</code></td>
         <td>${statusMarkup}</td>
         <td>${usedBy}</td>
         <td>${formatDateTime(invite.createdAt)}</td>
         <td>
+          <button class="ghost-button js-copy-invite-code" type="button" data-code="${invite.code}">复制</button>
           <button class="ghost-button js-delete-invite-code" type="button" data-code="${invite.code}">删除</button>
         </td>
       </tr>
     `;
   }).join('');
+
+  inviteCodesBody.querySelectorAll('.js-invite-select').forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+      const code = String(checkbox.dataset.code || '').trim();
+      if (!code) {
+        return;
+      }
+      if (checkbox.checked) {
+        state.selectedInviteCodes.add(code);
+      } else {
+        state.selectedInviteCodes.delete(code);
+      }
+      updateInviteExportControls(inviteCodes);
+    });
+  });
+
+  inviteCodesBody.querySelectorAll('.js-copy-invite-code').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const code = String(button.dataset.code || '').trim();
+      if (!code) {
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(code);
+        showFlash(`邀请码 ${code} 已复制。`);
+      } catch {
+        showFlash('复制失败，请手动复制邀请码。', 'error');
+      }
+    });
+  });
 
   inviteCodesBody.querySelectorAll('.js-delete-invite-code').forEach((button) => {
     button.addEventListener('click', async () => {
@@ -591,6 +633,13 @@ function renderInviteCodes(inviteCodes, inviteQuota) {
       }
     });
   });
+}
+
+function sanitizeInviteSelection() {
+  const validCodes = new Set(state.inviteCodes.map((invite) => invite.code));
+  state.selectedInviteCodes = new Set(
+    [...state.selectedInviteCodes].filter((code) => validCodes.has(code)),
+  );
 }
 
 function sanitizeAdminInviteSelection() {
@@ -701,6 +750,37 @@ function updateAdminInviteExportControls(filteredInvites) {
     const selectedInView = filteredInvites.filter((invite) => state.selectedAdminInviteCodes.has(invite.code)).length;
     adminInviteSelectAll.checked = selectedInView === filteredInvites.length;
     adminInviteSelectAll.indeterminate = selectedInView > 0 && selectedInView < filteredInvites.length;
+  }
+}
+
+function updateInviteExportControls(inviteCodes) {
+  if (inviteFilterSummary) {
+    const total = state.inviteCodes.length;
+    const selectedCount = [...state.selectedInviteCodes]
+      .filter((code) => inviteCodes.some((invite) => invite.code === code))
+      .length;
+    inviteFilterSummary.textContent = total
+      ? `共 ${total} 条邀请码，已选择 ${selectedCount} 条`
+      : '共 0 条邀请码';
+  }
+
+  if (inviteExportAllButton) {
+    inviteExportAllButton.disabled = !inviteCodes.length;
+  }
+  if (inviteExportSelectedButton) {
+    inviteExportSelectedButton.disabled = state.selectedInviteCodes.size === 0;
+  }
+  if (inviteSelectAll) {
+    if (!inviteCodes.length) {
+      inviteSelectAll.checked = false;
+      inviteSelectAll.indeterminate = false;
+      inviteSelectAll.disabled = true;
+      return;
+    }
+    inviteSelectAll.disabled = false;
+    const selectedInView = inviteCodes.filter((invite) => state.selectedInviteCodes.has(invite.code)).length;
+    inviteSelectAll.checked = selectedInView === inviteCodes.length;
+    inviteSelectAll.indeterminate = selectedInView > 0 && selectedInView < inviteCodes.length;
   }
 }
 
@@ -849,6 +929,7 @@ async function loadInviteCodes() {
 
   const payload = await requestJson('/api/invite-codes', { method: 'GET' });
   state.inviteCodes = payload.inviteCodes || [];
+  sanitizeInviteSelection();
   state.user = payload.user || state.user;
   updateDashboard(state.user);
   renderInviteCodes(state.inviteCodes, payload.inviteQuota || state.user?.inviteQuota || null);
@@ -902,6 +983,7 @@ async function syncAuthUi() {
   } else {
     state.weixinBindingSession = null;
     state.inviteCodes = [];
+    state.selectedInviteCodes = new Set();
     state.adminInviteCodes = [];
     state.selectedAdminInviteCodes = new Set();
     stopWeixinBindingPolling();
@@ -975,6 +1057,24 @@ adminInviteExportAllButton?.addEventListener('click', () => {
 adminInviteExportSelectedButton?.addEventListener('click', () => {
   const selectedInvites = state.adminInviteCodes.filter((invite) => state.selectedAdminInviteCodes.has(invite.code));
   exportInviteCodesCsv(selectedInvites, 'hyfceph-invite-codes-selected');
+});
+
+inviteSelectAll?.addEventListener('change', () => {
+  if (inviteSelectAll.checked) {
+    state.inviteCodes.forEach((invite) => state.selectedInviteCodes.add(invite.code));
+  } else {
+    state.inviteCodes.forEach((invite) => state.selectedInviteCodes.delete(invite.code));
+  }
+  renderInviteCodes(state.inviteCodes, state.user?.inviteQuota || null);
+});
+
+inviteExportAllButton?.addEventListener('click', () => {
+  exportInviteCodesCsv(state.inviteCodes, 'hyfceph-my-invite-codes');
+});
+
+inviteExportSelectedButton?.addEventListener('click', () => {
+  const selectedInvites = state.inviteCodes.filter((invite) => state.selectedInviteCodes.has(invite.code));
+  exportInviteCodesCsv(selectedInvites, 'hyfceph-my-invite-codes-selected');
 });
 
 registerForm.addEventListener('submit', async (event) => {

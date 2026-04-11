@@ -1103,6 +1103,11 @@ textarea {
   grid-template-columns: 1fr;
 }
 
+.invite-filter-meta {
+  display: grid;
+  gap: 10px;
+}
+
 .invite-table-wrap .admin-table code {
   max-width: 100%;
 }
@@ -1473,6 +1478,7 @@ textarea {
   }
 
   .admin-filter-meta,
+  .invite-filter-meta,
   .admin-filter-actions {
     justify-self: stretch;
   }

@@ -267,10 +267,21 @@
 
                     <p id="invite-code-note" class="api-note">邀请码生成后会显示在下方列表中，可直接复制给被邀请用户注册使用。</p>
 
+                    <div class="invite-filter-meta">
+                      <div id="invite-filter-summary" class="admin-filter-summary">共 0 条邀请码</div>
+                      <div class="admin-filter-actions">
+                        <button id="invite-export-all-button" class="ghost-button" type="button">批量导出</button>
+                        <button id="invite-export-selected-button" class="ghost-button" type="button">多选导出</button>
+                      </div>
+                    </div>
+
                     <div class="admin-table-wrap invite-table-wrap">
                       <table class="admin-table">
                         <thead>
                           <tr>
+                            <th class="admin-table-check">
+                              <input id="invite-select-all" type="checkbox" aria-label="全选我的邀请码" />
+                            </th>
                             <th>邀请码</th>
                             <th>状态</th>
                             <th>使用人</th>
@@ -280,7 +291,7 @@
                         </thead>
                         <tbody id="invite-codes-body">
                           <tr>
-                            <td colspan="5" class="empty-cell">暂无邀请码</td>
+                            <td colspan="6" class="empty-cell">暂无邀请码</td>
                           </tr>
                         </tbody>
                       </table>
