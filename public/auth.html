@@ -170,6 +170,10 @@
                     <span>🛠️ 管理员面板</span>
                     <small>用户与 Key 管理</small>
                   </button>
+                  <button class="dashboard-menu-item" type="button" data-dashboard-view="invites">
+                    <span>✉️ 邀请码</span>
+                    <small>生成与使用记录</small>
+                  </button>
                 </div>
               </nav>
 
@@ -215,70 +219,70 @@
                 </section>
 
                 <section class="dashboard-view" data-dashboard-panel="api">
-                  <div class="dashboard-stack">
-                    <div class="dashboard-card api-card">
-                      <div class="dashboard-view-header">
-                        <div>
-                          <div class="section-kicker">API Key</div>
-                          <div class="api-card-title">🔑 你的调用凭证</div>
-                          <div class="api-tip">注册后在这里生成并复制专属 Key，默认有效期 3 个月。</div>
-                        </div>
+                  <div class="dashboard-card api-card">
+                    <div class="dashboard-view-header">
+                      <div>
+                        <div class="section-kicker">API Key</div>
+                        <div class="api-card-title">🔑 你的调用凭证</div>
+                        <div class="api-tip">注册后在这里生成并复制专属 Key，默认有效期 3 个月。</div>
                       </div>
-
-                      <textarea id="api-key-output" readonly placeholder="还没有 API Key，点击下方按钮生成。"></textarea>
-
-                      <div class="dashboard-row compact-row">
-                        <span class="label">到期时间</span>
-                        <strong id="api-key-expiry">-</strong>
-                      </div>
-
-                      <div class="api-actions">
-                        <button id="generate-key-button" class="primary-button" type="button">生成 API Key</button>
-                        <button id="copy-key-button" class="ghost-button" type="button">复制 API Key</button>
-                        <a class="secondary-button dashboard-download" href="/downloads/HYFCeph-openclaw.zip">下载 Skill</a>
-                      </div>
-
-                      <p class="api-note">重新生成后，旧 Key 会立即失效。仅在需要轮换时再重新生成。</p>
                     </div>
 
-                    <div class="dashboard-card api-card">
-                      <div class="dashboard-view-header">
-                        <div>
-                          <div class="section-kicker">Invite Codes</div>
-                          <div class="api-card-title">✉️ 邀请码</div>
-                          <div class="api-tip">管理员可以无限生成邀请码。普通用户最多生成 3 个，被使用后会显示是谁使用的。</div>
-                        </div>
-                        <span id="invite-quota-badge" class="status-pill active">加载中</span>
-                      </div>
+                    <textarea id="api-key-output" readonly placeholder="还没有 API Key，点击下方按钮生成。"></textarea>
 
-                      <div class="dashboard-row compact-row">
-                        <span class="label">当前额度</span>
-                        <strong id="invite-quota-text">-</strong>
-                      </div>
+                    <div class="dashboard-row compact-row">
+                      <span class="label">到期时间</span>
+                      <strong id="api-key-expiry">-</strong>
+                    </div>
 
-                      <div class="api-actions invite-actions">
-                        <button id="generate-invite-code-button" class="primary-button" type="button">生成邀请码</button>
-                      </div>
+                    <div class="api-actions">
+                      <button id="generate-key-button" class="primary-button" type="button">生成 API Key</button>
+                      <button id="copy-key-button" class="ghost-button" type="button">复制 API Key</button>
+                      <a class="secondary-button dashboard-download" href="/downloads/HYFCeph-openclaw.zip">下载 Skill</a>
+                    </div>
 
-                      <p id="invite-code-note" class="api-note">邀请码生成后会显示在下方列表中，可直接复制给被邀请用户注册使用。</p>
+                    <p class="api-note">重新生成后，旧 Key 会立即失效。仅在需要轮换时再重新生成。</p>
+                  </div>
+                </section>
 
-                      <div class="admin-table-wrap invite-table-wrap">
-                        <table class="admin-table">
-                          <thead>
-                            <tr>
-                              <th>邀请码</th>
-                              <th>状态</th>
-                              <th>使用人</th>
-                              <th>生成时间</th>
-                            </tr>
-                          </thead>
-                          <tbody id="invite-codes-body">
-                            <tr>
-                              <td colspan="4" class="empty-cell">暂无邀请码</td>
-                            </tr>
-                          </tbody>
-                        </table>
+                <section class="dashboard-view" data-dashboard-panel="invites">
+                  <div class="dashboard-card api-card">
+                    <div class="dashboard-view-header">
+                      <div>
+                        <div class="section-kicker">Invite Codes</div>
+                        <div class="api-card-title">✉️ 邀请码</div>
+                        <div class="api-tip">管理员可以无限生成邀请码。普通用户最多生成 3 个，被使用后会显示是谁使用的。</div>
                       </div>
+                      <span id="invite-quota-badge" class="status-pill active">加载中</span>
+                    </div>
+
+                    <div class="dashboard-row compact-row">
+                      <span class="label">当前额度</span>
+                      <strong id="invite-quota-text">-</strong>
+                    </div>
+
+                    <div class="api-actions invite-actions">
+                      <button id="generate-invite-code-button" class="primary-button" type="button">生成邀请码</button>
+                    </div>
+
+                    <p id="invite-code-note" class="api-note">邀请码生成后会显示在下方列表中，可直接复制给被邀请用户注册使用。</p>
+
+                    <div class="admin-table-wrap invite-table-wrap">
+                      <table class="admin-table">
+                        <thead>
+                          <tr>
+                            <th>邀请码</th>
+                            <th>状态</th>
+                            <th>使用人</th>
+                            <th>生成时间</th>
+                          </tr>
+                        </thead>
+                        <tbody id="invite-codes-body">
+                          <tr>
+                            <td colspan="4" class="empty-cell">暂无邀请码</td>
+                          </tr>
+                        </tbody>
+                      </table>
                     </div>
                   </div>
                 </section>
