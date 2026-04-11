@@ -1,6 +1,8 @@
 const state = {
   user: null,
   adminUsers: [],
+  adminInviteCodes: [],
+  inviteCodes: [],
   weixinBindingSession: null,
   dashboardView: 'weixin',
 };
@@ -21,6 +23,11 @@ const copyKeyButton = document.querySelector('#copy-key-button');
 const copySkillLinkButton = document.querySelector('#copy-skill-link-button');
 const apiKeyOutput = document.querySelector('#api-key-output');
 const apiKeyExpiry = document.querySelector('#api-key-expiry');
+const inviteQuotaBadge = document.querySelector('#invite-quota-badge');
+const inviteQuotaText = document.querySelector('#invite-quota-text');
+const inviteCodeNote = document.querySelector('#invite-code-note');
+const generateInviteCodeButton = document.querySelector('#generate-invite-code-button');
+const inviteCodesBody = document.querySelector('#invite-codes-body');
 const weixinBindingStatus = document.querySelector('#weixin-binding-status');
 const weixinBindingDetail = document.querySelector('#weixin-binding-detail');
 const weixinBindingStartButton = document.querySelector('#weixin-binding-start-button');
@@ -30,6 +37,8 @@ const weixinBindingQrWrap = document.querySelector('#weixin-binding-qr-wrap');
 const weixinBindingQrImage = document.querySelector('#weixin-binding-qr-image');
 const weixinBindingQrCaption = document.querySelector('#weixin-binding-qr-caption');
 const weixinBindingSessionCode = document.querySelector('#weixin-binding-session-code');
+const weixinBindingReadinessBadge = document.querySelector('#weixin-binding-readiness-badge');
+const weixinBindingReadyHint = document.querySelector('#weixin-binding-ready-hint');
 const measureImageInput = document.querySelector('#measure-image-input');
 const measureImageButton = document.querySelector('#measure-image-button');
 const measurePanel = document.querySelector('#measure-panel');
@@ -46,12 +55,15 @@ const clearOperatorSyncButton = document.querySelector('#clear-operator-sync-but
 const refreshAdminButton = document.querySelector('#refresh-admin-button');
 const adminPanel = document.querySelector('#admin-panel');
 const adminUsersBody = document.querySelector('#admin-users-body');
+const adminInviteCodesBody = document.querySelector('#admin-invite-codes-body');
 const profileUserName = document.querySelector('#profile-user-name');
 const profileUserRole = document.querySelector('#profile-user-role');
 const profileUserOrganization = document.querySelector('#profile-user-organization');
 const profileUserPhone = document.querySelector('#profile-user-phone');
 let weixinBindingPollTimer = null;
 let weixinBindingPollInFlight = false;
+let weixinBindingReadinessTimer = null;
+let weixinBindingReadinessInFlight = false;
 
 function showFlash(message, type = 'success') {
   flash.textContent = message;
@@ -137,12 +149,62 @@ function stopWeixinBindingPolling() {
   weixinBindingPollInFlight = false;
 }
 
+function stopWeixinBindingReadinessPolling() {
+  if (weixinBindingReadinessTimer) {
+    window.clearInterval(weixinBindingReadinessTimer);
+    weixinBindingReadinessTimer = null;
+  }
+  weixinBindingReadinessInFlight = false;
+}
+
+function renderWeixinBindingReadiness(binding) {
+  const readiness = binding?.readiness || null;
+  if (!readiness || !binding) {
+    weixinBindingReadinessBadge.classList.add('hidden');
+    weixinBindingReadinessBadge.classList.remove('pending', 'ready');
+    weixinBindingReadinessBadge.textContent = '';
+    weixinBindingReadyHint.classList.add('hidden');
+    weixinBindingReadyHint.textContent = '';
+    return;
+  }
+
+  const badgeText = readiness.code === 'ready'
+    ? '🟢 已就绪'
+    : readiness.code === 'pending'
+      ? '⏳ 等待接管'
+      : '';
+
+  if (badgeText) {
+    weixinBindingReadinessBadge.textContent = badgeText;
+    weixinBindingReadinessBadge.classList.remove('hidden');
+    weixinBindingReadinessBadge.classList.toggle('pending', readiness.code === 'pending');
+    weixinBindingReadinessBadge.classList.toggle('ready', readiness.code === 'ready');
+  } else {
+    weixinBindingReadinessBadge.classList.add('hidden');
+    weixinBindingReadinessBadge.classList.remove('pending', 'ready');
+    weixinBindingReadinessBadge.textContent = '';
+  }
+
+  if (readiness.detail) {
+    weixinBindingReadyHint.textContent = readiness.detail;
+    weixinBindingReadyHint.classList.remove('hidden');
+  } else {
+    weixinBindingReadyHint.classList.add('hidden');
+    weixinBindingReadyHint.textContent = '';
+  }
+}
+
 function renderWeixinBinding() {
   const binding = state.user?.weixinBinding || null;
   const session = state.weixinBindingSession;
+  const readiness = binding?.readiness || null;
 
   if (binding) {
-    weixinBindingStatus.textContent = '已绑定';
+    weixinBindingStatus.textContent = readiness?.code === 'ready'
+      ? '已就绪'
+      : readiness?.code === 'pending'
+        ? '等待接管'
+        : '已绑定';
     weixinBindingDetail.textContent = [
       binding.displayUserId ? `微信用户 ${binding.displayUserId}` : '',
       binding.boundAt ? `绑定于 ${formatDateTime(binding.boundAt)}` : '',
@@ -158,6 +220,8 @@ function renderWeixinBinding() {
     weixinBindingDeleteButton.disabled = true;
   }
 
+  renderWeixinBindingReadiness(binding);
+
   if (session?.qrcodeUrl && session?.active && !binding) {
     weixinBindingQrImage.src = session.qrcodeDataUrl || session.qrcodeUrl;
     weixinBindingQrWrap.classList.remove('hidden');
@@ -168,6 +232,29 @@ function renderWeixinBinding() {
     weixinBindingQrImage.removeAttribute('src');
     weixinBindingQrCaption.textContent = '二维码生成后，会在这里自动轮询绑定状态。';
     weixinBindingSessionCode.textContent = '';
+  }
+}
+
+async function refreshWeixinBindingReadiness() {
+  if (weixinBindingReadinessInFlight || !state.user?.weixinBinding) {
+    return;
+  }
+
+  weixinBindingReadinessInFlight = true;
+  try {
+    const payload = await requestJson('/api/weixin/binding/readiness', {
+      method: 'GET',
+    });
+    if (payload.user) {
+      state.user = payload.user;
+      updateDashboard(state.user);
+    }
+    renderWeixinBinding();
+    if (payload.readiness?.ready) {
+      stopWeixinBindingReadinessPolling();
+    }
+  } finally {
+    weixinBindingReadinessInFlight = false;
   }
 }
 
@@ -192,7 +279,8 @@ async function refreshWeixinBindingStatus() {
       updateDashboard(state.user);
       stopWeixinBindingPolling();
       state.weixinBindingSession = null;
-      showFlash('微信绑定成功，现在可以去微信里直接使用 HYFCeph 了。');
+      ensureWeixinBindingReadinessPolling();
+      showFlash('微信绑定成功，机器人正在接管，通常 10 秒内就绪。');
     } else if (!payload.session?.active) {
       stopWeixinBindingPolling();
     }
@@ -221,6 +309,21 @@ function ensureWeixinBindingPolling() {
       // Ignore polling jitter; manual refresh still surfaces errors.
     }
   }, 3000);
+}
+
+function ensureWeixinBindingReadinessPolling() {
+  stopWeixinBindingReadinessPolling();
+  const readiness = state.user?.weixinBinding?.readiness;
+  if (!state.user?.weixinBinding || readiness?.ready) {
+    return;
+  }
+  weixinBindingReadinessTimer = window.setInterval(async () => {
+    try {
+      await refreshWeixinBindingReadiness();
+    } catch {
+      // ignore transient jitter; manual refresh still exposes errors
+    }
+  }, 5000);
 }
 
 function resetMeasureResult() {
@@ -318,7 +421,7 @@ function readFileAsBase64(file) {
 
 function renderAdminUsers(users) {
   if (!users.length) {
-    adminUsersBody.innerHTML = '<tr><td colspan="5" class="empty-cell">暂无数据</td></tr>';
+    adminUsersBody.innerHTML = '<tr><td colspan="6" class="empty-cell">暂无数据</td></tr>';
     return;
   }
 
@@ -327,6 +430,11 @@ function renderAdminUsers(users) {
       ? `${user.name}（管理员）`
       : user.name;
     const identifier = [user.organization || '-', user.phone || user.username || '-'].join('<br />');
+    const inviteSource = user.role === 'admin'
+      ? '<span class="empty-cell">系统管理员</span>'
+      : user.invitedByName
+        ? `<strong>${user.invitedByName}</strong><div class="api-tip">邀请码 ${user.inviteCodeUsed || '-'}</div>`
+        : '<span class="empty-cell">未记录</span>';
     const keyMarkup = user.apiKey
       ? `<code>${user.apiKey}</code><div class="status-pill ${user.apiKeyActive ? 'active' : 'inactive'}">${user.apiKeyActive ? '有效' : '已过期'}</div>`
       : '<span class="empty-cell">未生成</span>';
@@ -346,6 +454,7 @@ function renderAdminUsers(users) {
       <tr>
         <td>${displayName}</td>
         <td>${identifier}</td>
+        <td>${inviteSource}</td>
         <td>${keyMarkup}</td>
         <td>${expiryControl}<div class="api-tip">${formatDateTime(user.apiKeyExpiresAt)}</div></td>
         <td>${actionButtons}</td>
@@ -396,19 +505,117 @@ function renderAdminUsers(users) {
   });
 }
 
+function renderInviteCodes(inviteCodes, inviteQuota) {
+  const quota = inviteQuota || state.user?.inviteQuota || null;
+
+  if (quota?.isUnlimited) {
+    inviteQuotaBadge.textContent = '管理员无限制';
+    inviteQuotaText.textContent = `已生成 ${quota.created ?? 0} 个邀请码`;
+    inviteCodeNote.textContent = '管理员可以无限生成邀请码。邀请码被使用后，会在列表中显示被谁使用。';
+    generateInviteCodeButton.disabled = false;
+  } else if (quota) {
+    inviteQuotaBadge.textContent = `剩余 ${quota.remaining}`;
+    inviteQuotaText.textContent = `已生成 ${quota.created}/${quota.limit} 个邀请码`;
+    inviteCodeNote.textContent = quota.canGenerate
+      ? '普通用户最多生成 3 个邀请码。邀请码一旦被使用，会显示使用者信息。'
+      : `你的 3 个邀请码额度已经全部用完，当前不能继续生成。`;
+    generateInviteCodeButton.disabled = !quota.canGenerate;
+  } else {
+    inviteQuotaBadge.textContent = '未加载';
+    inviteQuotaText.textContent = '-';
+    inviteCodeNote.textContent = '邀请码生成后会显示在下方列表中，可直接复制给被邀请用户注册使用。';
+    generateInviteCodeButton.disabled = false;
+  }
+
+  if (!inviteCodes.length) {
+    inviteCodesBody.innerHTML = '<tr><td colspan="4" class="empty-cell">暂无邀请码</td></tr>';
+    return;
+  }
+
+  inviteCodesBody.innerHTML = inviteCodes.map((invite) => {
+    const usedBy = invite.status === 'used'
+      ? [invite.usedByName || '-', invite.usedByPhone || ''].filter(Boolean).join('<br />')
+      : '<span class="empty-cell">未使用</span>';
+    const statusMarkup = invite.status === 'used'
+      ? '<span class="status-pill inactive">已使用</span>'
+      : '<span class="status-pill active">未使用</span>';
+
+    return `
+      <tr>
+        <td><code>${invite.code}</code></td>
+        <td>${statusMarkup}</td>
+        <td>${usedBy}</td>
+        <td>${formatDateTime(invite.createdAt)}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderAdminInviteCodes(inviteCodes) {
+  if (!inviteCodes.length) {
+    adminInviteCodesBody.innerHTML = '<tr><td colspan="5" class="empty-cell">暂无邀请码数据</td></tr>';
+    return;
+  }
+
+  adminInviteCodesBody.innerHTML = inviteCodes.map((invite) => {
+    const creatorMarkup = [invite.createdByName || '-', invite.createdByRole === 'admin' ? '管理员' : '普通用户']
+      .filter(Boolean)
+      .join('<br />');
+    const statusMarkup = invite.status === 'used'
+      ? '<span class="status-pill inactive">已使用</span>'
+      : '<span class="status-pill active">未使用</span>';
+    const usedByMarkup = invite.status === 'used'
+      ? [invite.usedByName || '-', invite.usedByPhone || '', invite.usedAt ? `使用于 ${formatDateTime(invite.usedAt)}` : '']
+        .filter(Boolean)
+        .join('<br />')
+      : '<span class="empty-cell">-</span>';
+    const timeMarkup = [formatDateTime(invite.createdAt), invite.updatedAt ? `更新于 ${formatDateTime(invite.updatedAt)}` : '']
+      .filter(Boolean)
+      .join('<br />');
+
+    return `
+      <tr>
+        <td><code>${invite.code}</code></td>
+        <td>${creatorMarkup}</td>
+        <td>${statusMarkup}</td>
+        <td>${usedByMarkup}</td>
+        <td>${timeMarkup}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
 async function loadAdminUsers() {
   if (state.user?.role !== 'admin') {
     state.adminUsers = [];
+    state.adminInviteCodes = [];
     adminPanel.classList.add('hidden');
     operatorSyncPanel.classList.add('hidden');
     renderOperatorSyncStatus(null);
+    renderAdminInviteCodes([]);
     return;
   }
   const payload = await requestJson('/api/admin/users', { method: 'GET' });
   state.adminUsers = payload.users || [];
+  state.adminInviteCodes = payload.inviteCodes || [];
   adminPanel.classList.remove('hidden');
   operatorSyncPanel.classList.remove('hidden');
   renderAdminUsers(state.adminUsers);
+  renderAdminInviteCodes(state.adminInviteCodes);
+}
+
+async function loadInviteCodes() {
+  if (!state.user) {
+    state.inviteCodes = [];
+    renderInviteCodes([], null);
+    return;
+  }
+
+  const payload = await requestJson('/api/invite-codes', { method: 'GET' });
+  state.inviteCodes = payload.inviteCodes || [];
+  state.user = payload.user || state.user;
+  updateDashboard(state.user);
+  renderInviteCodes(state.inviteCodes, payload.inviteQuota || state.user?.inviteQuota || null);
 }
 
 async function loadOperatorSyncStatus() {
@@ -447,22 +654,29 @@ async function syncAuthUi() {
     loginTab.classList.add('hidden');
     updateDashboard(state.user);
     renderWeixinBinding();
+    ensureWeixinBindingReadinessPolling();
     measurePanel.classList.toggle('hidden', !isAdmin);
     operatorSyncPanel.classList.toggle('hidden', !isAdmin);
     adminPanel.classList.toggle('hidden', !isAdmin);
     setActiveTab('dashboard');
     setDashboardView(state.dashboardView || 'weixin');
+    await loadInviteCodes();
     await loadOperatorSyncStatus();
     await loadAdminUsers();
   } else {
     state.weixinBindingSession = null;
+    state.inviteCodes = [];
+    state.adminInviteCodes = [];
     stopWeixinBindingPolling();
+    stopWeixinBindingReadinessPolling();
     renderOperatorSyncStatus(null);
     renderWeixinBinding();
+    renderInviteCodes([], null);
+    renderAdminInviteCodes([]);
     measurePanel.classList.add('hidden');
     operatorSyncPanel.classList.add('hidden');
     adminPanel.classList.add('hidden');
-    adminUsersBody.innerHTML = '<tr><td colspan="5" class="empty-cell">暂无数据</td></tr>';
+    adminUsersBody.innerHTML = '<tr><td colspan="6" class="empty-cell">暂无数据</td></tr>';
     registerTab.classList.remove('hidden');
     loginTab.classList.remove('hidden');
     state.dashboardView = 'weixin';
@@ -571,6 +785,29 @@ generateKeyButton.addEventListener('click', async () => {
   }
 });
 
+generateInviteCodeButton?.addEventListener('click', async () => {
+  clearFlash();
+  try {
+    generateInviteCodeButton.disabled = true;
+    const result = await requestJson('/api/invite-codes', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    state.user = result.user || state.user;
+    updateDashboard(state.user);
+    state.inviteCodes = result.inviteCodes || [];
+    renderInviteCodes(state.inviteCodes, result.inviteQuota || state.user?.inviteQuota || null);
+    if (state.user?.role === 'admin') {
+      await loadAdminUsers();
+    }
+    showFlash(result.message || '邀请码已生成。');
+  } catch (error) {
+    showFlash(error.message, 'error');
+  } finally {
+    generateInviteCodeButton.disabled = false;
+  }
+});
+
 copyKeyButton.addEventListener('click', async () => {
   const value = apiKeyOutput.value.trim();
   if (!value) {
@@ -609,6 +846,7 @@ weixinBindingStartButton?.addEventListener('click', async () => {
       body: JSON.stringify({}),
     });
     state.weixinBindingSession = payload.session || null;
+    stopWeixinBindingReadinessPolling();
     renderWeixinBinding();
     ensureWeixinBindingPolling();
     showFlash('绑定二维码已生成，请用微信扫码。');
@@ -642,6 +880,7 @@ weixinBindingDeleteButton?.addEventListener('click', async () => {
     });
     state.weixinBindingSession = null;
     stopWeixinBindingPolling();
+    stopWeixinBindingReadinessPolling();
     if (state.user) {
       state.user.weixinBinding = null;
       state.user.updatedAt = new Date().toISOString();

@@ -960,6 +960,11 @@ textarea {
   min-width: 0;
 }
 
+.dashboard-stack {
+  display: grid;
+  gap: 18px;
+}
+
 .dashboard-view {
   display: none;
 }
@@ -1093,6 +1098,14 @@ textarea {
   grid-column: 1 / -1;
 }
 
+.invite-actions {
+  grid-template-columns: 1fr;
+}
+
+.invite-table-wrap .admin-table code {
+  max-width: 100%;
+}
+
 .weixin-binding-card .api-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1110,6 +1123,14 @@ textarea {
   padding-bottom: 28px;
 }
 
+.weixin-binding-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+}
+
 .weixin-binding-status-pill {
   display: inline-flex;
   align-items: center;
@@ -1121,9 +1142,43 @@ textarea {
   border: 1px solid rgba(91, 61, 240, 0.08);
 }
 
+.weixin-binding-readiness-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  border: 1px solid rgba(88, 76, 183, 0.12);
+  background: rgba(88, 76, 183, 0.08);
+  color: var(--ink-soft);
+}
+
+.weixin-binding-readiness-badge.pending {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.18);
+  color: #9a6700;
+}
+
+.weixin-binding-readiness-badge.ready {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.18);
+  color: #0f8a62;
+}
+
 .weixin-binding-detail-centered {
   max-width: 720px;
   text-align: center;
+}
+
+.weixin-binding-ready-hint {
+  max-width: 720px;
+  margin-top: -6px;
+  text-align: center;
+  color: var(--ink-soft);
 }
 
 .weixin-binding-qr {
@@ -1246,6 +1301,25 @@ textarea {
 
 .admin-table-wrap {
   overflow-x: auto;
+}
+
+.admin-subsection {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(88, 76, 183, 0.10);
+}
+
+.admin-subsection-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.admin-subtitle {
+  font-size: 20px;
 }
 
 .admin-table {

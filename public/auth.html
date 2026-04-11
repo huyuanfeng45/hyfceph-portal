@@ -98,6 +98,10 @@
                 <span>密码</span>
                 <input name="password" type="password" placeholder="至少 6 位" required minlength="6" />
               </label>
+              <label>
+                <span>邀请码</span>
+                <input name="inviteCode" type="text" placeholder="请输入邀请码" required />
+              </label>
               <button class="primary-button wide-button" type="submit">注册并进入控制台</button>
             </form>
           </section>
@@ -180,14 +184,18 @@
                       </div>
                     </div>
 
-                    <div class="weixin-binding-status-pill">
-                      <span class="label">当前状态</span>
-                      <strong id="weixin-binding-status">未绑定</strong>
+                    <div class="weixin-binding-status-row">
+                      <div class="weixin-binding-status-pill">
+                        <span class="label">当前状态</span>
+                        <strong id="weixin-binding-status">未绑定</strong>
+                      </div>
+                      <span id="weixin-binding-readiness-badge" class="weixin-binding-readiness-badge hidden"></span>
                     </div>
 
                     <p id="weixin-binding-detail" class="api-note weixin-binding-detail-centered">
                       先在这里生成二维码，再用微信扫描完成绑定。绑定成功后，这个微信账号就能直接使用 HYFCeph。
                     </p>
+                    <p id="weixin-binding-ready-hint" class="api-note weixin-binding-ready-hint hidden"></p>
 
                     <section id="weixin-binding-qr-wrap" class="weixin-binding-qr hidden">
                       <img id="weixin-binding-qr-image" class="weixin-binding-qr-image" alt="微信 Clawbot 绑定二维码" />
@@ -207,29 +215,71 @@
                 </section>
 
                 <section class="dashboard-view" data-dashboard-panel="api">
-                  <div class="dashboard-card api-card">
-                    <div class="dashboard-view-header">
-                      <div>
-                        <div class="section-kicker">API Key</div>
-                        <div class="api-card-title">🔑 你的调用凭证</div>
-                        <div class="api-tip">注册后在这里生成并复制专属 Key，默认有效期 3 个月。</div>
+                  <div class="dashboard-stack">
+                    <div class="dashboard-card api-card">
+                      <div class="dashboard-view-header">
+                        <div>
+                          <div class="section-kicker">API Key</div>
+                          <div class="api-card-title">🔑 你的调用凭证</div>
+                          <div class="api-tip">注册后在这里生成并复制专属 Key，默认有效期 3 个月。</div>
+                        </div>
+                      </div>
+
+                      <textarea id="api-key-output" readonly placeholder="还没有 API Key，点击下方按钮生成。"></textarea>
+
+                      <div class="dashboard-row compact-row">
+                        <span class="label">到期时间</span>
+                        <strong id="api-key-expiry">-</strong>
+                      </div>
+
+                      <div class="api-actions">
+                        <button id="generate-key-button" class="primary-button" type="button">生成 API Key</button>
+                        <button id="copy-key-button" class="ghost-button" type="button">复制 API Key</button>
+                        <a class="secondary-button dashboard-download" href="/downloads/HYFCeph-openclaw.zip">下载 Skill</a>
+                      </div>
+
+                      <p class="api-note">重新生成后，旧 Key 会立即失效。仅在需要轮换时再重新生成。</p>
+                    </div>
+
+                    <div class="dashboard-card api-card">
+                      <div class="dashboard-view-header">
+                        <div>
+                          <div class="section-kicker">Invite Codes</div>
+                          <div class="api-card-title">✉️ 邀请码</div>
+                          <div class="api-tip">管理员可以无限生成邀请码。普通用户最多生成 3 个，被使用后会显示是谁使用的。</div>
+                        </div>
+                        <span id="invite-quota-badge" class="status-pill active">加载中</span>
+                      </div>
+
+                      <div class="dashboard-row compact-row">
+                        <span class="label">当前额度</span>
+                        <strong id="invite-quota-text">-</strong>
+                      </div>
+
+                      <div class="api-actions invite-actions">
+                        <button id="generate-invite-code-button" class="primary-button" type="button">生成邀请码</button>
+                      </div>
+
+                      <p id="invite-code-note" class="api-note">邀请码生成后会显示在下方列表中，可直接复制给被邀请用户注册使用。</p>
+
+                      <div class="admin-table-wrap invite-table-wrap">
+                        <table class="admin-table">
+                          <thead>
+                            <tr>
+                              <th>邀请码</th>
+                              <th>状态</th>
+                              <th>使用人</th>
+                              <th>生成时间</th>
+                            </tr>
+                          </thead>
+                          <tbody id="invite-codes-body">
+                            <tr>
+                              <td colspan="4" class="empty-cell">暂无邀请码</td>
+                            </tr>
+                          </tbody>
+                        </table>
                       </div>
                     </div>
-
-                    <textarea id="api-key-output" readonly placeholder="还没有 API Key，点击下方按钮生成。"></textarea>
-
-                    <div class="dashboard-row compact-row">
-                      <span class="label">到期时间</span>
-                      <strong id="api-key-expiry">-</strong>
-                    </div>
-
-                    <div class="api-actions">
-                      <button id="generate-key-button" class="primary-button" type="button">生成 API Key</button>
-                      <button id="copy-key-button" class="ghost-button" type="button">复制 API Key</button>
-                      <a class="secondary-button dashboard-download" href="/downloads/HYFCeph-openclaw.zip">下载 Skill</a>
-                    </div>
-
-                    <p class="api-note">重新生成后，旧 Key 会立即失效。仅在需要轮换时再重新生成。</p>
                   </div>
                 </section>
 
@@ -336,6 +386,7 @@
                           <tr>
                             <th>用户</th>
                             <th>单位 / 手机号</th>
+                            <th>邀请来源</th>
                             <th>API Key</th>
                             <th>有效期</th>
                             <th>操作</th>
@@ -343,8 +394,36 @@
                         </thead>
                         <tbody id="admin-users-body">
                           <tr>
-                            <td colspan="5" class="empty-cell">暂无数据</td>
+                            <td colspan="6" class="empty-cell">暂无数据</td>
                           </tr>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div class="admin-subsection">
+                      <div class="admin-subsection-header">
+                        <div>
+                          <div class="section-kicker">Invites</div>
+                          <div class="api-card-title admin-subtitle">✉️ 邀请码列表</div>
+                          <div class="api-tip">查看邀请码是否已被使用，以及被谁使用。</div>
+                        </div>
+                      </div>
+
+                      <div class="admin-table-wrap">
+                        <table class="admin-table">
+                          <thead>
+                            <tr>
+                              <th>邀请码</th>
+                              <th>创建人</th>
+                              <th>状态</th>
+                              <th>使用人</th>
+                              <th>时间</th>
+                            </tr>
+                          </thead>
+                          <tbody id="admin-invite-codes-body">
+                            <tr>
+                              <td colspan="5" class="empty-cell">暂无邀请码数据</td>
+                            </tr>
                         </tbody>
                       </table>
                     </div>

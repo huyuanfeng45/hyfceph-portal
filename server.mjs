@@ -24,6 +24,7 @@ const COOKIE_NAME = 'hyfceph_session';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const SESSION_SECRET = process.env.HYFCEPH_SESSION_SECRET || `hyfceph:${process.env.HYFCEPH_ADMIN_PASSWORD || '85301298'}:${process.env.HYFCEPH_BARK_KEY || 'bark'}`;
 const DEFAULT_API_KEY_DAYS = Number(process.env.HYFCEPH_API_KEY_DAYS || '90');
+const DEFAULT_INVITE_CODE_LIMIT = Number(process.env.HYFCEPH_INVITE_CODE_LIMIT || '3');
 const DEFAULT_BRIDGE_TTL_MINUTES = Number(process.env.HYFCEPH_BRIDGE_TTL_MINUTES || '30');
 const DEFAULT_OPERATOR_SESSION_TTL_MINUTES = Number(process.env.HYFCEPH_OPERATOR_SESSION_TTL_MINUTES || '240');
 const ADMIN_USERNAME = process.env.HYFCEPH_ADMIN_USERNAME || 'huyuanfeng45';
@@ -103,6 +104,7 @@ const FEISHU_ROW_KIND_PDF_LINK = 'pdf_link';
 const FEISHU_ROW_KIND_REPORT_LINK = 'report_link';
 const FEISHU_ROW_KIND_WEIXIN_BOT = 'weixin_bot';
 const FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION = 'weixin_binding_session';
+const FEISHU_ROW_KIND_INVITE_CODE = 'invite_code';
 const FEISHU_MANAGED_ROW_PREFIXES = [
   `${FEISHU_ROW_KIND_USER}:`,
   `${FEISHU_ROW_KIND_OPERATOR_SESSION}:`,
@@ -110,6 +112,7 @@ const FEISHU_MANAGED_ROW_PREFIXES = [
   `${FEISHU_ROW_KIND_REPORT_LINK}:`,
   `${FEISHU_ROW_KIND_WEIXIN_BOT}:`,
   `${FEISHU_ROW_KIND_WEIXIN_BINDING_SESSION}:`,
+  `${FEISHU_ROW_KIND_INVITE_CODE}:`,
 ];
 const FEISHU_METRIC_DEFINITIONS = [
   {
@@ -912,7 +915,60 @@ function publicWeixinBinding(binding) {
   };
 }
 
-function publicUser(user) {
+function buildWeixinBindingReadiness(store, user) {
+  const binding = normalizeWeixinBindingRecord(user?.weixinBinding);
+  if (!binding) {
+    return {
+      code: 'unbound',
+      label: '未绑定',
+      ready: false,
+      refreshSeconds: 10,
+      detail: '先生成二维码，再用微信扫码完成绑定。',
+      botAccountId: null,
+      updatedAt: null,
+    };
+  }
+
+  const normalizedBindingAccountId = normalizeAccountId(binding.botAccountId || '');
+  const matchedConfig = collectWeixinBotConfigs(store).find((config) => {
+    if (config.userId && config.userId === user?.id) {
+      return true;
+    }
+    if (binding.weixinUserId && config.weixinUserId === binding.weixinUserId) {
+      return true;
+    }
+    if (normalizedBindingAccountId && normalizeAccountId(config.accountId) === normalizedBindingAccountId) {
+      return true;
+    }
+    return false;
+  }) || null;
+
+  if (matchedConfig) {
+    return {
+      code: 'ready',
+      label: '已就绪',
+      ready: true,
+      refreshSeconds: 10,
+      detail: '机器人已接管，可以直接去新的微信 Clawbot 会话里发送侧位片。',
+      botAccountId: matchedConfig.accountId,
+      updatedAt: matchedConfig.updatedAt || binding.updatedAt || null,
+    };
+  }
+
+  return {
+    code: 'pending',
+    label: '等待接管',
+    ready: false,
+    refreshSeconds: 10,
+    detail: '微信已绑定，机器人通常会在 10 秒内接管。请稍等后在新的微信 Clawbot 会话里发送消息。',
+    botAccountId: binding.botAccountId || null,
+    updatedAt: binding.updatedAt || null,
+  };
+}
+
+function publicUser(user, store = null) {
+  const readiness = store ? buildWeixinBindingReadiness(store, user) : null;
+  const inviteQuota = store ? buildInviteQuota(user, store) : null;
   return {
     id: user.id,
     role: user.role,
@@ -923,10 +979,19 @@ function publicUser(user) {
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
     lastLoginAt: user.lastLoginAt || null,
+    invitedByUserId: user.invitedByUserId || null,
+    invitedByName: user.invitedByName || null,
+    inviteCodeUsed: user.inviteCodeUsed || null,
     apiKey: user.apiKey || null,
     apiKeyExpiresAt: user.apiKeyExpiresAt || null,
     apiKeyActive: isApiKeyActive(user),
-    weixinBinding: publicWeixinBinding(user.weixinBinding),
+    inviteQuota,
+    weixinBinding: user.weixinBinding
+      ? {
+          ...publicWeixinBinding(user.weixinBinding),
+          readiness,
+        }
+      : null,
   };
 }
 
@@ -1031,9 +1096,145 @@ function normalizeUserRecord(user) {
     createdAt: isIsoDate(user?.createdAt) ? new Date(user.createdAt).toISOString() : nowIso(),
     updatedAt: isIsoDate(user?.updatedAt) ? new Date(user.updatedAt).toISOString() : nowIso(),
     lastLoginAt: isIsoDate(user?.lastLoginAt) ? new Date(user.lastLoginAt).toISOString() : null,
+    invitedByUserId: typeof user?.invitedByUserId === 'string' && user.invitedByUserId.trim() ? user.invitedByUserId.trim() : null,
+    invitedByName: typeof user?.invitedByName === 'string' && user.invitedByName.trim() ? user.invitedByName.trim() : null,
+    inviteCodeUsed: typeof user?.inviteCodeUsed === 'string' && user.inviteCodeUsed.trim() ? user.inviteCodeUsed.trim().toUpperCase() : null,
     currentCaseBridge: normalizeBridgeState(user?.currentCaseBridge),
     weixinBinding: normalizeWeixinBindingRecord(user?.weixinBinding),
   };
+}
+
+function normalizeInviteCodeRecord(code, record) {
+  if (!record || typeof record !== 'object') {
+    return null;
+  }
+  const normalizedCode = String(code || record.code || '').trim().toUpperCase();
+  if (!normalizedCode) {
+    return null;
+  }
+  const createdByUserId = typeof record.createdByUserId === 'string' && record.createdByUserId.trim()
+    ? record.createdByUserId.trim()
+    : null;
+  const createdByName = typeof record.createdByName === 'string' && record.createdByName.trim()
+    ? record.createdByName.trim()
+    : null;
+  const createdByRole = record.createdByRole === 'admin' ? 'admin' : 'user';
+  const status = record.status === 'used' ? 'used' : 'unused';
+  const usedByUserId = typeof record.usedByUserId === 'string' && record.usedByUserId.trim()
+    ? record.usedByUserId.trim()
+    : null;
+  const usedByName = typeof record.usedByName === 'string' && record.usedByName.trim()
+    ? record.usedByName.trim()
+    : null;
+  const usedByPhone = typeof record.usedByPhone === 'string' && record.usedByPhone.trim()
+    ? record.usedByPhone.trim()
+    : null;
+  return {
+    code: normalizedCode,
+    createdByUserId,
+    createdByName,
+    createdByRole,
+    status,
+    usedByUserId,
+    usedByName,
+    usedByPhone,
+    createdAt: isIsoDate(record.createdAt) ? new Date(record.createdAt).toISOString() : nowIso(),
+    updatedAt: isIsoDate(record.updatedAt) ? new Date(record.updatedAt).toISOString() : nowIso(),
+    usedAt: isIsoDate(record.usedAt) ? new Date(record.usedAt).toISOString() : null,
+  };
+}
+
+function normalizeInviteCodeMap(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const out = {};
+  for (const [code, record] of Object.entries(source)) {
+    const normalized = normalizeInviteCodeRecord(code, record);
+    if (normalized) {
+      out[normalized.code] = normalized;
+    }
+  }
+  return out;
+}
+
+function countInviteCodesByCreator(store, userId) {
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId) {
+    return 0;
+  }
+  return Object.values(store?.inviteCodes || {}).filter((item) => item.createdByUserId === normalizedUserId).length;
+}
+
+function buildInviteQuota(user, store) {
+  if (!user) {
+    return null;
+  }
+  if (user.role === 'admin') {
+    return {
+      isUnlimited: true,
+      limit: null,
+      created: countInviteCodesByCreator(store, user.id),
+      remaining: null,
+      canGenerate: true,
+    };
+  }
+  const created = countInviteCodesByCreator(store, user.id);
+  const remaining = Math.max(0, DEFAULT_INVITE_CODE_LIMIT - created);
+  return {
+    isUnlimited: false,
+    limit: DEFAULT_INVITE_CODE_LIMIT,
+    created,
+    remaining,
+    canGenerate: remaining > 0,
+  };
+}
+
+function generateInviteCodeCandidate() {
+  return `HYF-${randomBytes(4).toString('hex').toUpperCase()}`;
+}
+
+function createUniqueInviteCode(store) {
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const code = generateInviteCodeCandidate();
+    if (!store?.inviteCodes?.[code]) {
+      return code;
+    }
+  }
+  throw new Error('邀请码生成失败，请稍后重试。');
+}
+
+function publicInviteCode(record) {
+  const normalized = normalizeInviteCodeRecord(record?.code, record);
+  if (!normalized) {
+    return null;
+  }
+  return {
+    code: normalized.code,
+    createdByUserId: normalized.createdByUserId,
+    createdByName: normalized.createdByName,
+    createdByRole: normalized.createdByRole,
+    status: normalized.status,
+    usedByUserId: normalized.usedByUserId,
+    usedByName: normalized.usedByName,
+    usedByPhone: normalized.usedByPhone,
+    createdAt: normalized.createdAt,
+    updatedAt: normalized.updatedAt,
+    usedAt: normalized.usedAt,
+  };
+}
+
+function listInviteCodesByCreator(store, userId) {
+  const normalizedUserId = String(userId || '').trim();
+  return Object.values(store?.inviteCodes || {})
+    .map((record) => publicInviteCode(record))
+    .filter((record) => record && record.createdByUserId === normalizedUserId)
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+}
+
+function listInviteCodesForAdmin(store) {
+  return Object.values(store?.inviteCodes || {})
+    .map((record) => publicInviteCode(record))
+    .filter(Boolean)
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
 }
 
 function toIsoTimestampOrZero(value) {
@@ -1423,6 +1624,7 @@ function normalizeStoreRecord(store) {
   const source = store && typeof store === 'object' ? store : {};
   return {
     users: Array.isArray(source.users) ? source.users.map(normalizeUserRecord) : [],
+    inviteCodes: normalizeInviteCodeMap(source.inviteCodes),
     operatorSession: normalizeOperatorSession(source.operatorSession),
     pdfLinks: normalizePdfLinkMap(source.pdfLinks),
     reportLinks: normalizeReportLinkMap(source.reportLinks),
@@ -2145,6 +2347,8 @@ function getFeishuStoreKindLabel(kind) {
   switch (String(kind || '').trim()) {
     case FEISHU_ROW_KIND_USER:
       return '用户';
+    case FEISHU_ROW_KIND_INVITE_CODE:
+      return '邀请码';
     case FEISHU_ROW_KIND_OPERATOR_SESSION:
       return '管理员浏览器会话';
     case FEISHU_ROW_KIND_PDF_LINK:
@@ -2167,6 +2371,14 @@ function buildFeishuStoreSummary(kind, payload) {
   switch (String(kind || '').trim()) {
     case FEISHU_ROW_KIND_USER:
       return [source.name, source.phone, source.username].filter(Boolean).join(' / ') || String(source.id || '').trim() || '用户';
+    case FEISHU_ROW_KIND_INVITE_CODE:
+      return [
+        source.code,
+        source.status === 'used'
+          ? `已使用 ${source.usedByName || source.usedByPhone || ''}`.trim()
+          : '未使用',
+        source.createdByName,
+      ].filter(Boolean).join(' / ') || String(source.code || '').trim() || '邀请码';
     case FEISHU_ROW_KIND_OPERATOR_SESSION:
       return [source.userName, source.accountType, source.expiresAt].filter(Boolean).join(' / ') || '管理员浏览器会话';
     case FEISHU_ROW_KIND_PDF_LINK:
@@ -2205,6 +2417,7 @@ function isManagedFeishuStoreRow(primaryKey, kind = '') {
     || FEISHU_MANAGED_ROW_PREFIXES.some((prefix) => normalizedPrimaryKey.startsWith(prefix))
     || [
       FEISHU_ROW_KIND_USER,
+      FEISHU_ROW_KIND_INVITE_CODE,
       FEISHU_ROW_KIND_OPERATOR_SESSION,
       FEISHU_ROW_KIND_PDF_LINK,
       FEISHU_ROW_KIND_REPORT_LINK,
@@ -2285,6 +2498,15 @@ function buildFeishuStoreRows(store) {
     });
   }
 
+  for (const record of Object.values(normalizedStore.inviteCodes || {})) {
+    rows.push({
+      key: buildFeishuStoreRowKey(FEISHU_ROW_KIND_INVITE_CODE, record.code),
+      kind: FEISHU_ROW_KIND_INVITE_CODE,
+      payload: record,
+      updatedAt: record.updatedAt || nowIso(),
+    });
+  }
+
   if (normalizedStore.operatorSession) {
     rows.push({
       key: buildFeishuStoreRowKey(FEISHU_ROW_KIND_OPERATOR_SESSION),
@@ -2335,6 +2557,7 @@ function buildFeishuStoreRows(store) {
 
 function buildStoreFromFeishuRows(records, schema) {
   const users = new Map();
+  const inviteCodes = {};
   const pdfLinks = {};
   const reportLinks = {};
   const weixinBindingSessions = {};
@@ -2361,6 +2584,14 @@ function buildStoreFromFeishuRows(records, schema) {
     if (kind === FEISHU_ROW_KIND_USER) {
       const user = normalizeUserRecord(payload);
       users.set(user.id, user);
+      continue;
+    }
+
+    if (kind === FEISHU_ROW_KIND_INVITE_CODE) {
+      const inviteCode = normalizeInviteCodeRecord(payload.code, payload);
+      if (inviteCode) {
+        inviteCodes[inviteCode.code] = inviteCode;
+      }
       continue;
     }
 
@@ -2400,6 +2631,7 @@ function buildStoreFromFeishuRows(records, schema) {
 
   const rowBasedStore = normalizeStoreRecord({
     users: Array.from(users.values()),
+    inviteCodes,
     operatorSession,
     pdfLinks,
     reportLinks,
@@ -2408,6 +2640,7 @@ function buildStoreFromFeishuRows(records, schema) {
   });
 
   const hasRowBasedData = rowBasedStore.users.length > 0
+    || Object.keys(rowBasedStore.inviteCodes).length > 0
     || Boolean(rowBasedStore.operatorSession)
     || Boolean(rowBasedStore.weixinBot)
     || Object.keys(rowBasedStore.pdfLinks).length > 0
@@ -3326,9 +3559,10 @@ async function handleRegister(request, response) {
   const organization = String(payload.organization || '').trim();
   const phone = normalizePhone(payload.phone);
   const password = String(payload.password || '');
+  const inviteCode = String(payload.inviteCode || '').trim().toUpperCase();
 
-  if (!name || !organization || !phone || !password) {
-    return sendJson(response, 400, { error: '请完整填写名字、单位、手机号和密码。' });
+  if (!name || !organization || !phone || !password || !inviteCode) {
+    return sendJson(response, 400, { error: '请完整填写名字、单位、手机号、密码和邀请码。' });
   }
   if (!validatePhone(phone)) {
     return sendJson(response, 400, { error: '手机号格式不正确。' });
@@ -3341,6 +3575,14 @@ async function handleRegister(request, response) {
   if (store.users.some((item) => item.phone === phone)) {
     return sendJson(response, 409, { error: '该手机号已注册，请直接登录。' });
   }
+  const inviteRecord = normalizeInviteCodeRecord(inviteCode, store.inviteCodes?.[inviteCode]);
+  if (!inviteRecord) {
+    return sendJson(response, 400, { error: '邀请码无效，请检查后再试。' });
+  }
+  if (inviteRecord.status === 'used') {
+    return sendJson(response, 400, { error: `邀请码已被${inviteRecord.usedByName || inviteRecord.usedByPhone || '其他用户'}使用。` });
+  }
+  const inviter = store.users.find((item) => item.id === inviteRecord.createdByUserId) || null;
 
   const user = {
     id: randomBytes(12).toString('hex'),
@@ -3355,6 +3597,21 @@ async function handleRegister(request, response) {
     createdAt: nowIso(),
     updatedAt: nowIso(),
     lastLoginAt: nowIso(),
+    invitedByUserId: inviteRecord.createdByUserId || inviter?.id || null,
+    invitedByName: inviteRecord.createdByName || inviter?.name || null,
+    inviteCodeUsed: inviteRecord.code,
+  };
+  store.inviteCodes = {
+    ...(store.inviteCodes || {}),
+    [inviteRecord.code]: normalizeInviteCodeRecord(inviteRecord.code, {
+      ...inviteRecord,
+      status: 'used',
+      usedByUserId: user.id,
+      usedByName: user.name,
+      usedByPhone: user.phone,
+      usedAt: nowIso(),
+      updatedAt: nowIso(),
+    }),
   };
   store.users.push(user);
   await writeStore(store);
@@ -3365,7 +3622,7 @@ async function handleRegister(request, response) {
 
   return sendJson(response, 201, {
     message: '注册成功，已进入控制台。',
-    user: publicUser(user),
+    user: publicUser(user, store),
   });
 }
 
@@ -3392,7 +3649,7 @@ async function handleLogin(request, response) {
   setSessionCookie(response, sessionToken);
   return sendJson(response, 200, {
     message: '登录成功。',
-    user: publicUser(user),
+    user: publicUser(user, store),
   });
 }
 
@@ -3402,11 +3659,35 @@ async function handleLogout(_request, response) {
 }
 
 async function handleCurrentUser(request, response) {
-  const user = await getSessionUser(request);
+  const currentUser = await getSessionUser(request);
+  if (!currentUser) {
+    return sendJson(response, 401, { error: '未登录。' });
+  }
+  const store = await readStore();
+  const user = findUserForSessionContext(store, currentUser);
   if (!user) {
     return sendJson(response, 401, { error: '未登录。' });
   }
-  return sendJson(response, 200, { user: publicUser(user) });
+  return sendJson(response, 200, { user: publicUser(user, store) });
+}
+
+async function handleWeixinBindingReadinessGet(request, response) {
+  const currentUser = await getSessionUser(request);
+  if (!currentUser) {
+    return sendJson(response, 401, { error: '请先登录。' });
+  }
+
+  const store = await readStore();
+  const user = findUserForSessionContext(store, currentUser);
+  if (!user) {
+    return sendJson(response, 404, { error: '用户不存在。' });
+  }
+
+  return sendJson(response, 200, {
+    ok: true,
+    readiness: buildWeixinBindingReadiness(store, user),
+    user: publicUser(user, store),
+  });
 }
 
 async function handleWeixinBindingStart(request, response) {
@@ -3515,7 +3796,7 @@ async function handleWeixinBindingStatus(request, response, sessionKey) {
         ok: true,
         connected: true,
         binding: publicWeixinBinding(latestUser.weixinBinding),
-        user: publicUser(latestUser),
+        user: publicUser(latestUser, latestStore),
         weixinBot: publicWeixinBotRecord(latestStore.weixinBot),
       });
     }
@@ -3599,7 +3880,7 @@ async function handleWeixinBindingStatus(request, response, sessionKey) {
         ok: true,
         connected: true,
         binding: publicWeixinBinding(latestUser.weixinBinding),
-        user: publicUser(latestUser),
+        user: publicUser(latestUser, latestStore),
         weixinBot: publicWeixinBotRecord(latestStore.weixinBot),
       });
     }
@@ -3645,7 +3926,7 @@ async function handleWeixinBindingDelete(request, response) {
 
   return sendJson(response, 200, {
     ok: true,
-    user: publicUser(user),
+    user: publicUser(user, store),
   });
 }
 
@@ -3743,7 +4024,7 @@ async function handleWeixinBotResolveUser(request, response) {
 
   return sendJson(response, 200, {
     ok: true,
-    user: publicUser(user),
+    user: publicUser(user, store),
     auth: {
       apiKey: user.apiKey,
     },
@@ -3770,7 +4051,74 @@ async function handleGenerateApiKey(request, response) {
   return sendJson(response, 200, {
     message: 'API Key 已生成。',
     apiKey: user.apiKey,
-    user: publicUser(user),
+    user: publicUser(user, store),
+  });
+}
+
+async function handleInviteCodesGet(request, response) {
+  const currentUser = await getSessionUser(request);
+  if (!currentUser) {
+    return sendJson(response, 401, { error: '请先登录。' });
+  }
+
+  const store = await readStore();
+  const user = findUserForSessionContext(store, currentUser);
+  if (!user) {
+    return sendJson(response, 404, { error: '用户不存在。' });
+  }
+
+  return sendJson(response, 200, {
+    inviteQuota: buildInviteQuota(user, store),
+    inviteCodes: listInviteCodesByCreator(store, user.id),
+    user: publicUser(user, store),
+  });
+}
+
+async function handleInviteCodesCreate(request, response) {
+  const currentUser = await getSessionUser(request);
+  if (!currentUser) {
+    return sendJson(response, 401, { error: '请先登录。' });
+  }
+
+  const store = await readStore();
+  const user = findUserForSessionContext(store, currentUser);
+  if (!user) {
+    return sendJson(response, 404, { error: '用户不存在。' });
+  }
+
+  const inviteQuota = buildInviteQuota(user, store);
+  if (!inviteQuota?.canGenerate) {
+    return sendJson(response, 400, {
+      error: user.role === 'admin'
+        ? '管理员邀请码生成失败，请稍后再试。'
+        : `你最多只能生成 ${DEFAULT_INVITE_CODE_LIMIT} 个邀请码，当前额度已用完。`,
+    });
+  }
+
+  const code = createUniqueInviteCode(store);
+  const record = normalizeInviteCodeRecord(code, {
+    code,
+    createdByUserId: user.id,
+    createdByName: user.name,
+    createdByRole: user.role,
+    status: 'unused',
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  });
+
+  store.inviteCodes = {
+    ...(store.inviteCodes || {}),
+    [record.code]: record,
+  };
+  user.updatedAt = nowIso();
+  await writeStore(store);
+
+  return sendJson(response, 201, {
+    message: '邀请码已生成。',
+    inviteCode: publicInviteCode(record),
+    inviteQuota: buildInviteQuota(user, store),
+    inviteCodes: listInviteCodesByCreator(store, user.id),
+    user: publicUser(user, store),
   });
 }
 
@@ -4593,11 +4941,12 @@ async function handleAdminUsers(request, response) {
   const store = await readStore();
   const users = [...store.users]
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
-    .map(publicUser);
+    .map((user) => publicUser(user, store));
 
   return sendJson(response, 200, {
-    currentAdmin: publicUser(adminUser),
+    currentAdmin: publicUser(adminUser, store),
     users,
+    inviteCodes: listInviteCodesForAdmin(store),
   });
 }
 
@@ -4712,6 +5061,9 @@ export async function handleNodeRequest(request, response) {
       const sessionKey = String(url.searchParams.get('sessionKey') || '').trim();
       return await handleWeixinBindingStatus(request, response, sessionKey);
     }
+    if (request.method === 'GET' && url.pathname === '/api/weixin/binding/readiness') {
+      return await handleWeixinBindingReadinessGet(request, response);
+    }
     if (request.method === 'DELETE' && url.pathname === '/api/weixin/binding') {
       return await handleWeixinBindingDelete(request, response);
     }
@@ -4729,6 +5081,12 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'POST' && url.pathname === '/api/api-key/generate') {
       return await handleGenerateApiKey(request, response);
+    }
+    if (request.method === 'GET' && url.pathname === '/api/invite-codes') {
+      return await handleInviteCodesGet(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/invite-codes') {
+      return await handleInviteCodesCreate(request, response);
     }
     if (request.method === 'POST' && url.pathname === '/api/validate-key') {
       return await handleValidateApiKey(request, response);
