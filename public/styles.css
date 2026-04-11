@@ -1322,6 +1322,62 @@ textarea {
   font-size: 20px;
 }
 
+.admin-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(180px, 0.7fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.admin-filter-field {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-filter-field span {
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.admin-filter-field-compact {
+  max-width: 240px;
+}
+
+.admin-filter-input,
+.admin-filter-select {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(88, 76, 183, 0.12);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink);
+  font: inherit;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.admin-filter-input:focus,
+.admin-filter-select:focus {
+  outline: none;
+  border-color: rgba(91, 61, 240, 0.4);
+  box-shadow: 0 0 0 4px rgba(91, 61, 240, 0.08);
+  background: #fff;
+}
+
+.admin-filter-summary {
+  justify-self: end;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(91, 61, 240, 0.06);
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
 .admin-table {
   width: 100%;
   min-width: 860px;
@@ -1376,6 +1432,22 @@ textarea {
 .status-pill.active {
   background: rgba(15, 125, 97, 0.08);
   color: var(--success);
+}
+
+@media (max-width: 960px) {
+  .admin-filter-bar {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .admin-filter-field-compact {
+    max-width: none;
+  }
+
+  .admin-filter-summary {
+    justify-self: stretch;
+    white-space: normal;
+  }
 }
 
 .status-pill.inactive {

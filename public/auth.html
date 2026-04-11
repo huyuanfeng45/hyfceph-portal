@@ -409,6 +409,27 @@
                         </div>
                       </div>
 
+                      <div class="admin-filter-bar">
+                        <label class="admin-filter-field">
+                          <span>搜索邀请码</span>
+                          <input
+                            id="admin-invite-search-input"
+                            class="admin-filter-input"
+                            type="search"
+                            placeholder="搜索邀请码 / 创建人 / 使用人 / 手机号"
+                          />
+                        </label>
+                        <label class="admin-filter-field admin-filter-field-compact">
+                          <span>状态筛选</span>
+                          <select id="admin-invite-status-filter" class="admin-filter-select">
+                            <option value="all">全部状态</option>
+                            <option value="unused">未使用</option>
+                            <option value="used">已使用</option>
+                          </select>
+                        </label>
+                        <div id="admin-invite-filter-summary" class="admin-filter-summary">共 0 条邀请码</div>
+                      </div>
+
                       <div class="admin-table-wrap">
                         <table class="admin-table">
                           <thead>
@@ -424,8 +445,9 @@
                             <tr>
                               <td colspan="5" class="empty-cell">暂无邀请码数据</td>
                             </tr>
-                        </tbody>
-                      </table>
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   </section>
                 </section>

@@ -56,6 +56,9 @@ const refreshAdminButton = document.querySelector('#refresh-admin-button');
 const adminPanel = document.querySelector('#admin-panel');
 const adminUsersBody = document.querySelector('#admin-users-body');
 const adminInviteCodesBody = document.querySelector('#admin-invite-codes-body');
+const adminInviteSearchInput = document.querySelector('#admin-invite-search-input');
+const adminInviteStatusFilter = document.querySelector('#admin-invite-status-filter');
+const adminInviteFilterSummary = document.querySelector('#admin-invite-filter-summary');
 const profileUserName = document.querySelector('#profile-user-name');
 const profileUserRole = document.querySelector('#profile-user-role');
 const profileUserOrganization = document.querySelector('#profile-user-organization');
@@ -551,9 +554,49 @@ function renderInviteCodes(inviteCodes, inviteQuota) {
   }).join('');
 }
 
+function getFilteredAdminInviteCodes() {
+  const keyword = (adminInviteSearchInput?.value || '').trim().toLowerCase();
+  const status = adminInviteStatusFilter?.value || 'all';
+
+  return state.adminInviteCodes.filter((invite) => {
+    const matchesStatus = status === 'all' || invite.status === status;
+    if (!matchesStatus) {
+      return false;
+    }
+
+    if (!keyword) {
+      return true;
+    }
+
+    const haystack = [
+      invite.code,
+      invite.createdByName,
+      invite.createdByRole === 'admin' ? '管理员' : '普通用户',
+      invite.usedByName,
+      invite.usedByPhone,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    return haystack.includes(keyword);
+  });
+}
+
 function renderAdminInviteCodes(inviteCodes) {
+  const total = state.adminInviteCodes.length;
+  const filteredCount = inviteCodes.length;
+  if (adminInviteFilterSummary) {
+    adminInviteFilterSummary.textContent = total
+      ? `共 ${total} 条邀请码，当前显示 ${filteredCount} 条`
+      : '共 0 条邀请码';
+  }
+
   if (!inviteCodes.length) {
-    adminInviteCodesBody.innerHTML = '<tr><td colspan="5" class="empty-cell">暂无邀请码数据</td></tr>';
+    const emptyMessage = total
+      ? '没有符合筛选条件的邀请码'
+      : '暂无邀请码数据';
+    adminInviteCodesBody.innerHTML = `<tr><td colspan="5" class="empty-cell">${emptyMessage}</td></tr>`;
     return;
   }
 
@@ -592,6 +635,8 @@ async function loadAdminUsers() {
     adminPanel.classList.add('hidden');
     operatorSyncPanel.classList.add('hidden');
     renderOperatorSyncStatus(null);
+    if (adminInviteSearchInput) adminInviteSearchInput.value = '';
+    if (adminInviteStatusFilter) adminInviteStatusFilter.value = 'all';
     renderAdminInviteCodes([]);
     return;
   }
@@ -601,7 +646,7 @@ async function loadAdminUsers() {
   adminPanel.classList.remove('hidden');
   operatorSyncPanel.classList.remove('hidden');
   renderAdminUsers(state.adminUsers);
-  renderAdminInviteCodes(state.adminInviteCodes);
+  renderAdminInviteCodes(getFilteredAdminInviteCodes());
 }
 
 async function loadInviteCodes() {
@@ -711,6 +756,14 @@ dashboardMenuItems.forEach((item) => {
     clearFlash();
     setDashboardView(item.dataset.dashboardView);
   });
+});
+
+adminInviteSearchInput?.addEventListener('input', () => {
+  renderAdminInviteCodes(getFilteredAdminInviteCodes());
+});
+
+adminInviteStatusFilter?.addEventListener('change', () => {
+  renderAdminInviteCodes(getFilteredAdminInviteCodes());
 });
 
 registerForm.addEventListener('submit', async (event) => {
