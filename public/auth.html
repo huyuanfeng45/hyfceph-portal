@@ -432,13 +432,22 @@
                             <option value="used">已使用</option>
                           </select>
                         </label>
-                        <div id="admin-invite-filter-summary" class="admin-filter-summary">共 0 条邀请码</div>
+                        <div class="admin-filter-meta">
+                          <div id="admin-invite-filter-summary" class="admin-filter-summary">共 0 条邀请码</div>
+                          <div class="admin-filter-actions">
+                            <button id="admin-invite-export-all-button" class="ghost-button" type="button">批量导出</button>
+                            <button id="admin-invite-export-selected-button" class="ghost-button" type="button">多选导出</button>
+                          </div>
+                        </div>
                       </div>
 
                       <div class="admin-table-wrap">
                         <table class="admin-table">
                           <thead>
                             <tr>
+                              <th class="admin-table-check">
+                                <input id="admin-invite-select-all" type="checkbox" aria-label="全选邀请码" />
+                              </th>
                               <th>邀请码</th>
                               <th>创建人</th>
                               <th>状态</th>
@@ -449,7 +458,7 @@
                           </thead>
                           <tbody id="admin-invite-codes-body">
                             <tr>
-                              <td colspan="6" class="empty-cell">暂无邀请码数据</td>
+                              <td colspan="7" class="empty-cell">暂无邀请码数据</td>
                             </tr>
                           </tbody>
                         </table>

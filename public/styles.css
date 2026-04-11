@@ -1325,7 +1325,7 @@ textarea {
 
 .admin-filter-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1.8fr) minmax(180px, 0.7fr) auto;
+  grid-template-columns: minmax(0, 1.8fr) minmax(180px, 0.7fr) minmax(260px, auto);
   gap: 14px;
   align-items: end;
 }
@@ -1368,15 +1368,27 @@ textarea {
   background: #fff;
 }
 
-.admin-filter-summary {
+.admin-filter-meta {
+  display: grid;
+  gap: 10px;
   justify-self: end;
+}
+
+.admin-filter-summary {
   padding: 12px 14px;
   border-radius: 14px;
   background: rgba(91, 61, 240, 0.06);
   color: var(--ink-soft);
   font-size: 13px;
   line-height: 1.5;
-  white-space: nowrap;
+  white-space: normal;
+}
+
+.admin-filter-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .admin-table {
@@ -1404,6 +1416,17 @@ textarea {
 .admin-table td {
   font-size: 14px;
   line-height: 1.65;
+}
+
+.admin-table-check {
+  width: 52px;
+  text-align: center !important;
+}
+
+.admin-table-check input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--brand);
 }
 
 .admin-table code {
@@ -1447,7 +1470,19 @@ textarea {
 
   .admin-filter-summary {
     justify-self: stretch;
-    white-space: normal;
+  }
+
+  .admin-filter-meta,
+  .admin-filter-actions {
+    justify-self: stretch;
+  }
+
+  .admin-filter-actions {
+    justify-content: stretch;
+  }
+
+  .admin-filter-actions > * {
+    flex: 1 1 180px;
   }
 }
 
