@@ -1179,10 +1179,11 @@ function getInviteCodesGeneratedTotal(user, store) {
   if (user.role === 'admin') {
     return countInviteCodesByCreator(store, user.id);
   }
+  const currentInviteCodeCount = countInviteCodesByCreator(store, user.id);
   if (Number.isInteger(user.inviteCodesGeneratedTotal) && user.inviteCodesGeneratedTotal >= 0) {
-    return user.inviteCodesGeneratedTotal;
+    return Math.max(user.inviteCodesGeneratedTotal, currentInviteCodeCount);
   }
-  return countInviteCodesByCreator(store, user.id);
+  return currentInviteCodeCount;
 }
 
 function buildInviteQuota(user, store) {
