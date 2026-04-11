@@ -4126,6 +4126,48 @@ async function handleInviteCodesCreate(request, response) {
   });
 }
 
+async function handleInviteCodeDelete(request, response, inviteCode) {
+  const currentUser = await getSessionUser(request);
+  if (!currentUser) {
+    return sendJson(response, 401, { error: '请先登录。' });
+  }
+
+  const normalizedCode = String(inviteCode || '').trim().toUpperCase();
+  if (!normalizedCode) {
+    return sendJson(response, 400, { error: '缺少邀请码。' });
+  }
+
+  const store = await readStore();
+  const user = findUserForSessionContext(store, currentUser);
+  if (!user) {
+    return sendJson(response, 404, { error: '用户不存在。' });
+  }
+
+  const inviteRecord = normalizeInviteCodeRecord(normalizedCode, store.inviteCodes?.[normalizedCode]);
+  if (!inviteRecord) {
+    return sendJson(response, 404, { error: '邀请码不存在。' });
+  }
+
+  const isAdmin = user.role === 'admin';
+  const ownsInvite = inviteRecord.createdByUserId === user.id;
+  if (!isAdmin && !ownsInvite) {
+    return sendJson(response, 403, { error: '你只能删除自己生成的邀请码。' });
+  }
+
+  const nextInviteCodes = { ...(store.inviteCodes || {}) };
+  delete nextInviteCodes[normalizedCode];
+  store.inviteCodes = nextInviteCodes;
+  user.updatedAt = nowIso();
+  await writeStore(store);
+
+  return sendJson(response, 200, {
+    message: '邀请码已删除。',
+    inviteQuota: buildInviteQuota(user, store),
+    inviteCodes: listInviteCodesByCreator(store, user.id),
+    user: publicUser(user, store),
+  });
+}
+
 async function handleValidateApiKey(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
@@ -5091,6 +5133,10 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'POST' && url.pathname === '/api/invite-codes') {
       return await handleInviteCodesCreate(request, response);
+    }
+    if (request.method === 'DELETE' && url.pathname.startsWith('/api/invite-codes/')) {
+      const inviteCode = decodeURIComponent(url.pathname.slice('/api/invite-codes/'.length));
+      return await handleInviteCodeDelete(request, response, inviteCode);
     }
     if (request.method === 'POST' && url.pathname === '/api/validate-key') {
       return await handleValidateApiKey(request, response);

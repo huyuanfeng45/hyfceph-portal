@@ -531,7 +531,7 @@ function renderInviteCodes(inviteCodes, inviteQuota) {
   }
 
   if (!inviteCodes.length) {
-    inviteCodesBody.innerHTML = '<tr><td colspan="4" class="empty-cell">暂无邀请码</td></tr>';
+    inviteCodesBody.innerHTML = '<tr><td colspan="5" class="empty-cell">暂无邀请码</td></tr>';
     return;
   }
 
@@ -549,9 +549,44 @@ function renderInviteCodes(inviteCodes, inviteQuota) {
         <td>${statusMarkup}</td>
         <td>${usedBy}</td>
         <td>${formatDateTime(invite.createdAt)}</td>
+        <td>
+          <button class="ghost-button js-delete-invite-code" type="button" data-code="${invite.code}">删除</button>
+        </td>
       </tr>
     `;
   }).join('');
+
+  inviteCodesBody.querySelectorAll('.js-delete-invite-code').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const code = String(button.dataset.code || '').trim();
+      if (!code) {
+        return;
+      }
+      const shouldContinue = window.confirm(`确定删除邀请码 ${code} 吗？删除后将无法恢复。`);
+      if (!shouldContinue) {
+        return;
+      }
+      try {
+        button.disabled = true;
+        const result = await requestJson(`/api/invite-codes/${encodeURIComponent(code)}`, {
+          method: 'DELETE',
+          body: JSON.stringify({}),
+        });
+        state.user = result.user || state.user;
+        updateDashboard(state.user);
+        state.inviteCodes = result.inviteCodes || [];
+        renderInviteCodes(state.inviteCodes, result.inviteQuota || state.user?.inviteQuota || null);
+        if (state.user?.role === 'admin') {
+          await loadAdminUsers();
+        }
+        showFlash(result.message || '邀请码已删除。');
+      } catch (error) {
+        showFlash(error.message, 'error');
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
 }
 
 function getFilteredAdminInviteCodes() {
@@ -596,7 +631,7 @@ function renderAdminInviteCodes(inviteCodes) {
     const emptyMessage = total
       ? '没有符合筛选条件的邀请码'
       : '暂无邀请码数据';
-    adminInviteCodesBody.innerHTML = `<tr><td colspan="5" class="empty-cell">${emptyMessage}</td></tr>`;
+    adminInviteCodesBody.innerHTML = `<tr><td colspan="6" class="empty-cell">${emptyMessage}</td></tr>`;
     return;
   }
 
@@ -623,9 +658,48 @@ function renderAdminInviteCodes(inviteCodes) {
         <td>${statusMarkup}</td>
         <td>${usedByMarkup}</td>
         <td>${timeMarkup}</td>
+        <td>
+          <button class="ghost-button js-admin-delete-invite-code" type="button" data-code="${invite.code}">删除</button>
+        </td>
       </tr>
     `;
   }).join('');
+
+  adminInviteCodesBody.querySelectorAll('.js-admin-delete-invite-code').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const code = String(button.dataset.code || '').trim();
+      if (!code) {
+        return;
+      }
+      const shouldContinue = window.confirm(`确定删除邀请码 ${code} 吗？删除后将无法恢复。`);
+      if (!shouldContinue) {
+        return;
+      }
+      try {
+        button.disabled = true;
+        const result = await requestJson(`/api/invite-codes/${encodeURIComponent(code)}`, {
+          method: 'DELETE',
+          body: JSON.stringify({}),
+        });
+        if (result.user) {
+          state.user = result.user;
+          updateDashboard(state.user);
+        }
+        if (result.inviteCodes) {
+          state.inviteCodes = result.inviteCodes;
+          renderInviteCodes(state.inviteCodes, result.inviteQuota || state.user?.inviteQuota || null);
+        } else {
+          await loadInviteCodes();
+        }
+        await loadAdminUsers();
+        showFlash(result.message || '邀请码已删除。');
+      } catch (error) {
+        showFlash(error.message, 'error');
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
 }
 
 async function loadAdminUsers() {
