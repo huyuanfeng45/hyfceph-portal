@@ -1087,6 +1087,9 @@ function collectWeixinBotConfigs(store) {
 }
 
 function normalizeUserRecord(user) {
+  const inviteCodesGeneratedTotal = Number.isFinite(Number(user?.inviteCodesGeneratedTotal))
+    ? Math.max(0, Math.trunc(Number(user.inviteCodesGeneratedTotal)))
+    : null;
   return {
     id: String(user?.id || randomBytes(12).toString('hex')),
     role: user?.role === 'admin' ? 'admin' : 'user',
@@ -1103,6 +1106,7 @@ function normalizeUserRecord(user) {
     invitedByUserId: typeof user?.invitedByUserId === 'string' && user.invitedByUserId.trim() ? user.invitedByUserId.trim() : null,
     invitedByName: typeof user?.invitedByName === 'string' && user.invitedByName.trim() ? user.invitedByName.trim() : null,
     inviteCodeUsed: typeof user?.inviteCodeUsed === 'string' && user.inviteCodeUsed.trim() ? user.inviteCodeUsed.trim().toUpperCase() : null,
+    inviteCodesGeneratedTotal,
     currentCaseBridge: normalizeBridgeState(user?.currentCaseBridge),
     weixinBinding: normalizeWeixinBindingRecord(user?.weixinBinding),
   };
@@ -1168,6 +1172,19 @@ function countInviteCodesByCreator(store, userId) {
   return Object.values(store?.inviteCodes || {}).filter((item) => item.createdByUserId === normalizedUserId).length;
 }
 
+function getInviteCodesGeneratedTotal(user, store) {
+  if (!user) {
+    return 0;
+  }
+  if (user.role === 'admin') {
+    return countInviteCodesByCreator(store, user.id);
+  }
+  if (Number.isInteger(user.inviteCodesGeneratedTotal) && user.inviteCodesGeneratedTotal >= 0) {
+    return user.inviteCodesGeneratedTotal;
+  }
+  return countInviteCodesByCreator(store, user.id);
+}
+
 function buildInviteQuota(user, store) {
   if (!user) {
     return null;
@@ -1181,7 +1198,7 @@ function buildInviteQuota(user, store) {
       canGenerate: true,
     };
   }
-  const created = countInviteCodesByCreator(store, user.id);
+  const created = getInviteCodesGeneratedTotal(user, store);
   const remaining = Math.max(0, DEFAULT_INVITE_CODE_LIMIT - created);
   return {
     isUnlimited: false,
@@ -3604,6 +3621,7 @@ async function handleRegister(request, response) {
     invitedByUserId: inviteRecord.createdByUserId || inviter?.id || null,
     invitedByName: inviteRecord.createdByName || inviter?.name || null,
     inviteCodeUsed: inviteRecord.code,
+    inviteCodesGeneratedTotal: 0,
   };
   store.inviteCodes = {
     ...(store.inviteCodes || {}),
@@ -4099,6 +4117,7 @@ async function handleInviteCodesCreate(request, response) {
     });
   }
 
+  const priorInviteCodesGeneratedTotal = getInviteCodesGeneratedTotal(user, store);
   const code = createUniqueInviteCode(store);
   const record = normalizeInviteCodeRecord(code, {
     code,
@@ -4114,6 +4133,9 @@ async function handleInviteCodesCreate(request, response) {
     ...(store.inviteCodes || {}),
     [record.code]: record,
   };
+  if (user.role !== 'admin') {
+    user.inviteCodesGeneratedTotal = priorInviteCodesGeneratedTotal + 1;
+  }
   user.updatedAt = nowIso();
   await writeStore(store);
 
