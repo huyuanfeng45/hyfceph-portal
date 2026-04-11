@@ -889,6 +889,10 @@ function isBridgeStateActive(bridgeState) {
   return new Date(bridgeState.expiresAt).getTime() > Date.now();
 }
 
+function normalizeAccountId(raw) {
+  return String(raw || '').trim().toLowerCase().replace(/[@.]/g, '-');
+}
+
 function maskWeixinUserId(value) {
   const source = String(value || '').trim();
   if (!source) {
