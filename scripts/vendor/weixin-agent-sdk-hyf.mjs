@@ -1836,7 +1836,14 @@ async function processOneMessage(full, deps) {
 	const request = {
 		conversationId: full.from_user_id ?? "",
 		text: bodyFromItemList(full.item_list),
-		media
+		media,
+		weixin: {
+			baseUrl: deps.baseUrl,
+			token: deps.token,
+			contextToken,
+			accountId: deps.accountId,
+			cdnBaseUrl: deps.cdnBaseUrl
+		}
 	};
 	const to = full.from_user_id ?? "";
 	let typingTimer;
@@ -2149,4 +2156,4 @@ async function start(agent, opts) {
 	});
 }
 //#endregion
-export { isLoggedIn, login, logout, start };
+export { isLoggedIn, login, logout, sendMessageWeixin, start };

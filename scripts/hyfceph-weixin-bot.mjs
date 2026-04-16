@@ -11,7 +11,7 @@ import { promisify } from 'node:util';
 import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { qrcode } from './vendor/qrcode.mjs';
-import { start as startWeixinBot } from './vendor/weixin-agent-sdk-hyf.mjs';
+import { sendMessageWeixin, start as startWeixinBot } from './vendor/weixin-agent-sdk-hyf.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -79,9 +79,11 @@ const FEISHU_DOC_SOFT_TIMEOUT_MS = 15_000;
 const PORTAL_RETRY_ATTEMPTS = 6;
 const PORTAL_RETRY_BASE_DELAY_MS = 1_500;
 const PORTAL_RETRY_MAX_DELAY_MS = 15_000;
-const BOT_CONFIG_REFRESH_MS = 30_000;
+const BOT_CONFIG_REFRESH_MS = 10_000;
 const LOCAL_MEASURE_BUFFER_BYTES = 128 * 1024 * 1024;
 const WEIXIN_RESULT_CACHE_LIMIT = 50;
+const REPORT_FOLLOW_UP_REPORT_TIMEOUT_MS = 120_000;
+const REPORT_FOLLOW_UP_FEISHU_TIMEOUT_MS = 60_000;
 const execFileAsync = promisify(execFile);
 const PYTHON_QR_OVERLAY_SCRIPT = `
 import json
@@ -203,6 +205,7 @@ function readJsonFileSync(filePath, fallback = {}) {
 }
 
 const latestResultCache = readJsonFileSync(WEIXIN_RESULT_CACHE_PATH, {});
+const pendingReportFollowUps = new Map();
 
 async function requestJson(url, { method = 'GET', headers = {}, body } = {}) {
   return fetchJsonWithRetry(url, {
@@ -670,6 +673,48 @@ function buildSummaryText(result) {
 
   lines.push('', '如需继续，请直接再发一张侧位片。这个微信入口只处理 HYFCeph 测量，不提供普通聊天。');
   return lines.join('\n');
+}
+
+function collectReportLinkLines(result) {
+  const lines = [];
+  const prettyReportUrl = result?.prettyReport?.reportShareUrl || result?.prettyReport?.shortUrl || '';
+  const feishuDocUrl = result?.feishuDoc?.docUrl || '';
+  const reportUrl = result?.report?.reportShareUrl || result?.report?.shortUrl || '';
+  if (prettyReportUrl) {
+    lines.push(`美化报告链接：${prettyReportUrl}`);
+  }
+  if (feishuDocUrl) {
+    lines.push(`飞书文档版：${feishuDocUrl}`);
+  }
+  if (reportUrl) {
+    lines.push(`在线报告链接：${reportUrl}`);
+  }
+  return lines;
+}
+
+function hasMissingReportLinks(result) {
+  const lines = collectReportLinkLines(result);
+  return lines.length < 3;
+}
+
+async function sendWeixinFollowUpText(request, text) {
+  const contextToken = String(request?.weixin?.contextToken || '').trim();
+  const baseUrl = String(request?.weixin?.baseUrl || '').trim();
+  const token = String(request?.weixin?.token || '').trim();
+  const to = String(request?.conversationId || '').trim();
+  if (!contextToken || !baseUrl || !token || !to || !text) {
+    return false;
+  }
+  await sendMessageWeixin({
+    to,
+    text,
+    opts: {
+      baseUrl,
+      token,
+      contextToken,
+    },
+  });
+  return true;
 }
 
 function buildQuickConsultationText(cacheEntry) {
@@ -1512,7 +1557,13 @@ async function enrichResultForUser({ apiKey, result }) {
   return result;
 }
 
-async function hydrateCachedReportsForUser({ conversationId, apiKey, cached }) {
+async function hydrateCachedReportsForUser({
+  conversationId,
+  apiKey,
+  cached,
+  reportSoftTimeoutMs = REPORT_GENERATION_SOFT_TIMEOUT_MS,
+  feishuDocSoftTimeoutMs = FEISHU_DOC_SOFT_TIMEOUT_MS,
+}) {
   if (!cached?.result) {
     return cached;
   }
@@ -1542,8 +1593,8 @@ async function hydrateCachedReportsForUser({ conversationId, apiKey, cached }) {
         resultPayload: workingResult,
         patientName,
       }),
-      REPORT_GENERATION_SOFT_TIMEOUT_MS,
-      `report generation timeout after ${REPORT_GENERATION_SOFT_TIMEOUT_MS}ms`,
+      reportSoftTimeoutMs,
+      `report generation timeout after ${reportSoftTimeoutMs}ms`,
     );
     if (reports.report) {
       workingResult.report = reports.report;
@@ -1567,8 +1618,8 @@ async function hydrateCachedReportsForUser({ conversationId, apiKey, cached }) {
         standardReportUrl: workingResult?.report?.reportShareUrl || workingResult?.report?.shortUrl || '',
         patientName,
       }),
-      FEISHU_DOC_SOFT_TIMEOUT_MS,
-      `feishu doc generation timeout after ${FEISHU_DOC_SOFT_TIMEOUT_MS}ms`,
+      feishuDocSoftTimeoutMs,
+      `feishu doc generation timeout after ${feishuDocSoftTimeoutMs}ms`,
     );
     if (feishuDoc) {
       workingResult.feishuDoc = feishuDoc;
@@ -1585,6 +1636,43 @@ async function hydrateCachedReportsForUser({ conversationId, apiKey, cached }) {
   await saveResultCache();
   await refreshCachedReportArtifacts(conversationId, cached, workingResult);
   return getLatestResultCache(conversationId) || cached;
+}
+
+async function triggerDeferredReportFollowUp({ request, apiKey, conversationId }) {
+  const conversationKey = normalizeConversationKey(conversationId);
+  if (pendingReportFollowUps.has(conversationKey)) {
+    return pendingReportFollowUps.get(conversationKey);
+  }
+  const job = (async () => {
+    try {
+      const cached = getLatestResultCache(conversationId);
+      if (!cached?.result || !hasMissingReportLinks(cached.result)) {
+        return;
+      }
+      const hydrated = await hydrateCachedReportsForUser({
+        conversationId,
+        apiKey,
+        cached,
+        reportSoftTimeoutMs: REPORT_FOLLOW_UP_REPORT_TIMEOUT_MS,
+        feishuDocSoftTimeoutMs: REPORT_FOLLOW_UP_FEISHU_TIMEOUT_MS,
+      });
+      const lines = collectReportLinkLines(hydrated?.result);
+      if (!lines.length) {
+        console.warn('[HYFCeph Weixin] deferred report follow-up skipped: no links generated');
+        return;
+      }
+      await sendWeixinFollowUpText(request, [
+        '这次的报告链接我补发给你：',
+        ...lines,
+      ].join('\n'));
+    } catch (error) {
+      console.warn(`[HYFCeph Weixin] deferred report follow-up failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      pendingReportFollowUps.delete(conversationKey);
+    }
+  })();
+  pendingReportFollowUps.set(conversationKey, job);
+  return job;
 }
 
 function buildUnsupportedText() {
@@ -1674,6 +1762,13 @@ async function createRestrictedAgent() {
               portalUser,
               result: cached?.result || result,
             });
+            if (cached?.result && hasMissingReportLinks(cached.result)) {
+              void triggerDeferredReportFollowUp({
+                request,
+                apiKey: portalUser.auth.apiKey,
+                conversationId: request.conversationId,
+              });
+            }
             return {
               text: buildSummaryText(result),
               media: cached?.annotatedImagePath
@@ -1733,16 +1828,7 @@ async function createRestrictedAgent() {
               console.warn(`[HYFCeph Weixin] on-demand report hydration skipped: ${error instanceof Error ? error.message : String(error)}`);
             }
           }
-          const lines = [];
-          if (hydrated.result?.prettyReport?.reportShareUrl || hydrated.result?.prettyReport?.shortUrl) {
-            lines.push(`美化报告链接：${hydrated.result.prettyReport.reportShareUrl || hydrated.result.prettyReport.shortUrl}`);
-          }
-          if (hydrated.result?.feishuDoc?.docUrl) {
-            lines.push(`飞书文档版：${hydrated.result.feishuDoc.docUrl}`);
-          }
-          if (hydrated.result?.report?.reportShareUrl || hydrated.result?.report?.shortUrl) {
-            lines.push(`在线报告链接：${hydrated.result.report.reportShareUrl || hydrated.result.report.shortUrl}`);
-          }
+          const lines = collectReportLinkLines(hydrated?.result);
           return {
             text: lines.length ? lines.join('\n') : '最近一次测量还没有生成在线报告链接。',
           };
