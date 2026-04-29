@@ -26,6 +26,114 @@ function isFiniteNumber(value) {
   return Number.isFinite(Number(value));
 }
 
+function readCookies() {
+  return document.cookie
+    .split(';')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .reduce((memo, item) => {
+      const separatorIndex = item.indexOf('=');
+      if (separatorIndex < 0) return memo;
+      const key = decodeURIComponent(item.slice(0, separatorIndex).trim());
+      const value = decodeURIComponent(item.slice(separatorIndex + 1).trim());
+      memo[key] = value;
+      return memo;
+    }, {});
+}
+
+function pickCookie(cookies, keys) {
+  for (const key of keys) {
+    if (cookies[key] != null && String(cookies[key]).trim()) {
+      return String(cookies[key]).trim();
+    }
+  }
+  return '';
+}
+
+function readHashParams() {
+  const hash = String(window.location.hash || '');
+  const queryIndex = hash.indexOf('?');
+  if (queryIndex < 0) return {};
+  const params = new URLSearchParams(hash.slice(queryIndex + 1));
+  return Array.from(params.entries()).reduce((memo, [key, value]) => {
+    memo[key] = value;
+    return memo;
+  }, {});
+}
+
+function scanSmartcheckStorage() {
+  const summary = {
+    token: '',
+    erptoken: '',
+    caseMainID: '',
+    patientID: '',
+    photoItemId: '',
+    imgUrl: '',
+    imgPath: '',
+    imgId: '',
+    ID: '',
+    erp: '',
+    source: '',
+    name: '',
+  };
+  const aliases = {
+    token: ['token', 'userToken', 'accessToken', 'access_token', 'authorization', 'Authorization'],
+    erptoken: ['erptoken', 'erpToken'],
+    caseMainID: ['caseMainID', 'caseMainId'],
+    patientID: ['patientID', 'patientId'],
+    photoItemId: ['photoItemId', 'photoItemID'],
+    imgUrl: ['imgUrl', 'imgURL'],
+    imgPath: ['imgPath'],
+    imgId: ['imgId', 'imgID'],
+    ID: ['ID', 'id', 'seqId'],
+    erp: ['erp'],
+    source: ['source'],
+    name: ['name', 'userName'],
+  };
+  const assign = (key, value) => {
+    if (value == null || summary[key]) return;
+    const text = String(value).trim();
+    if (text) summary[key] = text;
+  };
+  const visitNode = (node) => {
+    if (!node || typeof node !== 'object') return;
+    for (const [target, names] of Object.entries(aliases)) {
+      for (const name of names) {
+        if (Object.prototype.hasOwnProperty.call(node, name)) {
+          assign(target, node[name]);
+        }
+      }
+    }
+  };
+  const readArea = (area) => {
+    try {
+      for (let index = 0; index < area.length; index += 1) {
+        const key = area.key(index);
+        if (!key) continue;
+        const rawValue = area.getItem(key);
+        for (const [target, names] of Object.entries(aliases)) {
+          if (names.includes(key)) {
+            assign(target, rawValue);
+          }
+        }
+        const parsed = safeJsonParse(rawValue);
+        if (parsed) {
+          visitObjects(parsed, visitNode);
+        }
+      }
+    } catch {
+      // Ignore storage access errors from the host page.
+    }
+  };
+  readArea(localStorage);
+  readArea(sessionStorage);
+  return summary;
+}
+
+function pickSmartcheckValue(cookies, hashParams, storageSummary, keys) {
+  return pickCookie(cookies, keys) || pickCookie(hashParams, keys) || pickCookie(storageSummary, keys);
+}
+
 function visitObjects(root, visitor, depth = 0, seen = new WeakSet()) {
   if (!root || typeof root !== 'object' || depth > 6) {
     return;
@@ -88,10 +196,11 @@ function scanSessionStorage() {
   return summary;
 }
 
-function buildPayload() {
+function buildLateraPayload() {
   const session = scanSessionStorage();
   return {
     source: 'chrome-extension',
+    provider: 'latera',
     href: window.location.href,
     title: document.title,
     pageUrl: new URL('/latera/', window.location.origin).toString(),
@@ -103,6 +212,46 @@ function buildPayload() {
     ptVersion: session.ptVersion,
     userAgent: navigator.userAgent,
   };
+}
+
+function buildSmartcheckPayload() {
+  const cookies = readCookies();
+  const hashParams = readHashParams();
+  const storageSummary = scanSmartcheckStorage();
+  return {
+    source: 'chrome-extension',
+    provider: 'smartcheck',
+    href: window.location.href,
+    title: document.title,
+    pageUrl: 'https://smartcheck3.smartee.cn/#measureNew',
+    token: pickSmartcheckValue(cookies, hashParams, storageSummary, ['token', 'erptoken']),
+    caseMainID: pickSmartcheckValue(cookies, hashParams, storageSummary, ['caseMainID']),
+    patientID: pickSmartcheckValue(cookies, hashParams, storageSummary, ['patientID']),
+    photoItemId: pickSmartcheckValue(cookies, hashParams, storageSummary, ['photoItemId']),
+    imgUrl: pickSmartcheckValue(cookies, hashParams, storageSummary, ['imgUrl', 'imgPath']),
+    imgId: pickSmartcheckValue(cookies, hashParams, storageSummary, ['imgId']),
+    ID: pickSmartcheckValue(cookies, hashParams, storageSummary, ['ID']),
+    erp: pickSmartcheckValue(cookies, hashParams, storageSummary, ['erp']),
+    sourceType: pickSmartcheckValue(cookies, hashParams, storageSummary, ['source']),
+    smartcheckSource: pickSmartcheckValue(cookies, hashParams, storageSummary, ['source']) || '1',
+    apiHost: 'erp3gateway.smartee.cn',
+    ossHost: 'sdownload.smartee.cn',
+    regionId: 'cn-shanghai',
+    syncRegionId: 'cn-shanghai',
+    accountType: '',
+    lang: navigator.language || '',
+    userName: pickSmartcheckValue(cookies, hashParams, storageSummary, ['name']),
+    ptId: null,
+    ptVersion: null,
+    userAgent: navigator.userAgent,
+  };
+}
+
+function buildPayload() {
+  if (window.location.host === 'smartcheck3.smartee.cn') {
+    return buildSmartcheckPayload();
+  }
+  return buildLateraPayload();
 }
 
 function isVisible(element) {
@@ -310,7 +459,7 @@ function notifyAutoLogin(stage, message) {
       stage,
       message,
       href: window.location.href,
-      pageUrl: new URL('/latera/', window.location.origin).toString(),
+      pageUrl: buildPayload().pageUrl,
     },
   }, () => {
     void chrome.runtime.lastError;
@@ -334,12 +483,19 @@ function emitCapturePayload(payload, reason = 'capture', force = false) {
   }
 
   const signature = JSON.stringify([
+    payload.provider,
     payload.pageUrl,
     payload.token,
     payload.userName,
     payload.href,
     payload.ptId,
     payload.ptVersion,
+    payload.caseMainID,
+    payload.patientID,
+    payload.photoItemId,
+    payload.imgUrl,
+    payload.imgId,
+    payload.ID,
   ]);
   if (!force && signature === lastSignature) {
     return;

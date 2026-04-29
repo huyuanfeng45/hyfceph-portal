@@ -9,14 +9,20 @@ import path from 'node:path';
 import process from 'node:process';
 import { parseArgs } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import OSS from 'ali-oss';
 import { curveCatmullRom, curveCatmullRomClosed, line as svgLine } from 'd3-shape';
 import { TOOTH_TEMPLATE_DATA } from './hyfceph-web-tooth-templates.mjs';
 
-const DEFAULT_PAGE_URL = 'https://pd.aiyayi.com/latera/';
+const DEFAULT_LATERA_PAGE_URL = 'https://pd.aiyayi.com/latera/';
+const DEFAULT_SMARTCHECK_PAGE_URL = 'https://smartcheck3.smartee.cn/#measureNew';
+const DEFAULT_PAGE_URL = DEFAULT_SMARTCHECK_PAGE_URL;
 const DEFAULT_PORTAL_BASE_URL = 'https://hyfceph.52ortho.com/';
 const DEFAULT_CLIENT_ID = 'e5cd7e4891bf95d1d19206ce24a7b32e';
 const DEFAULT_X_APP_KEY = '3b939dfeb3c6d41c5de9298c6afc2db1';
 const DEFAULT_ALGORITHM_NAME = 'ceph_keypoints';
+const DEFAULT_SMARTCHECK_API_HOST = 'erp3gateway.smartee.cn';
+const DEFAULT_SMARTCHECK_OSS_HOST = 'sdownload.smartee.cn';
+const DEFAULT_SMARTCHECK_REGION = 'cn-shanghai';
 const GA_HOST_MAP = new Set(['pd-ga.waveatp.com', 'pdmgr-ga.waveatp.com']);
 const SHARE_DES_KEY = 'askldjqwozx';
 const SHARE_DES_KEY_BYTES = Buffer.from(SHARE_DES_KEY.slice(0, 8), 'utf8');
@@ -35,10 +41,22 @@ const LANDMARK_ALIAS_MAP = new Map([
   ['u1t', 'U1T'],
   ['u1a', 'U1R'],
   ['u1r', 'U1R'],
+  ['u1root', 'U1R'],
+  ['u1apex', 'U1R'],
+  ['u1crown', 'U1T'],
+  ['u1tip', 'U1T'],
+  ['u1edge', 'U1T'],
+  ['u1incisal', 'U1T'],
   ['l1', 'L1T'],
   ['l1t', 'L1T'],
   ['l1a', 'L1R'],
   ['l1r', 'L1R'],
+  ['l1root', 'L1R'],
+  ['l1apex', 'L1R'],
+  ['l1crown', 'L1T'],
+  ['l1tip', 'L1T'],
+  ['l1edge', 'L1T'],
+  ['l1incisal', 'L1T'],
 ]);
 const METRIC_DEFINITIONS = {
   SNA: {
@@ -531,7 +549,8 @@ Options:
   --downloaded-image-output <file> Save the image fetched from --share-url here
   --session-file <file>          Cache validated xiaoliutoken here
   --bridge-file <file>           Legacy local bridge fallback state file
-  --page-url <url>               Latera page URL, default: ${DEFAULT_PAGE_URL}
+  --page-url <url>               SmartCheck/Latera page URL, default: ${DEFAULT_PAGE_URL}
+  --provider <name>              smartcheck or latera, default: inferred from page URL/context
   --api-base <url>               Override REST API base
   --client-id <id>               Override client id
   --x-app-key <key>              Override X-APP-KEY
@@ -768,6 +787,12 @@ function defaultDownloadedImagePath({ ptId, ptVersion, imageUrl }) {
   return path.resolve(`latera-pt${ptId}-v${ptVersion}${ext}`);
 }
 
+function defaultSmartcheckDownloadedImagePath({ imageUrl, imagePath, photoSeqId }) {
+  const ext = extensionFromUrl(imageUrl) || extensionFromUrl(imagePath) || '.jpg';
+  const suffix = photoSeqId || path.basename(String(imagePath || '').split('?')[0], path.extname(String(imagePath || '').split('?')[0])) || Date.now();
+  return path.resolve(`smartcheck-ceph-${suffix}${ext}`);
+}
+
 async function readSessionCache(sessionFile) {
   try {
     const raw = await fs.readFile(sessionFile, 'utf8');
@@ -821,6 +846,9 @@ function buildBridgeContext(bridgeState) {
     source: typeof bridgeState.source === 'string' && bridgeState.source
       ? bridgeState.source
       : 'browser-bridge',
+    provider: typeof bridgeState.provider === 'string' && bridgeState.provider
+      ? bridgeState.provider
+      : null,
     pageUrl: typeof bridgeState.pageUrl === 'string' && bridgeState.pageUrl
       ? bridgeState.pageUrl
       : parsedShareContext?.pageUrl || null,
@@ -834,9 +862,60 @@ function buildBridgeContext(bridgeState) {
       || (typeof bridgeState.accountType === 'string' ? bridgeState.accountType : null),
     lang: parsedShareContext?.lang
       || (typeof bridgeState.lang === 'string' ? bridgeState.lang : null),
+    caseMainID: typeof bridgeState.caseMainID === 'string' ? bridgeState.caseMainID.trim() : null,
+    patientID: typeof bridgeState.patientID === 'string' ? bridgeState.patientID.trim() : null,
+    photoItemId: typeof bridgeState.photoItemId === 'string' ? bridgeState.photoItemId.trim() : null,
+    imgUrl: typeof bridgeState.imgUrl === 'string' ? bridgeState.imgUrl.trim() : null,
+    imgId: typeof bridgeState.imgId === 'string' ? bridgeState.imgId.trim() : null,
+    ID: typeof bridgeState.ID === 'string' ? bridgeState.ID.trim() : null,
+    erp: typeof bridgeState.erp === 'string' ? bridgeState.erp.trim() : null,
+    smartcheckSource: typeof bridgeState.smartcheckSource === 'string' && bridgeState.smartcheckSource.trim()
+      ? bridgeState.smartcheckSource.trim()
+      : (typeof bridgeState.sourceType === 'string' ? bridgeState.sourceType.trim() : null),
+    sourceType: typeof bridgeState.sourceType === 'string' ? bridgeState.sourceType.trim() : null,
+    apiHost: typeof bridgeState.apiHost === 'string' ? bridgeState.apiHost.trim() : null,
+    ossHost: typeof bridgeState.ossHost === 'string' ? bridgeState.ossHost.trim() : null,
+    regionId: typeof bridgeState.regionId === 'string' ? bridgeState.regionId.trim() : null,
+    syncRegionId: typeof bridgeState.syncRegionId === 'string' ? bridgeState.syncRegionId.trim() : null,
     syncedAt: typeof bridgeState.syncedAt === 'string' ? bridgeState.syncedAt : null,
     shareContext: parsedShareContext,
   };
+}
+
+function getUrlHost(value) {
+  try {
+    return new URL(value).host.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function isSmartcheckPageUrl(value) {
+  const host = getUrlHost(value);
+  return host === 'smartcheck3.smartee.cn'
+    || host.endsWith('.smartee.cn')
+    || host.includes('smartcheck');
+}
+
+function normalizeProviderName(value) {
+  const provider = String(value || '').trim().toLowerCase();
+  if (['smartcheck', 'smartee', 'measure-new', 'measure_new'].includes(provider)) {
+    return 'smartcheck';
+  }
+  if (['latera', 'pd', 'aiyayi', 'legacy'].includes(provider)) {
+    return 'latera';
+  }
+  return '';
+}
+
+function resolveProvider({ override, pageUrl, caseContext, requestedImagePath }) {
+  const explicit = normalizeProviderName(override);
+  if (explicit) return explicit;
+  const contextProvider = normalizeProviderName(caseContext?.provider);
+  if (contextProvider) return contextProvider;
+  if (isSmartcheckPageUrl(pageUrl)) return 'smartcheck';
+  if (requestedImagePath && !caseContext) return 'smartcheck';
+  return 'latera';
 }
 
 function isRecentBridgeContext(bridgeContext, maxAgeMinutes = 45) {
@@ -991,6 +1070,37 @@ async function fetchPortalBridgeCurrentCase({ portalBaseUrl, apiKey }) {
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`${formatFetchStage('portal bridge lookup', requestUrl)} returned invalid JSON: ${reason}`);
+  }
+}
+
+async function fetchPortalWeixinBotOperatorSession({ portalBaseUrl, apiKey }) {
+  const requestUrl = new URL('api/weixin/bot/operator-session', portalBaseUrl);
+  let response;
+  try {
+    response = await fetch(requestUrl, {
+      method: 'GET',
+      headers: {
+        'x-api-key': apiKey,
+      },
+    });
+  } catch (error) {
+    throw new Error(`${formatFetchStage('portal operator session lookup', requestUrl)} request failed: ${extractFetchReason(error)}`);
+  }
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`${formatFetchStage('portal operator session lookup', requestUrl)} returned HTTP ${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
+  }
+
+  try {
+    return await readJsonResponse(response);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`${formatFetchStage('portal operator session lookup', requestUrl)} returned invalid JSON: ${reason}`);
   }
 }
 
@@ -1275,14 +1385,332 @@ async function resolveResultPayload(resultIndex) {
   };
 }
 
+function smartcheckApiBaseFromContext(pageUrl, overrideBase, caseContext = {}) {
+  if (overrideBase) return ensureTrailingSlash(new URL(overrideBase).toString());
+  const host = caseContext?.apiHost || DEFAULT_SMARTCHECK_API_HOST;
+  return `https://${host}/`;
+}
+
+function smartcheckRegionFromContext(caseContext = {}) {
+  return caseContext?.regionId || caseContext?.syncRegionId || DEFAULT_SMARTCHECK_REGION;
+}
+
+function smartcheckOssUrlFromPath(filePath, caseContext = {}) {
+  const value = String(filePath || '').trim();
+  if (!value) return '';
+  if (/^https?:\/\//i.test(value)) return value;
+  const host = caseContext?.ossHost || DEFAULT_SMARTCHECK_OSS_HOST;
+  const region = smartcheckRegionFromContext(caseContext);
+  return `https://${host}/F?region=${encodeURIComponent(region)}&path=${value}`;
+}
+
+function smartcheckHeaderSource(caseContext = {}) {
+  return String(caseContext?.smartcheckSource || caseContext?.sourceType || caseContext?.sourceChannel || '1').trim() || '1';
+}
+
+function randomSmartcheckViewId() {
+  return [
+    Date.now().toString(16),
+    Math.random().toString(16).slice(2),
+  ].join('-');
+}
+
+function normalizeAliOssRegion(regionId) {
+  const value = String(regionId || DEFAULT_SMARTCHECK_REGION).trim().toLowerCase();
+  return value.startsWith('oss-') ? value : `oss-${value}`;
+}
+
+async function smartcheckErp3Post({
+  apiBase,
+  token,
+  endpoint,
+  body = {},
+  source = '1',
+  language = 'cn',
+  zoneId = 'Asia/Shanghai',
+  allowPending = false,
+}) {
+  const payload = JSON.stringify(body);
+  const requestUrl = new URL(endpoint, apiBase);
+  requestUrl.search = md5Hex(payload + (token || ''));
+  const result = await requestJson(requestUrl.toString(), {
+    method: 'POST',
+    headers: {
+      userToken: token || '',
+      functionCode: 'SmartCheck',
+      'Content-Type': 'application/json',
+      Language: language || 'cn',
+      Source: source || '1',
+      zoneId,
+    },
+    body: payload,
+    label: `SmartCheck ${endpoint}`,
+  });
+
+  if (result?.status === 1) {
+    return result.data;
+  }
+  if (result?.status === undefined) {
+    return result;
+  }
+  if (result?.status === 2 && allowPending) {
+    return {
+      pending: true,
+      raw: result,
+    };
+  }
+  const message = result?.msg || result?.message || result?.error || JSON.stringify(result);
+  if (allowPending && /任务正在处理中|处理中|processing|pending/i.test(String(message))) {
+    return {
+      pending: true,
+      raw: result,
+    };
+  }
+  throw new Error(`SmartCheck ${endpoint} failed: ${String(message).slice(0, 500)}`);
+}
+
+async function fetchSmartcheckUploadTicket({
+  apiBase,
+  token,
+  source,
+  fileName,
+  regionId,
+  syncRegionId,
+}) {
+  return smartcheckErp3Post({
+    apiBase,
+    token,
+    source,
+    endpoint: 'storage/oss/file/path',
+    body: {
+      fileName,
+      fileSize: 20250113,
+      method: 'SixElementMmeasure',
+      regionId: regionId || DEFAULT_SMARTCHECK_REGION,
+      serverType: 2,
+      syncRegionId: syncRegionId || regionId || DEFAULT_SMARTCHECK_REGION,
+      timeStamp: Date.now(),
+      viewId: randomSmartcheckViewId(),
+    },
+  });
+}
+
+async function uploadImageToSmartcheckOss({
+  apiBase,
+  token,
+  source,
+  filePath,
+  fileName,
+  regionId,
+  syncRegionId,
+}) {
+  const ticket = await fetchSmartcheckUploadTicket({
+    apiBase,
+    token,
+    source,
+    fileName,
+    regionId,
+    syncRegionId,
+  });
+  const ticketRegion = ticket?.regionId || ticket?.RegionID || regionId || DEFAULT_SMARTCHECK_REGION;
+  const uploadPath = ticket?.path || ticket?.Path;
+  const accessKeyId = ticket?.accessKeyId || ticket?.AccessKeyId;
+  const accessKeySecret = ticket?.accessKeySecret || ticket?.AccessKeySecret;
+  const stsToken = ticket?.securityToken || ticket?.SecurityToken;
+  const bucket = ticket?.bucket || ticket?.Bucket;
+  if (!uploadPath || !accessKeyId || !accessKeySecret || !bucket) {
+    throw new Error(`Unexpected SmartCheck OSS ticket: ${JSON.stringify(ticket).slice(0, 500)}`);
+  }
+
+  const client = new OSS({
+    region: normalizeAliOssRegion(ticketRegion),
+    accessKeyId,
+    accessKeySecret,
+    stsToken,
+    bucket,
+    secure: true,
+    timeout: 180000,
+  });
+  const fileStat = await fs.stat(filePath);
+  const uploadResult = fileStat.size <= 8 * 1024 * 1024
+    ? await client.put(uploadPath, filePath, { timeout: 180000 })
+    : await client.multipartUpload(uploadPath, filePath, {
+      timeout: 180000,
+      partSize: 2 * 1024 * 1024,
+    });
+  return {
+    uploadPath: uploadResult?.name || uploadPath,
+    uploadTicket: {
+      regionId: ticketRegion,
+      bucket,
+    },
+  };
+}
+
+function pickSmartcheckPhoto(photoGroups) {
+  const groups = Array.isArray(photoGroups) ? photoGroups : [];
+  const allPhotos = groups.flatMap((group) => Array.isArray(group?.casePhotoList) ? group.casePhotoList : []);
+  return allPhotos.find((item) => Number(item?.type) === 3 && item?.photoBigPath)
+    || allPhotos.find((item) => item?.photoBigPath)
+    || null;
+}
+
+async function resolveSmartcheckCurrentCaseImage({
+  apiBase,
+  token,
+  source,
+  caseContext,
+}) {
+  if (caseContext?.imgUrl) {
+    const imagePath = caseContext.imgUrl;
+    return {
+      imagePath,
+      imageUrl: smartcheckOssUrlFromPath(imagePath, caseContext),
+      photoSeqId: caseContext.imgId || caseContext.ID || null,
+      imageSource: caseContext.source || 'smartcheck-bridge',
+    };
+  }
+
+  const isErpPhotoItem = caseContext?.erp === '1' && caseContext?.photoItemId;
+  const seqId = isErpPhotoItem
+    ? caseContext.photoItemId
+    : (caseContext?.caseMainID || caseContext?.patientID);
+  if (!seqId) {
+    throw new Error('SmartCheck current-case context is missing imgUrl, caseMainID, patientID, and photoItemId.');
+  }
+
+  const endpoint = isErpPhotoItem
+    ? 'machining/PatientPhoto/getTreatPlanCasePhotoGroupList'
+    : 'online4/case/detail/getPhotoGroup';
+  const photoGroups = await smartcheckErp3Post({
+    apiBase,
+    token,
+    source,
+    endpoint,
+    body: { seqId },
+  });
+  const photo = pickSmartcheckPhoto(photoGroups);
+  if (!photo?.photoBigPath) {
+    throw new Error(`SmartCheck case has no lateral ceph image in ${endpoint}.`);
+  }
+  return {
+    imagePath: photo.photoBigPath,
+    imageUrl: smartcheckOssUrlFromPath(photo.photoBigPath, caseContext),
+    photoSeqId: String(photo.seqId || ''),
+    imageSource: 'smartcheck-case-photo',
+  };
+}
+
+async function startSmartcheckSkullTask({
+  apiBase,
+  token,
+  source,
+  imageUrl,
+}) {
+  const result = await smartcheckErp3Post({
+    apiBase,
+    token,
+    source,
+    endpoint: 'algorithm/api/pred/skull',
+    body: { file: imageUrl },
+  });
+  const taskId = result?.bussId || result?.task_id || result?.taskId;
+  if (!taskId) {
+    throw new Error(`Unexpected SmartCheck skull response: ${JSON.stringify(result).slice(0, 500)}`);
+  }
+  return taskId;
+}
+
+async function pollSmartcheckTaskResult({
+  apiBase,
+  token,
+  source,
+  taskId,
+  pollMs,
+  timeoutSeconds,
+}) {
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  while (Date.now() < deadline) {
+    const result = await smartcheckErp3Post({
+      apiBase,
+      token,
+      source,
+      endpoint: 'algorithm/api/task/query',
+      body: { task_id: taskId },
+      allowPending: true,
+    });
+    if (!result?.pending) {
+      return result;
+    }
+    await sleep(pollMs);
+  }
+  throw new Error(`Timed out waiting for SmartCheck result after ${timeoutSeconds}s`);
+}
+
+async function fetchSmartcheckSavedResult({
+  apiBase,
+  token,
+  source,
+  caseContext,
+  imagePath,
+  photoSeqId,
+}) {
+  if (!imagePath || !photoSeqId) {
+    return null;
+  }
+  const rows = await smartcheckErp3Post({
+    apiBase,
+    token,
+    source,
+    endpoint: 'machining/PatientPhoto/getAlgorithmResult',
+    body: {
+      phoneBigPath: imagePath,
+      type: 1,
+      photoSeqId,
+    },
+  });
+  const first = Array.isArray(rows) ? rows[0] : null;
+  if (!first?.resultPath) {
+    return null;
+  }
+  const resultPath = String(first.resultPath).split('/');
+  resultPath.pop();
+  resultPath.push('Smartee.txt');
+  const resultUrl = smartcheckOssUrlFromPath(resultPath.join('/'), caseContext);
+  const response = await requestRaw(resultUrl, { label: 'SmartCheck saved Smartee.txt' });
+  return {
+    url: resultUrl,
+    payload: await readJsonResponse(response),
+  };
+}
+
+function normalizeSmartcheckPayload(payload, metadata = {}) {
+  const data = payload?.data || payload || {};
+  return {
+    provider: 'smartcheck',
+    data,
+    smartcheck: data,
+    metadata,
+  };
+}
+
 function summarizePayload(payload) {
   if (!payload) return {};
   const data = payload?.data || payload || {};
+  const smartcheckPoints = listSmartcheckPointContainers(payload)
+    .reduce((sum, container) => {
+      if (Array.isArray(container.points)) return sum + container.points.length;
+      if (container.points && typeof container.points === 'object') return sum + Object.keys(container.points).length;
+      return sum;
+    }, 0);
   return {
+    provider: payload?.provider || (smartcheckPoints ? 'smartcheck' : 'latera'),
     headPoints: Array.isArray(data.head) ? data.head.length : 0,
     rulerPoints: Array.isArray(data?.ruler?.kps) ? data.ruler.kps.length : 0,
     spineSections: Array.isArray(data.spine) ? data.spine.length : 0,
     hasRuler: Boolean(data.ruler),
+    smartcheckPoints,
+    hasSmartcheckOutline: Boolean(data.outline || payload?.smartcheck?.outline),
   };
 }
 
@@ -1298,7 +1726,9 @@ function normalizeLandmarkToken(value) {
 function canonicalLandmarkName(rawName) {
   const trimmed = String(rawName || '').trim();
   if (!trimmed) return null;
-  return LANDMARK_ALIAS_MAP.get(trimmed.toLowerCase()) || trimmed;
+  const lower = trimmed.toLowerCase();
+  const normalized = normalizeLandmarkToken(trimmed);
+  return LANDMARK_ALIAS_MAP.get(lower) || LANDMARK_ALIAS_MAP.get(normalized) || trimmed;
 }
 
 function extractLateraPoint(item, source) {
@@ -1314,6 +1744,50 @@ function extractLateraPoint(item, source) {
   }
 
   const confidence = coerceNumber(item.confidence);
+  return {
+    landmark,
+    key,
+    source,
+    x: round1(x),
+    y: round1(y),
+    confidence,
+  };
+}
+
+function extractSmartcheckPoint(rawName, value, source) {
+  if (value === null || value === undefined) return null;
+  let landmark = String(rawName || '').trim();
+  let x = null;
+  let y = null;
+  let confidence = null;
+
+  if (Array.isArray(value)) {
+    if (typeof value[0] === 'string' && value.length >= 3) {
+      landmark = String(value[0]).trim();
+      x = coerceNumber(value[1]);
+      y = coerceNumber(value[2]);
+    } else {
+      x = coerceNumber(value[0]);
+      y = coerceNumber(value[1]);
+    }
+  } else if (typeof value === 'object') {
+    landmark = String(value.landmark || value.name || value.pointName || landmark).trim();
+    const position = Array.isArray(value.position)
+      ? value.position
+      : Array.isArray(value.point)
+        ? value.point
+        : Array.isArray(value.coordinate)
+          ? value.coordinate
+          : [];
+    x = coerceNumber(value.x ?? value.X ?? value.left ?? position[0]);
+    y = coerceNumber(value.y ?? value.Y ?? value.top ?? position[1]);
+    confidence = coerceNumber(value.confidence ?? value.score ?? value.prob);
+  }
+
+  const key = canonicalLandmarkName(landmark);
+  if (!landmark || !key || x === null || y === null) {
+    return null;
+  }
   return {
     landmark,
     key,
@@ -1343,11 +1817,65 @@ function collectLateraLandmarks(payload) {
     .filter(Boolean);
 }
 
+function listSmartcheckPointContainers(payload) {
+  const data = payload?.data || payload || {};
+  const smartcheck = payload?.smartcheck || {};
+  const containers = [];
+  const candidates = [
+    [data.pointHuaXi, 'smartcheck-pointHuaXi'],
+    [data.pointList, 'smartcheck-pointList'],
+    [data.points, 'smartcheck-points'],
+    [data.landmarks, 'smartcheck-landmarks'],
+    [data.result?.pointHuaXi, 'smartcheck-result-pointHuaXi'],
+    [data.result?.pointList, 'smartcheck-result-pointList'],
+    [smartcheck.pointHuaXi, 'smartcheck-pointHuaXi'],
+    [smartcheck.pointList, 'smartcheck-pointList'],
+    [smartcheck.points, 'smartcheck-points'],
+  ];
+  if (Array.isArray(data) && data[0] && typeof data[0] === 'object') {
+    candidates.push([data[0], 'smartcheck-saved-pointList']);
+  }
+  for (const [points, source] of candidates) {
+    if (!points || typeof points !== 'object') continue;
+    containers.push({ points, source });
+  }
+  return containers;
+}
+
+function collectSmartcheckLandmarks(payload) {
+  const points = [];
+  for (const { points: container, source } of listSmartcheckPointContainers(payload)) {
+    if (Array.isArray(container)) {
+      for (const item of container) {
+        if (Array.isArray(item)) {
+          points.push(extractSmartcheckPoint(item[0], item, source));
+        } else if (item && typeof item === 'object') {
+          points.push(extractSmartcheckPoint(item.landmark || item.name || item.pointName, item, source));
+        }
+      }
+      continue;
+    }
+    for (const [name, value] of Object.entries(container)) {
+      points.push(extractSmartcheckPoint(name, value, source));
+    }
+  }
+  return points.filter(Boolean);
+}
+
+function collectCephLandmarks(payload) {
+  const lateraPoints = collectLateraLandmarks(payload);
+  const smartcheckPoints = collectSmartcheckLandmarks(payload);
+  if (!lateraPoints.length) return smartcheckPoints;
+  if (!smartcheckPoints.length) return lateraPoints;
+  return [...lateraPoints, ...smartcheckPoints];
+}
+
 function collectOverlayData(payload) {
   const data = payload?.data || payload || {};
+  const smartcheckPoints = collectSmartcheckLandmarks(payload);
   const headPoints = Array.isArray(data.head)
     ? data.head.map((item) => extractLateraPoint(item, 'head')).filter(Boolean)
-    : [];
+    : smartcheckPoints;
   const rulerPoints = Array.isArray(data?.ruler?.kps)
     ? data.ruler.kps.map((item) => extractLateraPoint(item, 'ruler')).filter(Boolean)
     : [];
@@ -2355,7 +2883,7 @@ function buildInsight(metricMap, recognition, unsupportedMetrics) {
 }
 
 function buildLateraAnalysis(payload) {
-  const normalizedLandmarks = collectLateraLandmarks(payload);
+  const normalizedLandmarks = collectCephLandmarks(payload);
   if (!normalizedLandmarks.length) {
     return null;
   }
@@ -2399,6 +2927,378 @@ function summarizeAnalysis(analysis) {
       .filter((item) => item.status === 'supported' || item.status === 'partial')
       .map((item) => item.label),
   };
+}
+
+async function runSmartcheckMeasurement({
+  values,
+  requestedImagePath,
+  caseContext,
+  portalBridgeContext,
+  localBridgeContext,
+  explicitShareContext,
+  bridgeFile,
+  pageUrl,
+  portalBaseUrl,
+  skipPortalValidation,
+  hyfApiKey,
+  portalValidation,
+  sessionCacheEnabled,
+  sessionFile,
+  cachedToken,
+}) {
+  const context = caseContext || portalBridgeContext || localBridgeContext || {};
+  const apiBase = smartcheckApiBaseFromContext(pageUrl, values['api-base'], context);
+  const smartcheckSource = smartcheckHeaderSource(context);
+  const envToken = process.env.SMARTCHECK_TOKEN || process.env.LATERA_TOKEN || process.env.XIAOLIU_TOKEN || '';
+  let smartcheckToken = values.token
+    || envToken
+    || context?.token
+    || portalBridgeContext?.token
+    || localBridgeContext?.token
+    || cachedToken
+    || '';
+  smartcheckToken = String(smartcheckToken || '').trim();
+  const authSource = values.token
+    ? 'cli-token'
+    : envToken
+      ? 'env-token'
+      : context?.source && context?.token
+        ? context.source
+        : portalBridgeContext?.token
+          ? portalBridgeContext.source || 'portal-bridge'
+          : localBridgeContext?.token
+            ? localBridgeContext.source || 'browser-bridge'
+            : cachedToken
+              ? 'session-cache'
+              : 'missing';
+
+  if (!smartcheckToken) {
+    throw new Error('No active SmartCheck session was found. Open https://smartcheck3.smartee.cn/#measureNew once so the bridge can sync it, or provide --token/SMARTCHECK_TOKEN.');
+  }
+
+  let resolvedImagePath = requestedImagePath ? path.resolve(requestedImagePath) : '';
+  let imageSource = requestedImagePath ? 'local' : 'none';
+  let downloadedFromShare = false;
+  let remoteImageUrl = '';
+  let remoteImagePath = '';
+  let photoSeqId = null;
+  let uploadTicket = null;
+
+  const configSnapshotBase = {
+    provider: 'smartcheck',
+    pageUrl,
+    apiBase,
+    algorithmBase: apiBase,
+    algorithmName: 'SmartCheck skull',
+    callbackUrl: null,
+    portalBaseUrl,
+    hyfApiKeyOwner: portalValidation?.owner || null,
+    authSource,
+    imageSource,
+    downloadedFromShare,
+    sessionCacheEnabled,
+    sessionCacheHit: authSource === 'session-cache',
+    sessionFile: sessionCacheEnabled ? sessionFile : null,
+    bridgeFile,
+    bridgeStateHit: Boolean(localBridgeContext),
+    bridgeCase: localBridgeContext ? {
+      provider: localBridgeContext.provider,
+      caseMainID: localBridgeContext.caseMainID,
+      patientID: localBridgeContext.patientID,
+      photoItemId: localBridgeContext.photoItemId,
+      imgUrl: localBridgeContext.imgUrl,
+      imgId: localBridgeContext.imgId,
+      syncedAt: localBridgeContext.syncedAt,
+      hasBridgeToken: Boolean(localBridgeContext.token),
+    } : null,
+    portalBridgeHit: Boolean(portalBridgeContext),
+    portalBridgeCase: portalBridgeContext ? {
+      provider: portalBridgeContext.provider,
+      caseMainID: portalBridgeContext.caseMainID,
+      patientID: portalBridgeContext.patientID,
+      photoItemId: portalBridgeContext.photoItemId,
+      imgUrl: portalBridgeContext.imgUrl,
+      imgId: portalBridgeContext.imgId,
+      syncedAt: portalBridgeContext.syncedAt,
+      hasBridgeToken: Boolean(portalBridgeContext.token),
+    } : null,
+    shareCase: explicitShareContext ? {
+      ptId: explicitShareContext.ptId,
+      ptVersion: explicitShareContext.ptVersion,
+      accountType: explicitShareContext.accountType,
+      lang: explicitShareContext.lang,
+      hasShareToken: Boolean(explicitShareContext.token),
+    } : null,
+    smartcheckSource,
+    hasUserToken: Boolean(smartcheckToken),
+    hasAlgorithmToken: true,
+  };
+
+  if (values['dry-run']) {
+    console.log(JSON.stringify(configSnapshotBase, null, 2));
+    return;
+  }
+
+  if (sessionCacheEnabled && smartcheckToken) {
+    await writeSessionCache(sessionFile, {
+      token: smartcheckToken,
+      provider: 'smartcheck',
+      pageUrl,
+      updatedAt: new Date().toISOString(),
+      authSource,
+    });
+  }
+
+  if (resolvedImagePath) {
+    await fs.access(resolvedImagePath);
+  } else {
+    const currentImage = await resolveSmartcheckCurrentCaseImage({
+      apiBase,
+      token: smartcheckToken,
+      source: smartcheckSource,
+      caseContext: context,
+    });
+    remoteImageUrl = currentImage.imageUrl;
+    remoteImagePath = currentImage.imagePath;
+    photoSeqId = currentImage.photoSeqId;
+    imageSource = currentImage.imageSource;
+    downloadedFromShare = true;
+    const downloadedImagePath = values['downloaded-image-output']
+      || defaultSmartcheckDownloadedImagePath({
+        imageUrl: remoteImageUrl,
+        imagePath: remoteImagePath,
+        photoSeqId,
+      });
+    const downloadResult = await downloadRemoteImage(remoteImageUrl, downloadedImagePath);
+    resolvedImagePath = downloadResult.resolvedPath;
+  }
+
+  const fileBuffer = await fs.readFile(resolvedImagePath);
+  const imageMimeType = inferMimeType(resolvedImagePath, fileBuffer);
+  const fileName = path.basename(resolvedImagePath);
+
+  if (!remoteImageUrl) {
+    const uploaded = await uploadImageToSmartcheckOss({
+      apiBase,
+      token: smartcheckToken,
+      source: smartcheckSource,
+      filePath: resolvedImagePath,
+      fileName: `measureManagement${fileName}`,
+      regionId: context?.regionId || DEFAULT_SMARTCHECK_REGION,
+      syncRegionId: context?.syncRegionId || context?.regionId || DEFAULT_SMARTCHECK_REGION,
+    });
+    remoteImagePath = uploaded.uploadPath;
+    remoteImageUrl = smartcheckOssUrlFromPath(remoteImagePath, context);
+    uploadTicket = uploaded.uploadTicket;
+  }
+
+  if (!skipPortalValidation && hyfApiKey) {
+    await notifyPortalSkillEvent({
+      portalBaseUrl,
+      apiKey: hyfApiKey,
+      eventType: 'image_submission',
+      imageName: fileName,
+      imageSource,
+    });
+  }
+
+  let taskId = null;
+  let resultIndex = null;
+  let resolvedResult = null;
+  try {
+    taskId = await startSmartcheckSkullTask({
+      apiBase,
+      token: smartcheckToken,
+      source: smartcheckSource,
+      imageUrl: remoteImageUrl,
+    });
+    const smartcheckResult = await pollSmartcheckTaskResult({
+      apiBase,
+      token: smartcheckToken,
+      source: smartcheckSource,
+      taskId,
+      pollMs: Number(values['poll-ms']),
+      timeoutSeconds: Number(values['timeout-seconds']),
+    });
+    resolvedResult = {
+      url: null,
+      payload: normalizeSmartcheckPayload(smartcheckResult, {
+        imageUrl: remoteImageUrl,
+        imagePath: remoteImagePath,
+        photoSeqId,
+        uploadTicket,
+      }),
+    };
+    resultIndex = {
+      provider: 'smartcheck',
+      taskId,
+      imageUrl: remoteImageUrl,
+      imagePath: remoteImagePath,
+    };
+    if (!collectSmartcheckLandmarks(resolvedResult.payload).length) {
+      const savedResult = await fetchSmartcheckSavedResult({
+        apiBase,
+        token: smartcheckToken,
+        source: smartcheckSource,
+        caseContext: context,
+        imagePath: remoteImagePath,
+        photoSeqId,
+      });
+      if (savedResult) {
+        resolvedResult = {
+          url: savedResult.url,
+          payload: normalizeSmartcheckPayload(savedResult.payload, {
+            imageUrl: remoteImageUrl,
+            imagePath: remoteImagePath,
+            photoSeqId,
+            source: 'saved-smartee-result',
+          }),
+        };
+      }
+    }
+  } catch (error) {
+    const savedResult = await fetchSmartcheckSavedResult({
+      apiBase,
+      token: smartcheckToken,
+      source: smartcheckSource,
+      caseContext: context,
+      imagePath: remoteImagePath,
+      photoSeqId,
+    });
+    if (!savedResult) {
+      throw error;
+    }
+    resolvedResult = {
+      url: savedResult.url,
+      payload: normalizeSmartcheckPayload(savedResult.payload, {
+        imageUrl: remoteImageUrl,
+        imagePath: remoteImagePath,
+        photoSeqId,
+        source: 'saved-smartee-result',
+      }),
+    };
+    resultIndex = {
+      provider: 'smartcheck',
+      imageUrl: remoteImageUrl,
+      imagePath: remoteImagePath,
+      fallback: 'saved-smartee-result',
+      liveError: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  let analysis = null;
+  let analysisError = null;
+  try {
+    analysis = buildLateraAnalysis(resolvedResult?.payload);
+  } catch (error) {
+    analysisError = error instanceof Error ? error.message : String(error);
+  }
+  let annotatedSvgPath = null;
+  let annotatedPngPath = null;
+  let annotationError = null;
+  let contourSvgPath = null;
+  let contourPngPath = null;
+  let contourError = null;
+  const overlayData = collectOverlayData(resolvedResult?.payload);
+  const landmarks = analysis?.landmarks || collectCephLandmarks(resolvedResult?.payload);
+  if (!values['no-annotated-svg'] && landmarks.length) {
+    try {
+      annotatedSvgPath = await writeAnnotatedSvg({
+        imagePath: resolvedImagePath,
+        imageBuffer: fileBuffer,
+        imageMimeType,
+        landmarks,
+        overlayData,
+        analysis,
+        analysisError,
+        outputPath: path.resolve(values['annotated-output'] || defaultAnnotatedSvgPath(resolvedImagePath)),
+      });
+      annotatedPngPath = await convertSvgToPng(
+        annotatedSvgPath,
+        path.resolve(values['annotated-png-output'] || defaultAnnotatedPngPath(resolvedImagePath)),
+      );
+    } catch (error) {
+      annotationError = error instanceof Error ? error.message : String(error);
+    }
+
+    try {
+      contourSvgPath = await writeContourSvg({
+        imageBuffer: fileBuffer,
+        imageMimeType,
+        landmarks,
+        overlayData,
+        outputPath: path.resolve(values['contour-output'] || defaultContourSvgPath(resolvedImagePath)),
+      });
+      contourPngPath = await convertSvgToPng(
+        contourSvgPath,
+        path.resolve(values['contour-png-output'] || defaultContourPngPath(resolvedImagePath)),
+      );
+    } catch (error) {
+      contourError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  const configSnapshot = {
+    ...configSnapshotBase,
+    imageSource,
+    downloadedFromShare,
+    remoteImageUrl,
+    remoteImagePath,
+  };
+  const outputPath = path.resolve(values.output || defaultOutputPath(resolvedImagePath));
+  const output = {
+    imagePath: resolvedImagePath,
+    outputCreatedAt: new Date().toISOString(),
+    config: configSnapshot,
+    task: {
+      taskId,
+      uploadPath: remoteImagePath,
+      callbackUrl: null,
+    },
+    resultIndex,
+    resultUrl: resolvedResult?.url || null,
+    resultPayload: resolvedResult?.payload || null,
+    analysisError,
+    annotationError,
+    contourError,
+    annotatedSvgPath,
+    annotatedPngPath,
+    contourSvgPath,
+    contourPngPath,
+    landmarks,
+    analysis: analysis ? {
+      recognition: analysis.recognition,
+      scale: analysis.scale,
+      riskLabel: analysis.riskLabel,
+      insight: analysis.insight,
+      metrics: analysis.metrics,
+      unsupportedMetricCodes: analysis.unsupportedMetricCodes,
+      supportedMetricCodes: analysis.supportedMetricCodes,
+      frameworkChoices: analysis.frameworkChoices,
+      frameworkReports: analysis.frameworkReports,
+    } : null,
+    summary: {
+      ...summarizePayload(resolvedResult?.payload),
+      ...summarizeAnalysis(analysis),
+    },
+  };
+
+  await writeOutput(outputPath, output);
+
+  console.log(JSON.stringify({
+    outputPath,
+    annotatedSvgPath,
+    annotatedPngPath,
+    contourSvgPath,
+    contourPngPath,
+    taskId,
+    resultUrl: output.resultUrl,
+    analysisError,
+    annotationError,
+    contourError,
+    summary: output.summary,
+    metrics: output.analysis?.metrics || [],
+  }, null, 2));
 }
 
 function escapeXml(value) {
@@ -2860,6 +3760,7 @@ async function main() {
       'session-file': { type: 'string' },
       'bridge-file': { type: 'string' },
       'page-url': { type: 'string' },
+      provider: { type: 'string' },
       'api-base': { type: 'string' },
       'client-id': { type: 'string' },
       'x-app-key': { type: 'string' },
@@ -2907,14 +3808,28 @@ async function main() {
       portalBaseUrl,
       apiKey: hyfApiKey,
     });
-  const portalBridgePayload = wantsCurrentCase
+  const requestedProvider = normalizeProviderName(values.provider);
+  const preliminaryPageUrl = values['page-url'] || localBridgeContext?.pageUrl || DEFAULT_PAGE_URL;
+  const shouldFetchPortalBridgeContext = wantsCurrentCase
+    || requestedProvider === 'smartcheck'
+    || (!requestedProvider && requestedImagePath && isSmartcheckPageUrl(preliminaryPageUrl))
+    || (!requestedProvider && requestedImagePath && !explicitShareContext);
+  const portalBridgePayload = shouldFetchPortalBridgeContext
     && !skipPortalValidation
     ? await fetchPortalBridgeCurrentCase({
       portalBaseUrl,
       apiKey: hyfApiKey,
     })
     : null;
-  const portalBridgeContext = buildBridgeContext(portalBridgePayload?.currentCase || null);
+  let portalBridgeSource = portalBridgePayload?.currentCase || null;
+  if (shouldFetchPortalBridgeContext && !skipPortalValidation && !portalBridgeSource) {
+    const operatorSessionPayload = await fetchPortalWeixinBotOperatorSession({
+      portalBaseUrl,
+      apiKey: hyfApiKey,
+    });
+    portalBridgeSource = operatorSessionPayload?.operatorSession || null;
+  }
+  const portalBridgeContext = buildBridgeContext(portalBridgeSource);
   const caseContext = explicitShareContext || (wantsCurrentCase ? (portalBridgeContext || localBridgeContext) : null);
 
   if (!requestedImagePath && !caseContext) {
@@ -2923,15 +3838,43 @@ async function main() {
   }
 
   const pageUrl = new URL(values['page-url'] || caseContext?.pageUrl || portalBridgeContext?.pageUrl || localBridgeContext?.pageUrl || DEFAULT_PAGE_URL).toString();
+  const provider = resolveProvider({
+    override: values.provider,
+    pageUrl,
+    caseContext,
+    requestedImagePath,
+  });
+  const sessionCacheEnabled = !values['no-session-cache'];
+  const sessionFile = path.resolve(values['session-file'] || defaultSessionFile());
+  const cachedSession = sessionCacheEnabled ? await readSessionCache(sessionFile) : null;
+  const cachedToken = cachedSession?.token || '';
+
+  if (provider === 'smartcheck') {
+    await runSmartcheckMeasurement({
+      values,
+      requestedImagePath,
+      caseContext,
+      portalBridgeContext,
+      localBridgeContext,
+      explicitShareContext,
+      bridgeFile,
+      pageUrl,
+      portalBaseUrl,
+      skipPortalValidation,
+      hyfApiKey,
+      portalValidation,
+      sessionCacheEnabled,
+      sessionFile,
+      cachedToken,
+    });
+    return;
+  }
+
   const apiBase = buildApiBase(pageUrl, values['api-base']);
   const callbackUrl = buildCallbackUrl(pageUrl);
   const appSettings = await fetchAppSettings(pageUrl);
   const clientId = values['client-id'] || appSettings.clientId;
   const xAppKey = values['x-app-key'] || appSettings.xAppKey;
-  const sessionCacheEnabled = !values['no-session-cache'];
-  const sessionFile = path.resolve(values['session-file'] || defaultSessionFile());
-  const cachedSession = sessionCacheEnabled ? await readSessionCache(sessionFile) : null;
-  const cachedToken = cachedSession?.token || '';
 
   const envToken = process.env.LATERA_TOKEN || process.env.XIAOLIU_TOKEN || '';
   let xiaoliutoken = values.token || envToken || caseContext?.token || portalBridgeContext?.token || localBridgeContext?.token || cachedToken || '';
@@ -3182,7 +4125,7 @@ async function main() {
   let contourPngPath = null;
   let contourError = null;
   const overlayData = collectOverlayData(resolvedResult?.payload);
-  const landmarks = analysis?.landmarks || collectLateraLandmarks(resolvedResult?.payload);
+  const landmarks = analysis?.landmarks || collectCephLandmarks(resolvedResult?.payload);
   if (!values['no-annotated-svg'] && landmarks.length) {
     try {
       annotatedSvgPath = await writeAnnotatedSvg({

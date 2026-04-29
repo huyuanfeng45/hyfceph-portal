@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HYFCeph Bridge",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "description": "Sync the owner's active ceph browser session to HYFCeph and auto re-login after timed logout.",
   "permissions": [
     "storage",
@@ -10,6 +10,9 @@
   ],
   "host_permissions": [
     "https://pd.aiyayi.com/*",
+    "https://smartcheck3.smartee.cn/*",
+    "https://erp3gateway.smartee.cn/*",
+    "https://sdownload.smartee.cn/*",
     "https://hyfceph.52ortho.com/*",
     "https://api.day.app/*",
     "http://127.0.0.1/*",
@@ -26,7 +29,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://pd.aiyayi.com/latera/*"
+        "https://pd.aiyayi.com/latera/*",
+        "https://smartcheck3.smartee.cn/*"
       ],
       "js": [
         "content.js"

@@ -1249,6 +1249,9 @@ async function measureImageForUser({ apiKey, media }) {
     '--page-url',
     operatorSession.pageUrl,
   ];
+  if (operatorSession.provider) {
+    args.push('--provider', operatorSession.provider);
+  }
 
   try {
     await execFileAsync(process.execPath, args, {

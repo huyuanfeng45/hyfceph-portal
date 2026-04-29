@@ -22,8 +22,8 @@ const STORAGE_KEYS = {
   lastSyncedTab: 'hyfceph_last_synced_tab',
   lastAlert: 'hyfceph_last_bark_alert',
 };
-const SUPPORTED_URL_PATTERN = /^https:\/\/pd\.aiyayi\.com\/latera\//i;
-const SUPPORTED_TAB_PATTERNS = ['https://pd.aiyayi.com/latera/*'];
+const SUPPORTED_URL_PATTERN = /^https:\/\/(?:pd\.aiyayi\.com\/latera\/|smartcheck3\.smartee\.cn\/)/i;
+const SUPPORTED_TAB_PATTERNS = ['https://pd.aiyayi.com/latera/*', 'https://smartcheck3.smartee.cn/*'];
 
 function ensureTrailingSlash(value) {
   return value.endsWith('/') ? value : `${value}/`;

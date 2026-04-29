@@ -64,8 +64,6 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const SERVICE_RUNNER = path.join(__dirname, 'scripts', 'hyfceph-remote-runner.mjs');
-const LOCAL_CEPH_AUTOPOINT_RUNNER = process.env.HYFCEPH_LOCAL_IMAGE_RUNNER
-  || path.join(__dirname, 'engines', 'ceph-autopoint', 'scripts', 'run-ceph-autopoint.cjs');
 const MAX_MEASURE_BUFFER_BYTES = 24 * 1024 * 1024;
 const MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
 const PDF_OSS_ACCESS_KEY_ID = process.env.HYFCEPH_PDF_OSS_ACCESS_KEY_ID || '';
@@ -1414,6 +1412,9 @@ function normalizeBridgeState(bridgeState) {
     source: typeof bridgeState.source === 'string' && bridgeState.source.trim()
       ? bridgeState.source.trim()
       : 'portal-bridge',
+    provider: typeof bridgeState.provider === 'string' && bridgeState.provider.trim()
+      ? bridgeState.provider.trim()
+      : null,
     syncedAt,
     expiresAt,
     href: typeof bridgeState.href === 'string' && bridgeState.href.trim() ? bridgeState.href.trim() : null,
@@ -1423,6 +1424,45 @@ function normalizeBridgeState(bridgeState) {
     token: typeof bridgeState.token === 'string' ? bridgeState.token.trim() : '',
     ptId: coerceOptionalNumber(bridgeState.ptId),
     ptVersion: coerceOptionalNumber(bridgeState.ptVersion ?? bridgeState.version),
+    caseMainID: typeof bridgeState.caseMainID === 'string' && bridgeState.caseMainID.trim()
+      ? bridgeState.caseMainID.trim()
+      : null,
+    patientID: typeof bridgeState.patientID === 'string' && bridgeState.patientID.trim()
+      ? bridgeState.patientID.trim()
+      : null,
+    photoItemId: typeof bridgeState.photoItemId === 'string' && bridgeState.photoItemId.trim()
+      ? bridgeState.photoItemId.trim()
+      : null,
+    imgUrl: typeof bridgeState.imgUrl === 'string' && bridgeState.imgUrl.trim()
+      ? bridgeState.imgUrl.trim()
+      : null,
+    imgId: typeof bridgeState.imgId === 'string' && bridgeState.imgId.trim()
+      ? bridgeState.imgId.trim()
+      : null,
+    ID: typeof bridgeState.ID === 'string' && bridgeState.ID.trim()
+      ? bridgeState.ID.trim()
+      : null,
+    erp: typeof bridgeState.erp === 'string' && bridgeState.erp.trim()
+      ? bridgeState.erp.trim()
+      : null,
+    sourceType: typeof bridgeState.sourceType === 'string' && bridgeState.sourceType.trim()
+      ? bridgeState.sourceType.trim()
+      : null,
+    smartcheckSource: typeof bridgeState.smartcheckSource === 'string' && bridgeState.smartcheckSource.trim()
+      ? bridgeState.smartcheckSource.trim()
+      : (typeof bridgeState.sourceType === 'string' && bridgeState.sourceType.trim() ? bridgeState.sourceType.trim() : null),
+    apiHost: typeof bridgeState.apiHost === 'string' && bridgeState.apiHost.trim()
+      ? bridgeState.apiHost.trim()
+      : null,
+    ossHost: typeof bridgeState.ossHost === 'string' && bridgeState.ossHost.trim()
+      ? bridgeState.ossHost.trim()
+      : null,
+    regionId: typeof bridgeState.regionId === 'string' && bridgeState.regionId.trim()
+      ? bridgeState.regionId.trim()
+      : null,
+    syncRegionId: typeof bridgeState.syncRegionId === 'string' && bridgeState.syncRegionId.trim()
+      ? bridgeState.syncRegionId.trim()
+      : null,
     accountType: typeof bridgeState.accountType === 'string' && bridgeState.accountType.trim()
       ? bridgeState.accountType.trim()
       : null,
@@ -1448,7 +1488,7 @@ function normalizeOperatorSession(operatorSession) {
     : null;
   const pageUrl = typeof operatorSession.pageUrl === 'string' && operatorSession.pageUrl.trim()
     ? operatorSession.pageUrl.trim()
-    : (href ? new URL('./', href).toString() : 'https://pd.aiyayi.com/latera/');
+    : (href ? new URL('./', href).toString() : 'https://smartcheck3.smartee.cn/#measureNew');
 
   const syncedAt = isIsoDate(operatorSession.syncedAt) ? new Date(operatorSession.syncedAt).toISOString() : nowIso();
   const expiresAt = isIsoDate(operatorSession.expiresAt)
@@ -1459,12 +1499,54 @@ function normalizeOperatorSession(operatorSession) {
     source: typeof operatorSession.source === 'string' && operatorSession.source.trim()
       ? operatorSession.source.trim()
       : 'chrome-extension',
+    provider: typeof operatorSession.provider === 'string' && operatorSession.provider.trim()
+      ? operatorSession.provider.trim()
+      : null,
     syncedAt,
     expiresAt,
     href,
     title: typeof operatorSession.title === 'string' && operatorSession.title.trim() ? operatorSession.title.trim() : null,
     pageUrl,
     token: typeof operatorSession.token === 'string' ? operatorSession.token.trim() : '',
+    caseMainID: typeof operatorSession.caseMainID === 'string' && operatorSession.caseMainID.trim()
+      ? operatorSession.caseMainID.trim()
+      : null,
+    patientID: typeof operatorSession.patientID === 'string' && operatorSession.patientID.trim()
+      ? operatorSession.patientID.trim()
+      : null,
+    photoItemId: typeof operatorSession.photoItemId === 'string' && operatorSession.photoItemId.trim()
+      ? operatorSession.photoItemId.trim()
+      : null,
+    imgUrl: typeof operatorSession.imgUrl === 'string' && operatorSession.imgUrl.trim()
+      ? operatorSession.imgUrl.trim()
+      : null,
+    imgId: typeof operatorSession.imgId === 'string' && operatorSession.imgId.trim()
+      ? operatorSession.imgId.trim()
+      : null,
+    ID: typeof operatorSession.ID === 'string' && operatorSession.ID.trim()
+      ? operatorSession.ID.trim()
+      : null,
+    erp: typeof operatorSession.erp === 'string' && operatorSession.erp.trim()
+      ? operatorSession.erp.trim()
+      : null,
+    sourceType: typeof operatorSession.sourceType === 'string' && operatorSession.sourceType.trim()
+      ? operatorSession.sourceType.trim()
+      : null,
+    smartcheckSource: typeof operatorSession.smartcheckSource === 'string' && operatorSession.smartcheckSource.trim()
+      ? operatorSession.smartcheckSource.trim()
+      : (typeof operatorSession.sourceType === 'string' && operatorSession.sourceType.trim() ? operatorSession.sourceType.trim() : null),
+    apiHost: typeof operatorSession.apiHost === 'string' && operatorSession.apiHost.trim()
+      ? operatorSession.apiHost.trim()
+      : null,
+    ossHost: typeof operatorSession.ossHost === 'string' && operatorSession.ossHost.trim()
+      ? operatorSession.ossHost.trim()
+      : null,
+    regionId: typeof operatorSession.regionId === 'string' && operatorSession.regionId.trim()
+      ? operatorSession.regionId.trim()
+      : null,
+    syncRegionId: typeof operatorSession.syncRegionId === 'string' && operatorSession.syncRegionId.trim()
+      ? operatorSession.syncRegionId.trim()
+      : null,
     accountType: typeof operatorSession.accountType === 'string' && operatorSession.accountType.trim()
       ? operatorSession.accountType.trim()
       : null,
@@ -1493,6 +1575,7 @@ function publicOperatorSession(operatorSession) {
   }
   return {
     source: operatorSession.source,
+    provider: operatorSession.provider,
     syncedAt: operatorSession.syncedAt,
     expiresAt: operatorSession.expiresAt,
     href: operatorSession.href,
@@ -1501,6 +1584,11 @@ function publicOperatorSession(operatorSession) {
     userName: operatorSession.userName,
     accountType: operatorSession.accountType,
     lang: operatorSession.lang,
+    caseMainID: operatorSession.caseMainID,
+    patientID: operatorSession.patientID,
+    photoItemId: operatorSession.photoItemId,
+    imgUrl: operatorSession.imgUrl,
+    imgId: operatorSession.imgId,
     hasToken: Boolean(operatorSession.token),
     active: isOperatorSessionActive(operatorSession),
   };
@@ -3182,62 +3270,6 @@ async function buildMeasurementResponseArtifacts({
   });
 }
 
-async function buildLocalImageMeasurementArtifacts(localOutput) {
-  const annotatedImagePath = localOutput?.annotatedImagePath || '';
-  const annotatedPng = annotatedImagePath ? await readFileIfExists(annotatedImagePath) : null;
-  const metrics = Array.isArray(localOutput?.metrics) ? localOutput.metrics : [];
-  const unsupportedMetricCodes = Array.isArray(localOutput?.unsupportedMetricCodes)
-    ? localOutput.unsupportedMetricCodes
-    : [];
-  const supportedMetricCodes = Array.isArray(localOutput?.supportedMetricCodes)
-    ? localOutput.supportedMetricCodes
-    : metrics.map((item) => item.code).filter(Boolean);
-  const metricValues = Object.fromEntries(
-    metrics
-      .filter((item) => item?.code && Number.isFinite(Number(item.value)))
-      .map((item) => [item.code, Number(item.value)]),
-  );
-
-  return {
-    analysis: {
-      riskLabel: localOutput?.riskLabel || null,
-      insight: localOutput?.insight || localOutput?.note || null,
-      metrics,
-      unsupportedMetricCodes,
-      reviewTargets: Array.isArray(localOutput?.reviewTargets) ? localOutput.reviewTargets : [],
-      landmarks: Array.isArray(localOutput?.landmarks) ? localOutput.landmarks : [],
-      recognition: localOutput?.recognition || null,
-      engine: localOutput?.engine || null,
-    },
-    analysisError: null,
-    annotationError: annotatedPng ? null : '未生成 PNG 标注图。',
-    contourError: null,
-    summary: {
-      headPoints: Array.isArray(localOutput?.landmarks) ? localOutput.landmarks.length : 0,
-      rulerPoints: 0,
-      spineSections: 0,
-      hasRuler: false,
-      supportedMetrics: supportedMetricCodes,
-      unsupportedMetrics: unsupportedMetricCodes,
-      metricValues,
-      riskLabel: localOutput?.riskLabel || null,
-    },
-    metrics,
-    taskId: null,
-    resultUrl: null,
-    artifacts: {
-      annotatedPngBase64: annotatedPng ? annotatedPng.toString('base64') : null,
-      annotatedPngMimeType: annotatedPng ? 'image/png' : null,
-      annotatedSvgBase64: null,
-      annotatedSvgMimeType: null,
-      contourPngBase64: null,
-      contourPngMimeType: null,
-      contourSvgBase64: null,
-      contourSvgMimeType: null,
-    },
-  };
-}
-
 async function executeRunnerMeasurement({
   shareUrl,
   bridgeState,
@@ -3275,6 +3307,9 @@ async function executeRunnerMeasurement({
     args.push('--no-annotated-svg');
   }
 
+  const operatorProvider = String(operatorSession?.provider || '').trim().toLowerCase()
+    || (/smartcheck3\.smartee\.cn/i.test(String(operatorSession?.pageUrl || '')) ? 'smartcheck' : '');
+
   if (shareUrl) {
     args.push('--share-url', shareUrl);
   } else if (bridgeState) {
@@ -3287,6 +3322,9 @@ async function executeRunnerMeasurement({
     }
     if (operatorSession?.pageUrl) {
       args.push('--page-url', operatorSession.pageUrl);
+    }
+    if (operatorProvider) {
+      args.push('--provider', operatorProvider);
     }
   } else {
     throw new Error('缺少可用病例上下文。');
@@ -3413,41 +3451,6 @@ async function runServerSideOverlapMeasurement({
       contourSvgMimeType: null,
     },
   };
-}
-
-async function runLocalImageMeasurement({
-  imagePath,
-}) {
-  if (!imagePath) {
-    throw new Error('缺少本地图片路径。');
-  }
-  const runnerPath = LOCAL_CEPH_AUTOPOINT_RUNNER;
-  try {
-    await fs.access(runnerPath);
-  } catch {
-    throw new Error('本地图片测量引擎不存在。请在可运行本地 Ceph 模型的服务器上部署，或改用当前病例同步模式。');
-  }
-
-  try {
-    const { stdout, stderr } = await execFileAsync(process.execPath, [runnerPath, '--image', imagePath], {
-      cwd: __dirname,
-      env: {
-        ...process.env,
-      },
-      maxBuffer: MAX_MEASURE_BUFFER_BYTES,
-    });
-    const rawOutput = String(stdout || '').trim();
-    if (!rawOutput) {
-      throw new Error(String(stderr || '').trim() || '本地图片测量没有返回结果。');
-    }
-    const parsedOutput = JSON.parse(rawOutput);
-    return await buildLocalImageMeasurementArtifacts(parsedOutput);
-  } catch (error) {
-    const stderr = String(error?.stderr || '').trim();
-    const stdout = String(error?.stdout || '').trim();
-    const reason = stderr || stdout || (error instanceof Error ? error.message : String(error));
-    throw new Error(reason || '本地图片测量失败。');
-  }
 }
 
 async function sendBarkPush(title, body) {
@@ -4008,12 +4011,26 @@ async function handleWeixinBotOperatorSessionGet(request, response) {
     ok: true,
     operatorSession: {
       source: operatorSession.source,
+      provider: operatorSession.provider,
       syncedAt: operatorSession.syncedAt,
       expiresAt: operatorSession.expiresAt,
       href: operatorSession.href,
       title: operatorSession.title,
       pageUrl: operatorSession.pageUrl,
       token: operatorSession.token,
+      caseMainID: operatorSession.caseMainID,
+      patientID: operatorSession.patientID,
+      photoItemId: operatorSession.photoItemId,
+      imgUrl: operatorSession.imgUrl,
+      imgId: operatorSession.imgId,
+      ID: operatorSession.ID,
+      erp: operatorSession.erp,
+      sourceType: operatorSession.sourceType,
+      smartcheckSource: operatorSession.smartcheckSource,
+      apiHost: operatorSession.apiHost,
+      ossHost: operatorSession.ossHost,
+      regionId: operatorSession.regionId,
+      syncRegionId: operatorSession.syncRegionId,
       accountType: operatorSession.accountType,
       lang: operatorSession.lang,
       userName: operatorSession.userName,
@@ -4273,9 +4290,9 @@ async function handleBridgeCurrentCasePost(request, response) {
     expiresAt: addMinutesIso(DEFAULT_BRIDGE_TTL_MINUTES),
   });
 
-  if (!currentCase?.shareUrl && !currentCase?.token && !currentCase?.ptId) {
+  if (!currentCase?.shareUrl && !currentCase?.token && !currentCase?.ptId && !currentCase?.imgUrl && !currentCase?.caseMainID && !currentCase?.patientID) {
     return sendJson(response, 400, {
-      error: '桥接数据不完整，至少需要 shareUrl、token 或 ptId 中的一项。',
+      error: '桥接数据不完整，至少需要 shareUrl、token、ptId 或 SmartCheck 病例字段中的一项。',
     });
   }
 
@@ -4289,8 +4306,13 @@ async function handleBridgeCurrentCasePost(request, response) {
       syncedAt: currentCase.syncedAt,
       expiresAt: currentCase.expiresAt,
       href: currentCase.href,
+      provider: currentCase.provider,
       ptId: currentCase.ptId,
       ptVersion: currentCase.ptVersion,
+      caseMainID: currentCase.caseMainID,
+      patientID: currentCase.patientID,
+      imgUrl: currentCase.imgUrl,
+      imgId: currentCase.imgId,
       hasShareUrl: Boolean(currentCase.shareUrl),
       hasToken: Boolean(currentCase.token),
     },
@@ -4588,7 +4610,7 @@ async function handleMeasureCurrentCase(request, response) {
   }
 
   const bridgeState = normalizeBridgeState(user.currentCaseBridge);
-  if (!bridgeState?.shareUrl && !bridgeState?.token && !bridgeState?.ptId) {
+  if (!bridgeState?.shareUrl && !bridgeState?.token && !bridgeState?.ptId && !bridgeState?.imgUrl && !bridgeState?.caseMainID && !bridgeState?.patientID) {
     return sendJson(response, 404, { error: '当前病例同步数据不完整，请重新打开病例页面完成同步。' });
   }
 
