@@ -89,6 +89,8 @@ const LOCAL_MEASURE_BUFFER_BYTES = 128 * 1024 * 1024;
 const WEIXIN_RESULT_CACHE_LIMIT = 50;
 const REPORT_FOLLOW_UP_REPORT_TIMEOUT_MS = 120_000;
 const REPORT_FOLLOW_UP_FEISHU_TIMEOUT_MS = 60_000;
+const WEIXIN_REPLY_IMAGE_MAX_EDGE = Number(process.env.HYFCEPH_WEIXIN_REPLY_IMAGE_MAX_EDGE || '1280');
+const WEIXIN_REPLY_IMAGE_JPEG_QUALITY = Number(process.env.HYFCEPH_WEIXIN_REPLY_IMAGE_JPEG_QUALITY || '82');
 const execFileAsync = promisify(execFile);
 
 function normalizeWeixinMeasureMode(value) {
@@ -1055,6 +1057,42 @@ async function composeAnnotatedImageForReply(imagePath, feishuDocUrl, prefix, {
   }
 }
 
+async function prepareWeixinReplyImage(imagePath, prefix) {
+  if (!imagePath) {
+    return imagePath;
+  }
+  await ensureCacheDirs();
+  const outputPath = path.join(
+    WEIXIN_MEDIA_CACHE_DIR,
+    `${prefix}-${Date.now()}-${randomBytes(4).toString('hex')}.jpg`,
+  );
+  const maxEdge = Number.isFinite(WEIXIN_REPLY_IMAGE_MAX_EDGE) && WEIXIN_REPLY_IMAGE_MAX_EDGE > 0
+    ? Math.floor(WEIXIN_REPLY_IMAGE_MAX_EDGE)
+    : 1280;
+  const quality = Number.isFinite(WEIXIN_REPLY_IMAGE_JPEG_QUALITY) && WEIXIN_REPLY_IMAGE_JPEG_QUALITY > 0
+    ? Math.min(100, Math.floor(WEIXIN_REPLY_IMAGE_JPEG_QUALITY))
+    : 82;
+  try {
+    await execFileAsync('sips', [
+      '-Z',
+      String(maxEdge),
+      '-s',
+      'format',
+      'jpeg',
+      '-s',
+      'formatOptions',
+      String(quality),
+      imagePath,
+      '--out',
+      outputPath,
+    ]);
+    return outputPath;
+  } catch (error) {
+    console.warn(`[HYFCeph Weixin] failed to prepare reply image: ${error instanceof Error ? error.message : String(error)}`);
+    return imagePath;
+  }
+}
+
 async function updateLatestResultCache(conversationId, result, options = {}) {
   const key = normalizeConversationKey(conversationId);
   const previous = latestResultCache[key] || {};
@@ -1074,7 +1112,7 @@ async function updateLatestResultCache(conversationId, result, options = {}) {
     result?.artifacts?.annotatedPngMimeType || 'image/png',
     `${key}-annotated`,
   ) || overlapRebuiltPngPath || '';
-  const annotatedImagePath = await composeAnnotatedImageForReply(
+  const composedAnnotatedImagePath = await composeAnnotatedImageForReply(
     rawAnnotatedImagePath || previous.annotatedImagePath || '',
     result?.feishuDoc?.docUrl || '',
     `${key}-annotated-qr`,
@@ -1083,6 +1121,10 @@ async function updateLatestResultCache(conversationId, result, options = {}) {
       qrPosition: isOverlap ? 'bottom-left' : 'top-right',
     },
   ) || previous.annotatedImagePath || '';
+  const annotatedImagePath = await prepareWeixinReplyImage(
+    composedAnnotatedImagePath,
+    `${key}-annotated-wechat`,
+  ) || composedAnnotatedImagePath || previous.annotatedImagePath || '';
   const contourImagePath = await persistArtifactBase64(
     result?.artifacts?.contourPngBase64 || '',
     result?.artifacts?.contourPngMimeType || 'image/png',
@@ -1131,7 +1173,7 @@ async function refreshCachedReportArtifacts(conversationId, cached, result) {
   if (!rawAnnotatedImagePath || !result?.feishuDoc?.docUrl) {
     return;
   }
-  const refreshedAnnotatedImagePath = await composeAnnotatedImageForReply(
+  const refreshedComposedAnnotatedImagePath = await composeAnnotatedImageForReply(
     rawAnnotatedImagePath,
     result.feishuDoc.docUrl,
     `${key}-annotated-qr-refresh`,
@@ -1143,6 +1185,10 @@ async function refreshCachedReportArtifacts(conversationId, cached, result) {
         ? 'bottom-left'
         : 'top-right',
     },
+  );
+  const refreshedAnnotatedImagePath = await prepareWeixinReplyImage(
+    refreshedComposedAnnotatedImagePath,
+    `${key}-annotated-wechat-refresh`,
   );
   if (refreshedAnnotatedImagePath) {
     latestResultCache[key] = {

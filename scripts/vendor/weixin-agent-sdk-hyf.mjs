@@ -1870,17 +1870,35 @@ async function processOneMessage(full, deps) {
 			const mediaUrl = response.media.url;
 			if (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://")) filePath = await downloadRemoteImageToTemp(mediaUrl, path.join(MEDIA_TEMP_DIR, "outbound"));
 			else filePath = path.isAbsolute(mediaUrl) ? mediaUrl : path.resolve(mediaUrl);
-			await sendWeixinMediaFile({
-				filePath,
-				to,
-				text: response.text ? markdownToPlainText(response.text) : "",
-				opts: {
-					baseUrl: deps.baseUrl,
-					token: deps.token,
-					contextToken
-				},
-				cdnBaseUrl: deps.cdnBaseUrl
-			});
+			try {
+				await sendWeixinMediaFile({
+					filePath,
+					to,
+					text: response.text ? markdownToPlainText(response.text) : "",
+					opts: {
+						baseUrl: deps.baseUrl,
+						token: deps.token,
+						contextToken
+					},
+					cdnBaseUrl: deps.cdnBaseUrl
+				});
+			} catch (mediaErr) {
+				logger.error(`processOneMessage: media send failed, falling back to text: ${mediaErr instanceof Error ? mediaErr.stack ?? mediaErr.message : JSON.stringify(mediaErr)}`);
+				const fallbackText = [
+					response.text ? markdownToPlainText(response.text) : "",
+					"",
+					"标点图上传微信 CDN 失败，测量结果已保存。你可以稍后回复“标点图”重试获取图片。"
+				].filter(Boolean).join("\n");
+				if (fallbackText) await sendMessageWeixin({
+					to,
+					text: fallbackText,
+					opts: {
+						baseUrl: deps.baseUrl,
+						token: deps.token,
+						contextToken
+					}
+				});
+			}
 		} else if (response.text) await sendMessageWeixin({
 			to,
 			text: markdownToPlainText(response.text),
