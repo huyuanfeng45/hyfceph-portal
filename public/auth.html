@@ -47,7 +47,7 @@
             </article>
             <article class="auth-highlight">
               <strong>管理员</strong>
-              <span>在这里维护浏览器同步状态、用户列表、Key 有效期和删除操作。</span>
+              <span>在这里维护 SmartCheck 会话状态、用户列表、Key 有效期和删除操作。</span>
             </article>
             <article class="auth-highlight">
               <strong>统一风格</strong>
@@ -163,8 +163,8 @@
                     <small>管理员测量入口</small>
                   </button>
                   <button class="dashboard-menu-item hidden" type="button" data-dashboard-view="sync" data-admin-only="true">
-                    <span>🛰️ 浏览器同步</span>
-                    <small>远程会话状态</small>
+                    <span>🛰️ SmartCheck 会话</span>
+                    <small>主会话与备用通道</small>
                   </button>
                   <button class="dashboard-menu-item hidden" type="button" data-dashboard-view="admin" data-admin-only="true">
                     <span>🛠️ 管理员面板</span>
@@ -334,7 +334,7 @@
                       <div>
                         <div class="section-kicker">Measure</div>
                         <div class="api-card-title">🩻 图片测量</div>
-                        <div class="api-tip">直接上传侧位片即可。服务端会复用管理员浏览器保持在线的远程会话完成定点和测量，公开用户无需安装任何插件。</div>
+                        <div class="api-tip">直接上传侧位片即可。服务端优先使用 SmartCheck 会话完成定点和测量，浏览器扩展同步会话保留为备用。</div>
                       </div>
                     </div>
 
@@ -346,7 +346,7 @@
                     <div class="api-actions">
                       <button id="measure-image-button" class="primary-button" type="button">上传图片并测量</button>
                     </div>
-                    <p class="api-note">如果服务暂时不可用，通常表示管理员浏览器中的远程会话需要刷新。</p>
+                    <p class="api-note">如果服务暂时不可用，先检查服务端 SmartCheck token；浏览器扩展同步会话仍可作为备用。</p>
 
                     <section id="measure-result" class="measure-result hidden">
                       <div class="dashboard-row">
@@ -365,8 +365,8 @@
                     <div class="admin-header">
                       <div>
                         <div class="section-kicker">Bridge</div>
-                        <div class="api-card-title">🛰️ 浏览器同步状态</div>
-                        <div class="api-tip">仅管理员需要使用。请在你自己的 Chrome 中安装 HYFCeph Bridge 扩展，并填入当前管理员 API Key。</div>
+                        <div class="api-card-title">🛰️ SmartCheck 会话状态</div>
+                        <div class="api-tip">服务端会话优先使用；Chrome 扩展同步只作为备用通道，配置方式不变。</div>
                       </div>
                       <button id="refresh-operator-sync-button" class="ghost-button" type="button">刷新状态</button>
                     </div>
@@ -376,11 +376,11 @@
                       <strong id="operator-sync-status">未连接</strong>
                     </div>
 
-                    <p id="operator-sync-detail" class="api-note">扩展开始同步后，这里会显示最近一次同步时间和操作者信息。</p>
+                    <p id="operator-sync-detail" class="api-note">配置服务端 SmartCheck 会话或扩展开始同步后，这里会显示最近一次可用状态。</p>
 
                     <div class="api-actions">
                       <a class="primary-button" href="/bridge-install.html" target="_blank" rel="noreferrer">查看安装说明</a>
-                      <button id="clear-operator-sync-button" class="ghost-button" type="button">清除远程会话</button>
+                      <button id="clear-operator-sync-button" class="ghost-button" type="button">清除备用会话</button>
                     </div>
                   </section>
                 </section>

@@ -385,21 +385,26 @@ function renderMeasureResult(result) {
   measureResult.classList.remove('hidden');
 }
 
-function renderOperatorSyncStatus(operatorSession) {
+function renderOperatorSyncStatus(operatorSession, payload = {}) {
   if (!operatorSession) {
     operatorSyncStatus.textContent = '未连接';
-    operatorSyncDetail.textContent = '扩展开始同步后，这里会显示最近一次同步时间和操作者信息。';
+    operatorSyncDetail.textContent = '配置服务端 SmartCheck 会话或启动浏览器扩展同步后，这里会显示可用状态。';
     return;
   }
 
-  operatorSyncStatus.textContent = operatorSession.active ? '在线' : '已过期';
+  const isServerSession = operatorSession.source === 'server-smartcheck';
+  operatorSyncStatus.textContent = operatorSession.active
+    ? (isServerSession ? '服务端在线' : '浏览器在线')
+    : '已过期';
   const details = [
+    isServerSession ? '优先使用服务端 SmartCheck 会话' : '当前使用浏览器扩展备用会话',
+    payload?.browserOperatorSession?.active && isServerSession ? '浏览器扩展备用会话在线' : '',
     operatorSession.userName ? `用户 ${operatorSession.userName}` : '',
     operatorSession.accountType ? `类型 ${operatorSession.accountType}` : '',
     operatorSession.syncedAt ? `同步于 ${formatDateTime(operatorSession.syncedAt)}` : '',
     operatorSession.expiresAt ? `过期于 ${formatDateTime(operatorSession.expiresAt)}` : '',
   ].filter(Boolean);
-  operatorSyncDetail.textContent = details.join('，') || '扩展已连接，但暂无更多细节。';
+  operatorSyncDetail.textContent = details.join('，') || 'SmartCheck 会话已连接。';
 }
 
 async function requestJson(url, options = {}) {
@@ -945,7 +950,7 @@ async function loadOperatorSyncStatus() {
     const payload = await requestJson('/api/admin/operator-session', {
       method: 'GET',
     });
-    renderOperatorSyncStatus(payload.operatorSession || null);
+    renderOperatorSyncStatus(payload.operatorSession || null, payload);
   } catch {
     renderOperatorSyncStatus(null);
   }
@@ -1308,7 +1313,7 @@ refreshOperatorSyncButton.addEventListener('click', async () => {
   clearFlash();
   try {
     await loadOperatorSyncStatus();
-    showFlash('浏览器同步状态已刷新。');
+    showFlash('SmartCheck 会话状态已刷新。');
   } catch (error) {
     showFlash(error.message, 'error');
   }
@@ -1316,7 +1321,7 @@ refreshOperatorSyncButton.addEventListener('click', async () => {
 
 clearOperatorSyncButton.addEventListener('click', async () => {
   clearFlash();
-  const shouldContinue = window.confirm('清除后，公开用户的远程测量会暂时不可用，直到扩展重新同步。是否继续？');
+  const shouldContinue = window.confirm('清除后，只会删除浏览器扩展备用会话；服务端 SmartCheck 会话不受影响。是否继续？');
   if (!shouldContinue) {
     return;
   }
@@ -1326,7 +1331,7 @@ clearOperatorSyncButton.addEventListener('click', async () => {
       body: JSON.stringify({}),
     });
     await loadOperatorSyncStatus();
-    showFlash('远程会话已清除。');
+    showFlash('浏览器备用会话已清除。');
   } catch (error) {
     showFlash(error.message, 'error');
   }

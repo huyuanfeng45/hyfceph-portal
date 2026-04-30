@@ -65,6 +65,11 @@ const WEIXIN_BOT_SECRET = String(
   || LOCAL_CONFIG.weixinBotSecret
   || '',
 ).trim();
+const WEIXIN_MEASURE_MODE = normalizeWeixinMeasureMode(
+  process.env.HYFCEPH_WEIXIN_MEASURE_MODE
+  || LOCAL_CONFIG.measureMode
+  || 'portal-first',
+);
 
 if (!WEIXIN_BOT_SECRET && !PORTAL_API_KEY) {
   throw new Error(`缺少 HYFCEPH_WEIXIN_BOT_SECRET 或 HYFCEPH_API_KEY，无法启动微信 bot 服务。可在环境变量中提供，或写入 ${WEIXIN_CONFIG_PATH}`);
@@ -85,6 +90,14 @@ const WEIXIN_RESULT_CACHE_LIMIT = 50;
 const REPORT_FOLLOW_UP_REPORT_TIMEOUT_MS = 120_000;
 const REPORT_FOLLOW_UP_FEISHU_TIMEOUT_MS = 60_000;
 const execFileAsync = promisify(execFile);
+
+function normalizeWeixinMeasureMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  if (mode === 'portal-only' || mode === 'local-first' || mode === 'local-only') {
+    return mode;
+  }
+  return 'portal-first';
+}
 const PYTHON_QR_OVERLAY_SCRIPT = `
 import json
 import sys
@@ -1212,7 +1225,7 @@ async function measureImageForUser({ apiKey, media }) {
   void apiKey;
   const operatorSession = await fetchOperatorSessionForBot();
   if (!operatorSession?.token || !operatorSession?.pageUrl) {
-    throw new Error('管理员远程会话暂不可用，请稍后再试。');
+    throw new Error('SmartCheck 会话暂不可用，请稍后再试。');
   }
 
   await fs.mkdir(MEDIA_OUT_DIR, { recursive: true });
@@ -1224,7 +1237,7 @@ async function measureImageForUser({ apiKey, media }) {
   const contourPngPath = path.join(tempDir, 'contour.png');
   const downloadedImagePath = path.join(tempDir, 'input');
   const fileName = media.fileName || path.basename(media.filePath);
-  console.log(`[HYFCeph Weixin] measuring locally file=${fileName} via local runner`);
+  console.log(`[HYFCeph Weixin] measuring file=${fileName} via fallback runner`);
 
   const args = [
     SERVICE_RUNNER,
@@ -1319,6 +1332,33 @@ async function measureImageViaPortal({ apiKey, media }) {
     label: 'portal image measurement request',
   });
   return payload.result;
+}
+
+async function measureSingleImageForUser({ apiKey, media }) {
+  const tryPortal = async () => measureImageViaPortal({ apiKey, media });
+  const tryLocal = async () => measureImageForUser({ apiKey, media });
+
+  if (WEIXIN_MEASURE_MODE === 'local-only') {
+    return await tryLocal();
+  }
+  if (WEIXIN_MEASURE_MODE === 'local-first') {
+    try {
+      return await tryLocal();
+    } catch (error) {
+      console.warn(`[HYFCeph Weixin] local image measurement failed, falling back to portal: ${error instanceof Error ? error.message : String(error)}`);
+      return await tryPortal();
+    }
+  }
+
+  try {
+    return await tryPortal();
+  } catch (error) {
+    if (WEIXIN_MEASURE_MODE === 'portal-only') {
+      throw error;
+    }
+    console.warn(`[HYFCeph Weixin] portal image measurement failed, falling back to direct runner: ${error instanceof Error ? error.message : String(error)}`);
+    return await tryLocal();
+  }
 }
 
 async function measureOverlapForUser({ apiKey, baseMedia, compareMedia, alignMode = 'SN' }) {
@@ -1745,7 +1785,7 @@ async function createRestrictedAgent() {
                   baseMedia: pendingMedia.images[0],
                   compareMedia: pendingMedia.images[1],
                 })
-              : await measureImageForUser({
+              : await measureSingleImageForUser({
                   apiKey: portalUser.auth.apiKey,
                   media: pendingMedia.images[0],
                 });

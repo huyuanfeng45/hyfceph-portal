@@ -27,6 +27,19 @@ const DEFAULT_API_KEY_DAYS = Number(process.env.HYFCEPH_API_KEY_DAYS || '90');
 const DEFAULT_INVITE_CODE_LIMIT = Number(process.env.HYFCEPH_INVITE_CODE_LIMIT || '3');
 const DEFAULT_BRIDGE_TTL_MINUTES = Number(process.env.HYFCEPH_BRIDGE_TTL_MINUTES || '30');
 const DEFAULT_OPERATOR_SESSION_TTL_MINUTES = Number(process.env.HYFCEPH_OPERATOR_SESSION_TTL_MINUTES || '240');
+const DEFAULT_SMARTCHECK_PAGE_URL = 'https://smartcheck3.smartee.cn/#measureNew';
+const DEFAULT_SMARTCHECK_API_HOST = 'erp3gateway.smartee.cn';
+const DEFAULT_SMARTCHECK_OSS_HOST = 'sdownload.smartee.cn';
+const DEFAULT_SMARTCHECK_REGION_ID = 'cn-shanghai';
+const SMARTCHECK_SESSION_MODE = String(process.env.HYFCEPH_SMARTCHECK_SESSION_MODE || 'server-first').trim().toLowerCase();
+const SERVER_SMARTCHECK_TOKEN = String(process.env.HYFCEPH_SMARTCHECK_TOKEN || process.env.SMARTCHECK_TOKEN || '').trim();
+const SERVER_SMARTCHECK_PAGE_URL = String(process.env.HYFCEPH_SMARTCHECK_PAGE_URL || DEFAULT_SMARTCHECK_PAGE_URL).trim();
+const SERVER_SMARTCHECK_SOURCE = String(process.env.HYFCEPH_SMARTCHECK_SOURCE || process.env.SMARTCHECK_SOURCE || '1').trim() || '1';
+const SERVER_SMARTCHECK_API_HOST = String(process.env.HYFCEPH_SMARTCHECK_API_HOST || DEFAULT_SMARTCHECK_API_HOST).trim();
+const SERVER_SMARTCHECK_OSS_HOST = String(process.env.HYFCEPH_SMARTCHECK_OSS_HOST || DEFAULT_SMARTCHECK_OSS_HOST).trim();
+const SERVER_SMARTCHECK_REGION_ID = String(process.env.HYFCEPH_SMARTCHECK_REGION_ID || DEFAULT_SMARTCHECK_REGION_ID).trim();
+const SERVER_SMARTCHECK_SYNC_REGION_ID = String(process.env.HYFCEPH_SMARTCHECK_SYNC_REGION_ID || SERVER_SMARTCHECK_REGION_ID).trim();
+const SERVER_SMARTCHECK_TOKEN_TTL_MINUTES = Number(process.env.HYFCEPH_SMARTCHECK_TOKEN_TTL_MINUTES || '10080');
 const ADMIN_USERNAME = process.env.HYFCEPH_ADMIN_USERNAME || 'huyuanfeng45';
 const ADMIN_PASSWORD = process.env.HYFCEPH_ADMIN_PASSWORD || '85301298';
 const BARK_DEVICE_KEY = process.env.HYFCEPH_BARK_KEY || '7ffBf7F85e3WbFyKrJTEcH';
@@ -1594,6 +1607,131 @@ function publicOperatorSession(operatorSession) {
   };
 }
 
+function normalizeSmartcheckSessionMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  if (mode === 'extension-first' || mode === 'extension-only' || mode === 'server-only') {
+    return mode;
+  }
+  return 'server-first';
+}
+
+function buildServerSmartcheckOperatorSession() {
+  if (!SERVER_SMARTCHECK_TOKEN) {
+    return null;
+  }
+  if (normalizeSmartcheckSessionMode(SMARTCHECK_SESSION_MODE) === 'extension-only') {
+    return null;
+  }
+
+  return normalizeOperatorSession({
+    source: 'server-smartcheck',
+    provider: 'smartcheck',
+    syncedAt: nowIso(),
+    expiresAt: addMinutesIso(safePositiveInteger(SERVER_SMARTCHECK_TOKEN_TTL_MINUTES, 10080)),
+    href: SERVER_SMARTCHECK_PAGE_URL,
+    pageUrl: SERVER_SMARTCHECK_PAGE_URL,
+    token: SERVER_SMARTCHECK_TOKEN,
+    sourceType: SERVER_SMARTCHECK_SOURCE,
+    smartcheckSource: SERVER_SMARTCHECK_SOURCE,
+    apiHost: SERVER_SMARTCHECK_API_HOST,
+    ossHost: SERVER_SMARTCHECK_OSS_HOST,
+    regionId: SERVER_SMARTCHECK_REGION_ID,
+    syncRegionId: SERVER_SMARTCHECK_SYNC_REGION_ID,
+    userName: 'SmartCheck 服务端会话',
+  });
+}
+
+function getActiveStoredOperatorSession(store) {
+  const operatorSession = normalizeOperatorSession(store?.operatorSession);
+  return isOperatorSessionActive(operatorSession) ? operatorSession : null;
+}
+
+function isServerSmartcheckOperatorSession(operatorSession) {
+  return operatorSession?.source === 'server-smartcheck';
+}
+
+function hasSameOperatorSessionIdentity(left, right) {
+  return Boolean(left && right)
+    && left.source === right.source
+    && left.provider === right.provider
+    && left.pageUrl === right.pageUrl
+    && left.token === right.token;
+}
+
+function listMeasurementOperatorSessions(store) {
+  const mode = normalizeSmartcheckSessionMode(SMARTCHECK_SESSION_MODE);
+  const serverSession = buildServerSmartcheckOperatorSession();
+  const storedSession = getActiveStoredOperatorSession(store);
+  const ordered = mode === 'extension-first'
+    ? [storedSession, serverSession]
+    : mode === 'extension-only'
+      ? [storedSession]
+      : mode === 'server-only'
+        ? [serverSession]
+        : [serverSession, storedSession];
+
+  const sessions = [];
+  for (const session of ordered) {
+    if (!session || !isOperatorSessionActive(session)) {
+      continue;
+    }
+    if (sessions.some((existing) => hasSameOperatorSessionIdentity(existing, session))) {
+      continue;
+    }
+    sessions.push(session);
+  }
+  return sessions;
+}
+
+function publicMeasurementSessionStatus(store) {
+  const [primary] = listMeasurementOperatorSessions(store);
+  return {
+    sessionMode: normalizeSmartcheckSessionMode(SMARTCHECK_SESSION_MODE),
+    serverSmartcheckConfigured: Boolean(buildServerSmartcheckOperatorSession()),
+    primaryOperatorSession: publicOperatorSession(primary || null),
+    browserOperatorSession: publicOperatorSession(getActiveStoredOperatorSession(store)),
+  };
+}
+
+async function runWithMeasurementOperatorSessionFallback(store, runner) {
+  const sessions = listMeasurementOperatorSessions(store);
+  if (!sessions.length) {
+    const error = new Error('SmartCheck 会话暂不可用，请稍后重试。');
+    error.statusCode = 503;
+    throw error;
+  }
+
+  let lastAuthError = null;
+  let shouldWriteStore = false;
+  for (const operatorSession of sessions) {
+    try {
+      const result = await runner(operatorSession);
+      if (shouldWriteStore) {
+        await writeStore(store);
+      }
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isLikelyUpstreamAuthError(message)) {
+        throw error;
+      }
+      lastAuthError = error;
+      if (!isServerSmartcheckOperatorSession(operatorSession) && store.operatorSession) {
+        store.operatorSession = null;
+        shouldWriteStore = true;
+      }
+    }
+  }
+
+  if (shouldWriteStore) {
+    await writeStore(store);
+  }
+  const error = new Error('SmartCheck 会话暂不可用，请稍后重试。');
+  error.statusCode = 503;
+  error.cause = lastAuthError;
+  throw error;
+}
+
 function normalizeWeixinBotRecord(record) {
   if (!record || typeof record !== 'object') {
     return null;
@@ -2460,7 +2598,7 @@ function getFeishuStoreKindLabel(kind) {
     case FEISHU_ROW_KIND_INVITE_CODE:
       return '邀请码';
     case FEISHU_ROW_KIND_OPERATOR_SESSION:
-      return '管理员浏览器会话';
+      return '浏览器备用会话';
     case FEISHU_ROW_KIND_PDF_LINK:
       return 'PDF 短链';
     case FEISHU_ROW_KIND_REPORT_LINK:
@@ -2490,7 +2628,7 @@ function buildFeishuStoreSummary(kind, payload) {
         source.createdByName,
       ].filter(Boolean).join(' / ') || String(source.code || '').trim() || '邀请码';
     case FEISHU_ROW_KIND_OPERATOR_SESSION:
-      return [source.userName, source.accountType, source.expiresAt].filter(Boolean).join(' / ') || '管理员浏览器会话';
+      return [source.userName, source.accountType, source.expiresAt].filter(Boolean).join(' / ') || '浏览器备用会话';
     case FEISHU_ROW_KIND_PDF_LINK:
       return [source.patientName, source.variant, source.code].filter(Boolean).join(' / ') || String(source.code || '').trim() || 'PDF 短链';
     case FEISHU_ROW_KIND_REPORT_LINK:
@@ -3176,7 +3314,7 @@ async function requireActiveAdminApiKey(apiKey) {
 
 function isLikelyUpstreamAuthError(message) {
   const text = String(message || '');
-  return /Authentication failed|unable to access system resources|getAccessToken failed|algorithm token/i.test(text);
+  return /Authentication failed|unable to access system resources|getAccessToken failed|algorithm token|No active SmartCheck session|userToken|unauthorized|forbidden|token.*(invalid|expired)|登录|认证|会话/i.test(text);
 }
 
 async function loadResvg() {
@@ -3322,6 +3460,9 @@ async function executeRunnerMeasurement({
     }
     if (operatorSession?.pageUrl) {
       args.push('--page-url', operatorSession.pageUrl);
+    }
+    if (operatorSession?.apiHost) {
+      args.push('--api-base', `https://${String(operatorSession.apiHost).replace(/^https?:\/\//i, '').replace(/\/+$/, '')}/`);
     }
     if (operatorProvider) {
       args.push('--provider', operatorProvider);
@@ -4002,13 +4143,14 @@ async function handleWeixinBotOperatorSessionGet(request, response) {
   }
 
   const store = await readStore();
-  const operatorSession = normalizeOperatorSession(store.operatorSession);
-  if (!operatorSession || !isOperatorSessionActive(operatorSession)) {
-    return sendJson(response, 503, { error: '管理员远程会话暂不可用，请先重新同步浏览器会话。' });
+  const [operatorSession] = listMeasurementOperatorSessions(store);
+  if (!operatorSession) {
+    return sendJson(response, 503, { error: 'SmartCheck 服务端会话暂不可用，请稍后再试。' });
   }
 
   return sendJson(response, 200, {
     ok: true,
+    sessionMode: normalizeSmartcheckSessionMode(SMARTCHECK_SESSION_MODE),
     operatorSession: {
       source: operatorSession.source,
       provider: operatorSession.provider,
@@ -4347,10 +4489,14 @@ async function handleAdminOperatorSessionGet(request, response) {
     store.operatorSession = null;
     await writeStore(store);
   }
+  const measurementStatus = publicMeasurementSessionStatus(store);
 
   return sendJson(response, 200, {
     ok: true,
-    operatorSession: publicOperatorSession(operatorSession && isOperatorSessionActive(operatorSession) ? operatorSession : null),
+    operatorSession: measurementStatus.primaryOperatorSession,
+    browserOperatorSession: measurementStatus.browserOperatorSession,
+    sessionMode: measurementStatus.sessionMode,
+    serverSmartcheckConfigured: measurementStatus.serverSmartcheckConfigured,
   });
 }
 
@@ -4661,20 +4807,11 @@ async function handleMeasureImage(request, response) {
   const resolvedImagePath = path.join(tempDir, `${sanitizeFileStem(path.basename(upload.fileName, path.extname(upload.fileName)))}${uploadExt}`);
 
   try {
-    const operatorSession = normalizeOperatorSession(store.operatorSession);
-    if (!isOperatorSessionActive(operatorSession)) {
-      if (store.operatorSession) {
-        store.operatorSession = null;
-        await writeStore(store);
-      }
-      return sendJson(response, 503, { error: '服务端远程会话暂不可用，请稍后重试。' });
-    }
-
     await fs.writeFile(resolvedImagePath, upload.imageBuffer);
-    const result = await runServerSideMeasurement({
+    const result = await runWithMeasurementOperatorSessionFallback(store, (operatorSession) => runServerSideMeasurement({
       imagePath: resolvedImagePath,
       operatorSession,
-    });
+    }));
     if (payload.includeReportPayloadKey && isPdfOssConfigured()) {
       result.reportPayload = await uploadReportPayloadToOss({
         user,
@@ -4715,10 +4852,8 @@ async function handleMeasureImage(request, response) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (isLikelyUpstreamAuthError(message)) {
-      store.operatorSession = null;
-      await writeStore(store);
-      return sendJson(response, 503, { error: '服务端远程会话暂不可用，请稍后重试。' });
+    if (error?.statusCode === 503 || isLikelyUpstreamAuthError(message)) {
+      return sendJson(response, 503, { error: 'SmartCheck 会话暂不可用，请稍后重试。' });
     }
     return sendJson(response, 502, { error: message || '图片测量失败。' });
   } finally {
@@ -4915,24 +5050,15 @@ async function handleMeasureOverlap(request, response) {
   );
 
   try {
-    const operatorSession = normalizeOperatorSession(store.operatorSession);
-    if (!isOperatorSessionActive(operatorSession)) {
-      if (store.operatorSession) {
-        store.operatorSession = null;
-        await writeStore(store);
-      }
-      return sendJson(response, 503, { error: '服务端远程会话暂不可用，请稍后重试。' });
-    }
-
     await fs.writeFile(baseImagePath, baseUpload.imageBuffer);
     await fs.writeFile(compareImagePath, compareUpload.imageBuffer);
 
-    const result = await runServerSideOverlapMeasurement({
+    const result = await runWithMeasurementOperatorSessionFallback(store, (operatorSession) => runServerSideOverlapMeasurement({
       baseImagePath,
       compareImagePath,
       operatorSession,
       alignMode,
-    });
+    }));
     if (shouldGenerateReport) {
       result.report = await generateAndUploadHtmlReport({
         user,
@@ -4977,10 +5103,8 @@ async function handleMeasureOverlap(request, response) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (isLikelyUpstreamAuthError(message)) {
-      store.operatorSession = null;
-      await writeStore(store);
-      return sendJson(response, 503, { error: '服务端远程会话暂不可用，请稍后重试。' });
+    if (error?.statusCode === 503 || isLikelyUpstreamAuthError(message)) {
+      return sendJson(response, 503, { error: 'SmartCheck 会话暂不可用，请稍后重试。' });
     }
     return sendJson(response, 502, {
       error: message || '轮廓重叠失败。',
@@ -5120,13 +5244,18 @@ export async function handleNodeRequest(request, response) {
 
     if (request.method === 'GET' && url.pathname === '/api/health') {
       const store = await readStore();
+      const measurementStatus = publicMeasurementSessionStatus(store);
       return sendJson(response, 200, {
         ok: true,
         service: 'HYFCeph Portal',
         barkConfigured: Boolean(BARK_DEVICE_KEY),
         storeBackend: STORE_BACKEND,
         feishuStoreConfigured: isFeishuBitableConfigured(),
-        operatorSessionActive: isOperatorSessionActive(store.operatorSession),
+        operatorSessionActive: Boolean(measurementStatus.primaryOperatorSession?.active),
+        operatorSessionSource: measurementStatus.primaryOperatorSession?.source || null,
+        operatorSessionMode: measurementStatus.sessionMode,
+        serverSmartcheckConfigured: measurementStatus.serverSmartcheckConfigured,
+        browserOperatorSessionActive: Boolean(measurementStatus.browserOperatorSession?.active),
         pdfOssConfigured: isPdfOssConfigured(),
         pdfOssCustomDomain: PDF_OSS_CUSTOM_DOMAIN ? `https://${PDF_OSS_CUSTOM_DOMAIN}` : null,
         weixinBotConfigured: Boolean(store.weixinBot?.token && store.weixinBot?.accountId),

@@ -2949,7 +2949,11 @@ async function runSmartcheckMeasurement({
   const context = caseContext || portalBridgeContext || localBridgeContext || {};
   const apiBase = smartcheckApiBaseFromContext(pageUrl, values['api-base'], context);
   const smartcheckSource = smartcheckHeaderSource(context);
-  const envToken = process.env.SMARTCHECK_TOKEN || process.env.LATERA_TOKEN || process.env.XIAOLIU_TOKEN || '';
+  const envToken = process.env.HYFCEPH_SMARTCHECK_TOKEN
+    || process.env.SMARTCHECK_TOKEN
+    || process.env.LATERA_TOKEN
+    || process.env.XIAOLIU_TOKEN
+    || '';
   let smartcheckToken = values.token
     || envToken
     || context?.token
