@@ -9,6 +9,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { parseArgs } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import vm from 'node:vm';
 import OSS from 'ali-oss';
 import { curveCatmullRom, curveCatmullRomClosed, line as svgLine } from 'd3-shape';
 import { TOOTH_TEMPLATE_DATA } from './hyfceph-web-tooth-templates.mjs';
@@ -23,6 +24,9 @@ const DEFAULT_ALGORITHM_NAME = 'ceph_keypoints';
 const DEFAULT_SMARTCHECK_API_HOST = 'erp3gateway.smartee.cn';
 const DEFAULT_SMARTCHECK_OSS_HOST = 'sdownload.smartee.cn';
 const DEFAULT_SMARTCHECK_REGION = 'cn-shanghai';
+const DEFAULT_SMARTCHECK_MEASURE_SCRIPT_URL = 'https://smartcheck3.smartee.cn/model/measureNew.js';
+const SMARTCHECK_DEFAULT_RULER_LENGTH_MM = 20;
+const SMARTCHECK_ALLOWED_RULER_LENGTHS_MM = new Set([5, 10, 15, 20]);
 const GA_HOST_MAP = new Set(['pd-ga.waveatp.com', 'pdmgr-ga.waveatp.com']);
 const SHARE_DES_KEY = 'askldjqwozx';
 const SHARE_DES_KEY_BYTES = Buffer.from(SHARE_DES_KEY.slice(0, 8), 'utf8');
@@ -113,7 +117,101 @@ const METRIC_ORDER = ['SNA', 'SNB', 'ANB', 'GoGn-SN', 'FMA', 'U1-SN', 'IMPA'];
 const PRIMARY_LANDMARK_KEYS = new Set(
   Object.values(METRIC_DEFINITIONS).flatMap((definition) => definition.requiredKeys),
 );
-const FRAMEWORK_CHOICES = ['Downs', 'Steiner', '北大分析法', 'ABO', 'Ricketts', 'Tweed', 'McNamara', 'Jarabak'];
+const LEGACY_FRAMEWORK_CHOICES = ['Downs', 'Steiner', '北大分析法', 'ABO', 'Ricketts', 'Tweed', 'McNamara', 'Jarabak'];
+const SMARTCHECK_RIGHT_PANEL_METHODS = [
+  {
+    code: 'huaxiType',
+    label: '华西分析法',
+    moduleName: 'measure/huaxiAnalysisMethod',
+    exportName: 'huaxiAnalysisMethod',
+    dataKey: 'huaxi',
+    pageClassName: 'huaxiPageData',
+    pageMethodName: 'getHuaxiPageData',
+  },
+  {
+    code: 'beidaType',
+    label: '北京大学分析法',
+    moduleName: 'measure/beidaAnalysisMethod',
+    exportName: 'beidaAnalysisMethod',
+    dataKey: 'beida',
+    pageClassName: 'beidaPageData',
+    pageMethodName: 'getBeidaPageData',
+  },
+  {
+    code: 'JarabakType',
+    label: 'Jarabak分析法',
+    moduleName: 'measure/jarabakAnalysisMethod',
+    exportName: 'jarabakAnalysisMethod',
+    dataKey: 'jarbabk',
+    pageClassName: 'jarbabkPageData',
+    pageMethodName: 'getJarbabkPageData',
+  },
+  {
+    code: 'JiuYuanType',
+    label: '九院分析法',
+    moduleName: 'measure/jiuyuanAnalysisMethod',
+    exportName: 'jiuyuanAnalysisMethod',
+    dataKey: 'jiuyuan',
+    pageClassName: 'jiuyuanPageData',
+    pageMethodName: 'getJiuyuanPageData',
+  },
+  {
+    code: 'tweedType',
+    label: 'TWEED分析法',
+    moduleName: 'measure/tweedAnalysisMethod',
+    exportName: 'tweedAnalysisMethod',
+    dataKey: 'tweed',
+    pageClassName: 'tweedPageData',
+    pageMethodName: 'gettweedPageData',
+  },
+  {
+    code: 'rickettsType',
+    label: 'Ricketts分析法',
+    moduleName: 'measure/rickettsAnalysisMethod',
+    exportName: 'rickettsAnalysisMethod',
+    dataKey: 'ricketts',
+    pageClassName: 'rickettsPageData',
+    pageMethodName: 'getrickettsPageData',
+  },
+  {
+    code: 'downsType',
+    label: 'Downs分析法',
+    moduleName: 'measure/downsAnalysisMethod',
+    exportName: 'downsAnalysisMethod',
+    dataKey: 'downs',
+    pageClassName: 'downsPageData',
+    pageMethodName: 'getdownsPageData',
+  },
+  {
+    code: 'steinerType',
+    label: 'Steiner分析法',
+    moduleName: 'measure/steinerAnalysisMethod',
+    exportName: 'steinerAnalysisMethod',
+    dataKey: 'steiner',
+    pageClassName: 'steinerPageData',
+    pageMethodName: 'getsteinerPageData',
+  },
+  {
+    code: 'eastmanType',
+    label: 'Eastman分析法',
+    moduleName: 'measure/EastmanAnalysisMethod',
+    exportName: 'eastmanAnalysisMethod',
+    dataKey: 'eastman',
+    pageClassName: 'eastmanPageData',
+    pageMethodName: 'getEastmanPageData',
+  },
+  {
+    code: 'eboType',
+    label: 'EBO分析法',
+    moduleName: 'measure/EBOAnalysisMethod',
+    exportName: 'EBOAnalysisMethod',
+    dataKey: 'EBO',
+    pageClassName: 'EBOPageData',
+    pageMethodName: 'getEBOPageData',
+  },
+];
+const SMARTCHECK_RIGHT_PANEL_FRAMEWORK_CHOICES = SMARTCHECK_RIGHT_PANEL_METHODS.map((method) => method.label);
+const FRAMEWORK_CHOICES = SMARTCHECK_RIGHT_PANEL_FRAMEWORK_CHOICES;
 const RICKETTS_CONTOUR_KEYS = ['Tpl', 'Go', 'Rp', 'Man3', 'Ar', 'Pcd', 'Co', 'Go13', 'Go12', 'R3', 'Lj5', 'Lj4', 'Lj3', 'J'];
 const WEB_FRAMEWORK_DATA = [
   {
@@ -620,6 +718,10 @@ function clamp(value, low, high) {
 
 function round1(value) {
   return Math.round(Number(value) * 10) / 10;
+}
+
+function round2(value) {
+  return Math.round(Number(value) * 100) / 100;
 }
 
 function md5Hex(value) {
@@ -2332,6 +2434,8 @@ function buildMeasurementScale(payload) {
     : [];
   const rulerDistanceMm = coerceNumber(data?.ruler?.ruler_distance);
   if (!rulerPoints.length || rulerPoints.length < 2 || !rulerDistanceMm) {
+    const smartcheckScale = buildSmartcheckMeasurementScale(payload);
+    if (smartcheckScale) return smartcheckScale;
     return {
       hasRuler: false,
       rulerDistanceMm: null,
@@ -2354,6 +2458,48 @@ function buildMeasurementScale(payload) {
     rulerPixelLength: round1(rulerPixelLength),
     mmPerPx: rulerDistanceMm / rulerPixelLength,
   };
+}
+
+function smartcheckPointContainersForScale(payload) {
+  const data = payload?.data || payload || {};
+  const smartcheck = payload?.smartcheck || {};
+  return [
+    data.pointHuaXi,
+    data.pointList,
+    data.points,
+    data.result?.pointHuaXi,
+    data.result?.pointList,
+    smartcheck.pointHuaXi,
+    smartcheck.pointList,
+    smartcheck.points,
+  ].filter((item) => item && typeof item === 'object' && !Array.isArray(item));
+}
+
+function resolveSmartcheckRulerLength(value) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && SMARTCHECK_ALLOWED_RULER_LENGTHS_MM.has(numeric)) {
+    return numeric;
+  }
+  return SMARTCHECK_DEFAULT_RULER_LENGTH_MM;
+}
+
+function buildSmartcheckMeasurementScale(payload) {
+  for (const container of smartcheckPointContainersForScale(payload)) {
+    const ruler1 = extractSmartcheckPoint('ruler1', container.ruler1, 'smartcheck-ruler');
+    const ruler2 = extractSmartcheckPoint('ruler2', container.ruler2, 'smartcheck-ruler');
+    if (!ruler1 || !ruler2) continue;
+    const rulerPixelLength = distanceBetweenPoints(ruler1, ruler2);
+    if (!rulerPixelLength) continue;
+    const rulerDistanceMm = resolveSmartcheckRulerLength(container.rulerLength);
+    return {
+      hasRuler: true,
+      source: 'smartcheck-pointHuaXi-ruler',
+      rulerDistanceMm,
+      rulerPixelLength: round1(rulerPixelLength),
+      mmPerPx: rulerDistanceMm / rulerPixelLength,
+    };
+  }
+  return null;
 }
 
 function formatItemValue(unit, value) {
@@ -2798,6 +2944,532 @@ const FRAMEWORK_CALCULATION_REGISTRY = {
   'SN-NPo': makeDegSpec(['S', 'N', 'Pog'], 'vr(S,N,Pog)', ({ pointMap }) => triangleAngle(pointMap, ['S', 'N', 'Pog'])),
 };
 
+let smartcheckRightPanelEnginePromise = null;
+
+function createSmartcheckStorageStub() {
+  const store = new Map([['lan', '0']]);
+  return {
+    get length() {
+      return store.size;
+    },
+    getItem(key) {
+      return store.has(key) ? store.get(key) : null;
+    },
+    setItem(key, value) {
+      store.set(String(key), String(value));
+    },
+    removeItem(key) {
+      store.delete(String(key));
+    },
+    clear() {
+      store.clear();
+    },
+    key(index) {
+      return Array.from(store.keys())[index] || null;
+    },
+  };
+}
+
+function createSmartcheckDomNodeStub() {
+  return {
+    style: {},
+    children: [],
+    setAttribute() {},
+    appendChild(child) {
+      this.children.push(child);
+    },
+    removeChild() {},
+    remove() {},
+    addEventListener() {},
+    dispatchEvent() {},
+    click() {},
+    getContext() {
+      return null;
+    },
+    innerHTML: '',
+    innerText: '',
+    textContent: '',
+  };
+}
+
+function createSmartcheckJqueryStub() {
+  const stub = {
+    length: 0,
+    append() { return stub; },
+    appendTo() { return stub; },
+    remove() { return stub; },
+    fadeIn() { return stub; },
+    fadeOut() { return stub; },
+    text() { return stub; },
+    html() { return ''; },
+    css() { return stub; },
+    attr() { return ''; },
+    addClass() { return stub; },
+    removeClass() { return stub; },
+    hasClass() { return false; },
+    is() { return false; },
+    width() { return 0; },
+    height() { return 0; },
+    innerHeight() { return 0; },
+    children() { return stub; },
+    find() { return stub; },
+    parent() { return stub; },
+    on() { return stub; },
+    off() { return stub; },
+    click() { return stub; },
+    hover() { return stub; },
+    focus() { return stub; },
+    mousemove() { return stub; },
+    unbind() { return stub; },
+    offset() { return { left: 0, top: 0 }; },
+  };
+  return function jqueryStub() {
+    return stub;
+  };
+}
+
+function resolveSmartcheckAmdDependency(fromModuleName, dependency) {
+  if (!dependency.startsWith('.')) return dependency;
+  const parts = fromModuleName.split('/');
+  parts.pop();
+  for (const part of dependency.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return parts.join('/');
+}
+
+function createSmartcheckRightPanelEngine(scriptText) {
+  const modules = new Map();
+  function define(moduleName, dependencies, factory) {
+    if (typeof moduleName !== 'string') return;
+    let deps = dependencies;
+    let moduleFactory = factory;
+    if (typeof dependencies === 'function') {
+      deps = ['require', 'exports'];
+      moduleFactory = dependencies;
+    }
+    modules.set(moduleName, {
+      dependencies: Array.isArray(deps) ? deps : [],
+      factory: moduleFactory,
+      exports: {},
+      loaded: false,
+    });
+  }
+  define.amd = true;
+
+  const localStorage = createSmartcheckStorageStub();
+  const sessionStorage = createSmartcheckStorageStub();
+  const documentStub = {
+    cookie: 'lan=0',
+    body: createSmartcheckDomNodeStub(),
+    createElement: createSmartcheckDomNodeStub,
+    createEvent: () => ({ initEvent() {} }),
+    getElementById: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+  const windowStub = {
+    navigator: { language: 'zh-CN', userAgent: 'Chrome' },
+    location: { href: DEFAULT_SMARTCHECK_PAGE_URL },
+    webkit: null,
+    SmarteeWebview: null,
+    URL: { createObjectURL: () => '' },
+    btoa: (value) => Buffer.from(String(value), 'binary').toString('base64'),
+    atob: (value) => Buffer.from(String(value), 'base64').toString('binary'),
+  };
+  const sandbox = {
+    define,
+    console,
+    window: windowStub,
+    document: documentStub,
+    navigator: windowStub.navigator,
+    location: windowStub.location,
+    localStorage,
+    sessionStorage,
+    $: createSmartcheckJqueryStub(),
+    Image: function ImageStub() {},
+    Blob: globalThis.Blob || function BlobStub() {},
+    File: globalThis.File || function FileStub() {},
+    FileReader: function FileReaderStub() {},
+    MouseEvent: function MouseEventStub() {},
+    XMLHttpRequest: function XMLHttpRequestStub() {},
+    URL: windowStub.URL,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+  };
+  windowStub.document = documentStub;
+  windowStub.localStorage = localStorage;
+  windowStub.sessionStorage = sessionStorage;
+  windowStub.$ = sandbox.$;
+
+  vm.runInNewContext(scriptText, sandbox, {
+    filename: 'SmartCheck.measureNew.js',
+    timeout: 5000,
+  });
+
+  const requireModule = (moduleName, fromModuleName = moduleName) => {
+    if (moduleName === 'require') {
+      return (dependency) => requireModule(resolveSmartcheckAmdDependency(fromModuleName, dependency), fromModuleName);
+    }
+    if (moduleName === 'exports') {
+      const fromModule = modules.get(fromModuleName);
+      return fromModule?.exports || {};
+    }
+    const resolvedName = resolveSmartcheckAmdDependency(fromModuleName, moduleName);
+    const moduleRecord = modules.get(resolvedName);
+    if (!moduleRecord) {
+      return {};
+    }
+    if (moduleRecord.loaded) return moduleRecord.exports;
+    moduleRecord.loaded = true;
+    const args = moduleRecord.dependencies.map((dependency) => {
+      if (dependency === 'require') {
+        return (name) => requireModule(name, resolvedName);
+      }
+      if (dependency === 'exports') return moduleRecord.exports;
+      return requireModule(dependency, resolvedName);
+    });
+    const result = typeof moduleRecord.factory === 'function'
+      ? moduleRecord.factory(...args)
+      : moduleRecord.factory;
+    if (result !== undefined) {
+      moduleRecord.exports = result;
+    }
+    return moduleRecord.exports;
+  };
+
+  const measureLang = requireModule('components/measureLang')?.measureLang;
+  return {
+    requireModule,
+    translate(value) {
+      const text = String(value ?? '').trim();
+      if (!text) return '';
+      try {
+        const translated = measureLang?.getText?.(text);
+        return translated ? String(translated) : text;
+      } catch {
+        return text;
+      }
+    },
+  };
+}
+
+async function fetchSmartcheckMeasureScript() {
+  const url = process.env.HYFCEPH_SMARTCHECK_MEASURE_SCRIPT_URL || DEFAULT_SMARTCHECK_MEASURE_SCRIPT_URL;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/javascript,text/javascript,*/*',
+        Referer: DEFAULT_SMARTCHECK_PAGE_URL,
+        'User-Agent': 'HYFCeph/SmartCheck-report-sync',
+      },
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`SmartCheck measure script HTTP ${response.status}: ${text.slice(0, 240)}`);
+    }
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function loadSmartcheckRightPanelEngine() {
+  if (!smartcheckRightPanelEnginePromise) {
+    smartcheckRightPanelEnginePromise = fetchSmartcheckMeasureScript()
+      .then((scriptText) => createSmartcheckRightPanelEngine(scriptText))
+      .catch((error) => {
+        smartcheckRightPanelEnginePromise = null;
+        throw error;
+      });
+  }
+  return smartcheckRightPanelEnginePromise;
+}
+
+function cloneSmartcheckPointList(pointList) {
+  return Object.fromEntries(
+    Object.entries(pointList).map(([key, value]) => [key, Array.isArray(value) ? value.slice() : value]),
+  );
+}
+
+function addSmartcheckPointAlias(pointList, alias, source) {
+  if (!pointList[alias] && pointList[source]) {
+    pointList[alias] = pointList[source].slice();
+  }
+}
+
+function buildSmartcheckPanelPointList(pointMap, payload) {
+  const workingPointMap = new Map(pointMap);
+  ensureWebDerivedPoints(workingPointMap);
+  const pointList = {};
+  for (const point of workingPointMap.values()) {
+    const coords = [Number(point.x), Number(point.y)];
+    if (!Number.isFinite(coords[0]) || !Number.isFinite(coords[1])) continue;
+    if (point.landmark && !pointList[point.landmark]) pointList[point.landmark] = coords;
+    if (point.key && !pointList[point.key]) pointList[point.key] = coords;
+  }
+
+  for (const container of smartcheckPointContainersForScale(payload)) {
+    for (const key of ['ruler1', 'ruler2']) {
+      if (!pointList[key] && Array.isArray(container[key])) {
+        const x = coerceNumber(container[key][0]);
+        const y = coerceNumber(container[key][1]);
+        if (x !== null && y !== null) pointList[key] = [x, y];
+      }
+    }
+  }
+
+  addSmartcheckPointAlias(pointList, 'U1', 'U1T');
+  addSmartcheckPointAlias(pointList, 'U1T', 'U1');
+  addSmartcheckPointAlias(pointList, 'U1A', 'U1R');
+  addSmartcheckPointAlias(pointList, 'U1R', 'U1A');
+  addSmartcheckPointAlias(pointList, 'L1', 'L1T');
+  addSmartcheckPointAlias(pointList, 'L1T', 'L1');
+  addSmartcheckPointAlias(pointList, 'L1A', 'L1R');
+  addSmartcheckPointAlias(pointList, 'L1R', 'L1A');
+  addSmartcheckPointAlias(pointList, 'Pogmark', "Pog'");
+  addSmartcheckPointAlias(pointList, "Pog'", 'Pogmark');
+
+  const scale = buildMeasurementScale(payload);
+  if (!pointList.ruler1 || !pointList.ruler2) {
+    pointList.ruler1 = [0, 0];
+    pointList.ruler2 = [1, 0];
+  }
+  const rulerLength = scale?.hasRuler && Number.isFinite(scale.rulerDistanceMm)
+    ? scale.rulerDistanceMm
+    : SMARTCHECK_DEFAULT_RULER_LENGTH_MM;
+
+  return { pointList, rulerLength, scale };
+}
+
+function smartcheckSectionLabel(section) {
+  if (section === 'bone') return '骨测量';
+  if (section === 'tooth') return '牙测量';
+  if (section === 'soft') return '软组织';
+  return section || '测量';
+}
+
+function translateSmartcheckDefinition(engine, definition) {
+  if (!definition || typeof definition !== 'object') return definition;
+  return {
+    ...definition,
+    name: engine.translate(definition.name),
+    standardVal: engine.translate(definition.standardVal),
+    minDescribe: engine.translate(definition.minDescribe),
+    standardDescribe: engine.translate(definition.standardDescribe),
+    maxDescribe: engine.translate(definition.maxDescribe),
+  };
+}
+
+function buildSmartcheckDefinitionIndex(engine, methodModule, dataKey) {
+  const data = methodModule?.[dataKey] || {};
+  const byUnique = new Map();
+  const byName = new Map();
+  let totalCount = 0;
+  for (const [section, definitions] of Object.entries(data)) {
+    if (!Array.isArray(definitions)) continue;
+    for (const rawDefinition of definitions) {
+      const definition = translateSmartcheckDefinition(engine, rawDefinition);
+      totalCount += 1;
+      byUnique.set(`${section}:${definition.unique}`, definition);
+      byName.set(`${section}:${definition.name}`, definition);
+    }
+  }
+  return { byUnique, byName, totalCount };
+}
+
+function inferSmartcheckPanelUnit(name, standardVal = '') {
+  const text = `${name || ''} ${standardVal || ''}`;
+  if (/%/.test(text)) return '%';
+  if (/mm/i.test(text)) return 'mm';
+  return 'deg';
+}
+
+function formatSmartcheckPanelNumber(value) {
+  const rounded = round2(value);
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+}
+
+function formatSmartcheckPanelValue(value, unit) {
+  const text = formatSmartcheckPanelNumber(value);
+  if (unit === '%') return `${text}%`;
+  if (unit === 'mm') return `${text} mm`;
+  return `${text}°`;
+}
+
+function formatSmartcheckPanelReference(standardVal, unit) {
+  const text = String(standardVal || '').trim();
+  if (!text) return '';
+  if (/[°%]|mm|男|女/i.test(text)) return `参考: ${text}`;
+  const suffix = unit === '%' ? '%' : unit === 'mm' ? ' mm' : '°';
+  return `参考: ${text}${suffix}`;
+}
+
+function parseSmartcheckStandardVal(standardVal) {
+  const match = String(standardVal || '').match(/(-?\d+(?:\.\d+)?)\s*±\s*(-?\d+(?:\.\d+)?)/);
+  if (!match) {
+    return { referenceMean: null, referenceSd: null };
+  }
+  return {
+    referenceMean: Number(match[1]),
+    referenceSd: Number(match[2]),
+  };
+}
+
+function toneFromSmartcheckPanelRow(row, definition, value) {
+  if (!Number.isFinite(value)) return 'info';
+  const min = coerceNumber(definition?.minVal);
+  const max = coerceNumber(definition?.maxVal);
+  if (min !== null && max !== null) {
+    if (value < min || value > max) {
+      const overflow = value < min ? min - value : value - max;
+      const tolerance = Math.max(1, Math.abs(max - min) / 2);
+      return overflow > tolerance ? 'danger' : 'warn';
+    }
+    return 'success';
+  }
+  const color = String(row?.color || '').toLowerCase();
+  if (color === '#ffffff' || color === 'white') return 'success';
+  if (color === '#ff6e3f' || color === '#00b8de') return 'warn';
+  return 'info';
+}
+
+function buildSmartcheckPanelItem({ method, section, row, definition }) {
+  const name = String(row?.name || definition?.name || '').trim();
+  const numericValue = coerceNumber(row?.measureVal);
+  const value = numericValue === null ? null : round2(numericValue);
+  const standardVal = String(row?.standardVal || definition?.standardVal || '').trim();
+  const unit = inferSmartcheckPanelUnit(name, standardVal);
+  const { referenceMean, referenceSd } = parseSmartcheckStandardVal(standardVal);
+  const normalMin = coerceNumber(definition?.minVal);
+  const normalMax = coerceNumber(definition?.maxVal);
+  const prompt = String(row?.prompt || '').trim();
+  const unique = row?.unique ?? definition?.unique ?? normalizeLandmarkToken(name);
+  return {
+    code: `${method.code}:${section}:${unique}`,
+    label: name || `${method.label} ${unique}`,
+    category: smartcheckSectionLabel(section),
+    unit,
+    value,
+    valueText: Number.isFinite(value) ? formatSmartcheckPanelValue(value, unit) : '-',
+    reference: formatSmartcheckPanelReference(standardVal, unit),
+    referenceMean,
+    referenceSd,
+    normalMin,
+    normalMax,
+    tone: toneFromSmartcheckPanelRow(row, definition, value),
+    prompt,
+    clinicalMeaning: prompt,
+    source: 'smartcheck-right-panel',
+    landmarks: Array.isArray(definition?.measurePointArr) ? definition.measurePointArr : [],
+    formula: definition?.calculationType || '',
+    status: Number.isFinite(value) ? 'supported' : 'unsupported',
+    reason: Number.isFinite(value) ? undefined : '网页右侧分析数据未返回有效数值',
+  };
+}
+
+function normalizeSmartcheckPanelRows({ engine, method, methodModule, rawReport }) {
+  const definitionIndex = buildSmartcheckDefinitionIndex(engine, methodModule, method.dataKey);
+  const items = [];
+  for (const [section, rows] of Object.entries(rawReport || {})) {
+    if (!Array.isArray(rows)) continue;
+    for (const rawRow of rows) {
+      const translatedRow = {
+        ...rawRow,
+        name: engine.translate(rawRow?.name),
+        standardVal: engine.translate(rawRow?.standardVal),
+        prompt: engine.translate(rawRow?.prompt),
+      };
+      const definition = definitionIndex.byUnique.get(`${section}:${translatedRow.unique}`)
+        || definitionIndex.byName.get(`${section}:${translatedRow.name}`)
+        || null;
+      const item = buildSmartcheckPanelItem({
+        method,
+        section,
+        row: translatedRow,
+        definition,
+      });
+      if (item.status === 'supported') {
+        items.push(item);
+      }
+    }
+  }
+  return { items, definitionCount: definitionIndex.totalCount };
+}
+
+async function buildSmartcheckRightPanelReports(pointMap, payload) {
+  const engine = await loadSmartcheckRightPanelEngine();
+  const { pointList, rulerLength, scale } = buildSmartcheckPanelPointList(pointMap, payload);
+  const reports = {};
+  for (const method of SMARTCHECK_RIGHT_PANEL_METHODS) {
+    const moduleExports = engine.requireModule(method.moduleName);
+    const methodModule = moduleExports?.[method.exportName];
+    const PageDataClass = methodModule?.[method.pageClassName];
+    const pageMethod = PageDataClass?.prototype?.[method.pageMethodName];
+    if (typeof PageDataClass !== 'function' || typeof pageMethod !== 'function') {
+      throw new Error(`SmartCheck analysis module missing: ${method.moduleName}`);
+    }
+    const instance = new PageDataClass(cloneSmartcheckPointList(pointList), rulerLength);
+    const rawReport = instance[method.pageMethodName]();
+    const { items, definitionCount } = normalizeSmartcheckPanelRows({
+      engine,
+      method,
+      methodModule,
+      rawReport,
+    });
+    reports[method.code] = {
+      code: method.code,
+      label: method.label,
+      note: `${method.label}，来源为网页右侧“分析数据”面板。`,
+      source: 'smartcheck-right-panel',
+      scale,
+      status: items.length ? (items.length >= definitionCount ? 'supported' : 'partial') : 'unsupported',
+      supportedItemCount: items.length,
+      unsupportedItemCount: Math.max(0, definitionCount - items.length),
+      items,
+    };
+  }
+  return reports;
+}
+
+const SMARTCHECK_PRIMARY_METRIC_MATCHERS = [
+  { code: 'SNA', pattern: /^SNA(?:\(|$)/i },
+  { code: 'SNB', pattern: /^SNB(?:\(|$)/i },
+  { code: 'ANB', pattern: /^ANB(?:\(|$)/i },
+  { code: 'FMA', pattern: /^FMA|FMA\(/i },
+  { code: 'GoGn-SN', pattern: /^(?:MP-SN|GoGn-SN)/i },
+  { code: 'U1-SN', pattern: /^U1-SN/i },
+  { code: 'IMPA', pattern: /^(?:IMPA|.*IMPA.*|L1-MP.*°)/i },
+];
+
+function buildMetricsFromSmartcheckPanel(frameworkReports) {
+  const huaxiItems = frameworkReports?.huaxiType?.items || [];
+  const allItems = Object.values(frameworkReports || {}).flatMap((report) => report.items || []);
+  const metrics = [];
+  const metricMap = {};
+  for (const matcher of SMARTCHECK_PRIMARY_METRIC_MATCHERS) {
+    const item = huaxiItems.find((candidate) => matcher.pattern.test(candidate.label || candidate.code || ''))
+      || allItems.find((candidate) => matcher.pattern.test(candidate.label || candidate.code || ''));
+    if (!item || item.status !== 'supported') continue;
+    const metric = {
+      ...item,
+      code: matcher.code,
+      label: item.label,
+      source: 'smartcheck-right-panel',
+    };
+    metrics.push(metric);
+    metricMap[matcher.code] = metric;
+  }
+  return { metrics, metricMap, unsupported: [] };
+}
+
 function buildFrameworkReports(pointMap, payload) {
   const scale = buildMeasurementScale(payload);
   const workingPointMap = new Map(pointMap);
@@ -3051,7 +3723,7 @@ function buildInsight(metricMap, recognition, unsupportedMetrics) {
   return messages.join('');
 }
 
-function buildLateraAnalysis(payload) {
+async function buildLateraAnalysis(payload) {
   const normalizedLandmarks = collectCephLandmarks(payload);
   if (!normalizedLandmarks.length) {
     return null;
@@ -3063,21 +3735,52 @@ function buildLateraAnalysis(payload) {
   }
 
   const uniqueLandmarks = Array.from(pointMap.values()).sort((left, right) => left.key.localeCompare(right.key));
-  const { metrics, metricMap, unsupported } = buildMetrics(pointMap);
+  const legacyAnalysis = buildMetrics(pointMap);
   const recognition = buildRecognition(uniqueLandmarks);
-  const frameworkReports = buildFrameworkReports(pointMap, payload);
   const scale = buildMeasurementScale(payload);
+  let metrics = legacyAnalysis.metrics;
+  let metricMap = legacyAnalysis.metricMap;
+  let unsupported = legacyAnalysis.unsupported;
+  let frameworkReports = null;
+  let frameworkChoices = LEGACY_FRAMEWORK_CHOICES;
+  let dataSource = 'legacy-local-frameworks';
+  let smartcheckPanelError = null;
+
+  try {
+    const smartcheckFrameworkReports = await buildSmartcheckRightPanelReports(pointMap, payload);
+    const supportedPanelItems = Object.values(smartcheckFrameworkReports)
+      .reduce((sum, report) => sum + (report.supportedItemCount || 0), 0);
+    if (supportedPanelItems > 0) {
+      frameworkReports = smartcheckFrameworkReports;
+      frameworkChoices = SMARTCHECK_RIGHT_PANEL_FRAMEWORK_CHOICES;
+      const smartcheckMetrics = buildMetricsFromSmartcheckPanel(smartcheckFrameworkReports);
+      if (smartcheckMetrics.metrics.length) {
+        metrics = smartcheckMetrics.metrics;
+        metricMap = smartcheckMetrics.metricMap;
+        unsupported = smartcheckMetrics.unsupported;
+      }
+      dataSource = 'smartcheck-right-panel';
+    }
+  } catch (error) {
+    smartcheckPanelError = error instanceof Error ? error.message : String(error);
+  }
+
+  if (!frameworkReports) {
+    frameworkReports = buildFrameworkReports(pointMap, payload);
+  }
 
   return {
     landmarks: uniqueLandmarks,
     recognition,
     scale,
+    dataSource,
+    smartcheckPanelError,
     riskLabel: buildRiskLabel(metricMap),
     insight: buildInsight(metricMap, recognition, unsupported),
     metrics,
     unsupportedMetricCodes: unsupported.map((item) => item.code),
     supportedMetricCodes: metrics.map((item) => item.code),
-    frameworkChoices: FRAMEWORK_CHOICES,
+    frameworkChoices,
     frameworkReports,
   };
 }
@@ -3091,6 +3794,7 @@ function summarizeAnalysis(analysis) {
     unsupportedMetrics: analysis.unsupportedMetricCodes,
     metricValues: Object.fromEntries(analysis.metrics.map((metric) => [metric.code, metric.value])),
     riskLabel: analysis.riskLabel,
+    dataSource: analysis.dataSource,
     frameworkChoices: analysis.frameworkChoices || [],
     supportedFrameworks: Object.values(analysis.frameworkReports || {})
       .filter((item) => item.status === 'supported' || item.status === 'partial')
@@ -3362,7 +4066,7 @@ async function runSmartcheckMeasurement({
   let analysis = null;
   let analysisError = null;
   try {
-    analysis = buildLateraAnalysis(resolvedResult?.payload);
+    analysis = await buildLateraAnalysis(resolvedResult?.payload);
   } catch (error) {
     analysisError = error instanceof Error ? error.message : String(error);
   }
@@ -3442,6 +4146,8 @@ async function runSmartcheckMeasurement({
     analysis: analysis ? {
       recognition: analysis.recognition,
       scale: analysis.scale,
+      dataSource: analysis.dataSource,
+      smartcheckPanelError: analysis.smartcheckPanelError,
       riskLabel: analysis.riskLabel,
       insight: analysis.insight,
       metrics: analysis.metrics,
@@ -4293,7 +4999,7 @@ async function main() {
   let analysis = null;
   let analysisError = null;
   try {
-    analysis = buildLateraAnalysis(resolvedResult?.payload);
+    analysis = await buildLateraAnalysis(resolvedResult?.payload);
   } catch (error) {
     analysisError = error instanceof Error ? error.message : String(error);
   }
@@ -4365,6 +5071,8 @@ async function main() {
     analysis: analysis ? {
       recognition: analysis.recognition,
       scale: analysis.scale,
+      dataSource: analysis.dataSource,
+      smartcheckPanelError: analysis.smartcheckPanelError,
       riskLabel: analysis.riskLabel,
       insight: analysis.insight,
       metrics: analysis.metrics,

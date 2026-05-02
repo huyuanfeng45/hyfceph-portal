@@ -820,6 +820,10 @@ function clinicalDirectionText(item) {
 }
 
 function buildClinicalMeaning(item) {
+  const panelMeaning = String(item?.clinicalMeaning || item?.prompt || '').trim();
+  if (panelMeaning) {
+    return /[。！？!?]$/.test(panelMeaning) ? panelMeaning : `${panelMeaning}。`;
+  }
   return `${clinicalMeaningBaseText(item)}${clinicalDirectionText(item)}`;
 }
 
