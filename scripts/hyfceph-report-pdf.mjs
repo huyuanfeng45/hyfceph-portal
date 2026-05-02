@@ -22,8 +22,17 @@ const EMBEDDED_FONT_FILES = [
   path.join(__dirname, '..', 'node_modules', 'node-source-han-sans-sc', 'SourceHanSansSC-Normal.otf'),
   path.join(__dirname, '..', 'node_modules', 'node-source-han-sans-sc', 'SourceHanSansSC-Bold.otf'),
 ].filter(Boolean);
-function escapeXml(value) {
+function sanitizeReportBrandText(value) {
   return String(value)
+    .replace(/SmartCheck\s*自动测量提示/g, '自动测量提示')
+    .replace(/SmartCheck\s*网页端/g, '网页端')
+    .replace(/SmartCheck：/g, '自动测量：')
+    .replace(/SmartCheck/g, 'HYFCeph')
+    .replace(/smartcheck/g, 'hyfceph');
+}
+
+function escapeXml(value) {
+  return sanitizeReportBrandText(value)
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
@@ -1676,13 +1685,17 @@ async function buildPrettyHyfcephHtmlReport(payload) {
         }
         .fancy-image-grid {
           display: grid;
-          grid-template-columns: 1fr;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 18px;
+          align-items: start;
         }
         .fancy-image-frame img {
           display: block;
           width: 100%;
           height: auto;
+          max-height: 760px;
+          object-fit: contain;
+          background: #ffffff;
         }
         .fancy-image-caption {
           margin: 0;
@@ -1697,7 +1710,8 @@ async function buildPrettyHyfcephHtmlReport(payload) {
           .stat-grid,
           .fancy-grid-3,
           .fancy-grid-2,
-          .fancy-framework-grid { grid-template-columns: 1fr; }
+          .fancy-framework-grid,
+          .fancy-image-grid { grid-template-columns: 1fr; }
         }
       </style>
     </head>

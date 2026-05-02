@@ -1872,6 +1872,12 @@ function collectCephLandmarks(payload) {
 
 function collectOverlayData(payload) {
   const data = payload?.data || payload || {};
+  const smartcheck = payload?.smartcheck || {};
+  const smartcheckOutline = data.outline
+    || data.result?.outline
+    || smartcheck.outline
+    || smartcheck.result?.outline
+    || null;
   const smartcheckPoints = collectSmartcheckLandmarks(payload);
   const headPoints = Array.isArray(data.head)
     ? data.head.map((item) => extractLateraPoint(item, 'head')).filter(Boolean)
@@ -1894,6 +1900,7 @@ function collectOverlayData(payload) {
     headPoints,
     rulerPoints,
     spineSections,
+    smartcheckOutline,
   };
 }
 
@@ -1902,6 +1909,9 @@ function buildPointLookup(points) {
   for (const point of points) {
     if (!lookup.has(point.landmark)) {
       lookup.set(point.landmark, point);
+    }
+    if (point.key && !lookup.has(point.key)) {
+      lookup.set(point.key, point);
     }
   }
   return lookup;
@@ -1950,6 +1960,165 @@ function buildSmoothPath(points, closePath = false) {
     .y((point) => point.y)
     .curve(curveFactory);
   return generator(points) || '';
+}
+
+function extractOutlinePoint(value, name = '') {
+  if (!value) return null;
+  if (Array.isArray(value)) {
+    const x = coerceNumber(value[0]);
+    const y = coerceNumber(value[1]);
+    if (x === null || y === null) return null;
+    const landmark = String(name || '').trim();
+    return {
+      landmark,
+      key: canonicalLandmarkName(landmark) || landmark,
+      x: round1(x),
+      y: round1(y),
+    };
+  }
+  if (typeof value === 'object') {
+    const position = Array.isArray(value.position)
+      ? value.position
+      : Array.isArray(value.point)
+        ? value.point
+        : Array.isArray(value.coordinate)
+          ? value.coordinate
+          : [];
+    const x = coerceNumber(value.x ?? value.X ?? position[0]);
+    const y = coerceNumber(value.y ?? value.Y ?? position[1]);
+    if (x === null || y === null) return null;
+    const landmark = String(value.landmark || value.name || value.pointName || name || '').trim();
+    return {
+      landmark,
+      key: canonicalLandmarkName(landmark) || landmark,
+      x: round1(x),
+      y: round1(y),
+    };
+  }
+  return null;
+}
+
+function outlinePointsFromCurve(curve) {
+  if (!curve) return [];
+  if (Array.isArray(curve)) {
+    return curve
+      .map((point, index) => extractOutlinePoint(point, `outline-${index + 1}`))
+      .filter(Boolean);
+  }
+  if (typeof curve !== 'object') return [];
+  const order = Array.isArray(curve.order) ? curve.order : [];
+  if (order.length) {
+    return order
+      .map((name) => extractOutlinePoint(curve[name], name))
+      .filter(Boolean);
+  }
+  return Object.entries(curve)
+    .filter(([key]) => key !== 'order')
+    .map(([name, point]) => extractOutlinePoint(point, name))
+    .filter(Boolean);
+}
+
+function smartcheckOutlineStyle(name, mode = 'annotated') {
+  const isContour = mode === 'contour';
+  if (name === 'teeth') {
+    return {
+      stroke: '#f59e0b',
+      width: isContour ? 2.6 : 1.75,
+      opacity: 0.96,
+      fill: '#fef3c7',
+      fillOpacity: isContour ? 0.52 : 0.26,
+    };
+  }
+  if (/^F[du]_curve$/i.test(name)) {
+    return {
+      stroke: isContour ? '#16a3a8' : '#22d3ee',
+      width: isContour ? 3.4 : 1.95,
+      opacity: isContour ? 0.96 : 0.82,
+    };
+  }
+  if (/^airway/i.test(name)) {
+    return {
+      stroke: '#7c3aed',
+      width: isContour ? 2.6 : 1.55,
+      opacity: isContour ? 0.72 : 0.56,
+    };
+  }
+  if (/^(S_curve|N_curve|Or_curve|Po_curve|Pt_curve)/i.test(name)) {
+    return {
+      stroke: '#38bdf8',
+      width: isContour ? 2.5 : 1.55,
+      opacity: isContour ? 0.72 : 0.58,
+    };
+  }
+  return {
+    stroke: isContour ? '#10b981' : '#2dd4bf',
+    width: isContour ? 3 : 1.75,
+    opacity: isContour ? 0.88 : 0.72,
+  };
+}
+
+function buildSmartcheckOutlineElements(smartcheckOutline, { mode = 'annotated' } = {}) {
+  if (!smartcheckOutline || typeof smartcheckOutline !== 'object') {
+    return { elements: '', points: [] };
+  }
+  const elements = [];
+  const allPoints = [];
+
+  for (const [name, curve] of Object.entries(smartcheckOutline)) {
+    if (name === 'teeth') continue;
+    const points = outlinePointsFromCurve(curve);
+    if (points.length < 2) continue;
+    allPoints.push(...points);
+    const pathData = buildSmoothPath(points, false);
+    if (!pathData) continue;
+    const style = smartcheckOutlineStyle(name, mode);
+    elements.push(
+      `<path d="${pathData}" fill="none" stroke="${style.stroke}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round" opacity="${style.opacity}" />`,
+    );
+  }
+
+  const teeth = smartcheckOutline.teeth && typeof smartcheckOutline.teeth === 'object'
+    ? smartcheckOutline.teeth
+    : {};
+  for (const [name, curve] of Object.entries(teeth)) {
+    const points = outlinePointsFromCurve(curve);
+    if (points.length < 2) continue;
+    allPoints.push(...points);
+    const pathData = buildSmoothPath(points, true);
+    if (!pathData) continue;
+    const style = smartcheckOutlineStyle('teeth', mode);
+    elements.push(
+      `<path d="${pathData}" fill="${style.fill}" fill-opacity="${style.fillOpacity}" stroke="${style.stroke}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round" opacity="${style.opacity}" />`,
+    );
+  }
+
+  return {
+    elements: elements.join(''),
+    points: allPoints,
+  };
+}
+
+function boundingBoxForPoints(points, width, height, padding = 48) {
+  const validPoints = points
+    .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y));
+  if (!validPoints.length) {
+    return {
+      x: 0,
+      y: 0,
+      width,
+      height,
+    };
+  }
+  const minX = Math.max(0, Math.min(...validPoints.map((point) => point.x)) - padding);
+  const minY = Math.max(0, Math.min(...validPoints.map((point) => point.y)) - padding);
+  const maxX = Math.min(width, Math.max(...validPoints.map((point) => point.x)) + padding);
+  const maxY = Math.min(height, Math.max(...validPoints.map((point) => point.y)) + padding);
+  return {
+    x: round1(minX),
+    y: round1(minY),
+    width: round1(Math.max(1, maxX - minX)),
+    height: round1(Math.max(1, maxY - minY)),
+  };
 }
 
 class SimilarityTransform {
@@ -3408,6 +3577,7 @@ function buildOverlayGeometry({ landmarks, overlayData }) {
     spinePoints,
     overlayPoints,
     pointLookup,
+    smartcheckOutline: overlayData?.smartcheckOutline || null,
     toothFillShapes: buildToothFillShapes(pointLookup),
   };
 }
@@ -3586,11 +3756,13 @@ function buildAnnotatedSvg({
     rulerPoints,
     spineSections,
     pointLookup,
+    smartcheckOutline,
     toothFillShapes,
   } = buildOverlayGeometry({ landmarks, overlayData });
 
-  const contourElements = buildContourElements(pointLookup);
-  const toothFillElements = buildToothFillElements(toothFillShapes);
+  const smartcheckOutlineElements = buildSmartcheckOutlineElements(smartcheckOutline, { mode: 'annotated' }).elements;
+  const contourElements = smartcheckOutlineElements || buildContourElements(pointLookup);
+  const toothFillElements = smartcheckOutlineElements ? '' : buildToothFillElements(toothFillShapes);
 
   const headPointElements = headPoints.map((point) => {
     const pointType = classifyHeadPoint(point);
@@ -3624,25 +3796,12 @@ function buildAnnotatedSvg({
     }))
     .join('');
 
-  const cornerBadge = [
-    `<rect x="18" y="18" width="176" height="36" rx="10" fill="#ffffff" fill-opacity="0.84" stroke="#1f2340" stroke-opacity="0.18" stroke-width="1" />`,
-    buildPixelBadgeWordmark('skill/hyfceph', {
-      x: 34,
-      y: 27,
-      pixelSize: 1.8,
-      charGap: 2.2,
-      color: '#1f2340',
-      radius: 0.45,
-    }),
-  ].join('');
-
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
     `<image href="${imageDataUrl}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none" />`,
     `<g>${toothFillElements}</g>`,
     `<g>${contourElements}</g>`,
     `<g>${headPointElements}${rulerPointElements}${spinePointElements}</g>`,
-    `<g>${cornerBadge}</g>`,
     `</svg>`,
   ].join('');
 }
@@ -3655,15 +3814,31 @@ function buildContourSvg({
 }) {
   const {
     pointLookup,
+    smartcheckOutline,
+    overlayPoints,
     toothFillShapes,
   } = buildOverlayGeometry({ landmarks, overlayData });
 
-  const contourElements = buildContourElements(pointLookup);
-  const toothFillElements = buildToothFillElements(toothFillShapes);
+  const smartcheckOutlineResult = buildSmartcheckOutlineElements(smartcheckOutline, { mode: 'contour' });
+  const hasSmartcheckOutline = Boolean(smartcheckOutlineResult.elements);
+  const contourElements = hasSmartcheckOutline
+    ? smartcheckOutlineResult.elements
+    : buildContourElements(pointLookup);
+  const toothFillElements = hasSmartcheckOutline
+    ? ''
+    : buildToothFillElements(toothFillShapes);
+  const cropBox = boundingBoxForPoints(
+    hasSmartcheckOutline ? smartcheckOutlineResult.points : overlayPoints,
+    width,
+    height,
+    48,
+  );
+  const renderedWidth = Math.max(900, Math.min(1400, Math.round(cropBox.width * 1.2)));
+  const renderedHeight = Math.round(renderedWidth * cropBox.height / cropBox.width);
 
   return [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
-    `<rect width="${width}" height="${height}" fill="#ffffff" />`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${renderedWidth}" height="${renderedHeight}" viewBox="${cropBox.x} ${cropBox.y} ${cropBox.width} ${cropBox.height}">`,
+    `<rect x="${cropBox.x}" y="${cropBox.y}" width="${cropBox.width}" height="${cropBox.height}" fill="#ffffff" />`,
     `<g>${toothFillElements}</g>`,
     `<g>${contourElements}</g>`,
     `</svg>`,
