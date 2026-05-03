@@ -1488,7 +1488,7 @@ async function appendAiAnalysisToFeishuDocForUser({
   documentId,
   analysisText,
 }) {
-  const payload = await fetchJsonWithRetry(`${PORTAL_BASE_URL}/api/report/feishu-doc/append-analysis`, {
+  const payload = await fetchJsonWithRetry(`${PORTAL_BASE_URL}/api/report/feishu-doc-analysis`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

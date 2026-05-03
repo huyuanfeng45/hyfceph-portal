@@ -5524,7 +5524,7 @@ export async function handleNodeRequest(request, response) {
     if (request.method === 'POST' && url.pathname === '/api/report/feishu-doc') {
       return await handleGenerateFeishuDoc(request, response);
     }
-    if (request.method === 'POST' && url.pathname === '/api/report/feishu-doc/append-analysis') {
+    if (request.method === 'POST' && url.pathname === '/api/report/feishu-doc-analysis') {
       return await handleAppendFeishuDocAnalysis(request, response);
     }
     if (request.method === 'POST' && url.pathname === '/api/measure/overlap') {
