@@ -1313,15 +1313,9 @@ async function buildPrettyHyfcephHtmlReport(payload) {
             <h2>全部分析法综合结论</h2>
           </div>
         </div>
-        <div class="fancy-grid-2">
-          <div class="fancy-callout">
-            <h3>所有分析法综合分析</h3>
-            <ul>${buildOverlapFrameworkSynthesisItems(baseFrameworks, compareFrameworkMap).map((item) => `<li>${htmlText(item)}</li>`).join('')}</ul>
-          </div>
-          <div class="fancy-callout">
-            <h3>临床意义</h3>
-            <ul>${buildOverlapClinicalMeaningItems(baseBundle, compareBundle, overlapInterpretation, baseFrameworks).map((item) => `<li>${htmlText(item)}</li>`).join('')}</ul>
-          </div>
+        <div class="fancy-callout full">
+          <h3>临床意义</h3>
+          <ul>${buildOverlapClinicalMeaningItems(baseBundle, compareBundle, overlapInterpretation, baseFrameworks).map((item) => `<li>${htmlText(item)}</li>`).join('')}</ul>
         </div>
         <div class="fancy-callout full">
           <h3>方案建议</h3>
@@ -1375,15 +1369,9 @@ async function buildPrettyHyfcephHtmlReport(payload) {
             <h2>全部分析法综合结论</h2>
           </div>
         </div>
-        <div class="fancy-grid-2">
-          <div class="fancy-callout">
-            <h3>所有分析法综合分析</h3>
-            <ul>${buildSingleFrameworkSynthesisItems(frameworks).map((item) => `<li>${htmlText(item)}</li>`).join('')}</ul>
-          </div>
-          <div class="fancy-callout">
-            <h3>临床意义</h3>
-            <ul>${buildSingleClinicalMeaningItems(singleBundle, singleInterpretation, frameworks).map((item) => `<li>${htmlText(item)}</li>`).join('')}</ul>
-          </div>
+        <div class="fancy-callout full">
+          <h3>临床意义</h3>
+          <ul>${buildSingleClinicalMeaningItems(singleBundle, singleInterpretation, frameworks).map((item) => `<li>${htmlText(item)}</li>`).join('')}</ul>
         </div>
         <div class="fancy-callout full">
           <h3>方案建议</h3>
