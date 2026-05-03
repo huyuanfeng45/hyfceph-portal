@@ -91,6 +91,51 @@ const REPORT_FOLLOW_UP_REPORT_TIMEOUT_MS = 120_000;
 const REPORT_FOLLOW_UP_FEISHU_TIMEOUT_MS = 60_000;
 const WEIXIN_REPLY_IMAGE_MAX_EDGE = Number(process.env.HYFCEPH_WEIXIN_REPLY_IMAGE_MAX_EDGE || '1280');
 const WEIXIN_REPLY_IMAGE_JPEG_QUALITY = Number(process.env.HYFCEPH_WEIXIN_REPLY_IMAGE_JPEG_QUALITY || '82');
+const LOCAL_AI_ANALYSIS_CONFIG = LOCAL_CONFIG.aiAnalysis && typeof LOCAL_CONFIG.aiAnalysis === 'object'
+  ? LOCAL_CONFIG.aiAnalysis
+  : {};
+const AI_ANALYSIS_BASE_URL = String(
+  process.env.HYFCEPH_AI_ANALYSIS_BASE_URL
+  || process.env.HYFCEPH_AI_BASE_URL
+  || LOCAL_CONFIG.aiAnalysisBaseUrl
+  || LOCAL_CONFIG.aiBaseUrl
+  || LOCAL_AI_ANALYSIS_CONFIG.baseUrl
+  || '',
+).trim().replace(/\/+$/, '');
+const AI_ANALYSIS_API_KEY = String(
+  process.env.HYFCEPH_AI_ANALYSIS_API_KEY
+  || process.env.HYFCEPH_AI_API_KEY
+  || LOCAL_CONFIG.aiAnalysisApiKey
+  || LOCAL_CONFIG.aiApiKey
+  || LOCAL_AI_ANALYSIS_CONFIG.apiKey
+  || '',
+).trim();
+const AI_ANALYSIS_MODEL = String(
+  process.env.HYFCEPH_AI_ANALYSIS_MODEL
+  || process.env.HYFCEPH_AI_MODEL
+  || LOCAL_CONFIG.aiAnalysisModel
+  || LOCAL_CONFIG.aiModel
+  || LOCAL_AI_ANALYSIS_CONFIG.model
+  || 'gpt-5.5',
+).trim();
+const AI_ANALYSIS_TIMEOUT_MS = Number(
+  process.env.HYFCEPH_AI_ANALYSIS_TIMEOUT_MS
+  || LOCAL_CONFIG.aiAnalysisTimeoutMs
+  || LOCAL_AI_ANALYSIS_CONFIG.timeoutMs
+  || 240_000,
+);
+const AI_ANALYSIS_MAX_INPUT_CHARS = Math.max(10_000, Number(
+  process.env.HYFCEPH_AI_ANALYSIS_MAX_INPUT_CHARS
+  || LOCAL_CONFIG.aiAnalysisMaxInputChars
+  || LOCAL_AI_ANALYSIS_CONFIG.maxInputChars
+  || 140_000,
+) || 140_000);
+const AI_ANALYSIS_MAX_OUTPUT_TOKENS = Math.max(800, Number(
+  process.env.HYFCEPH_AI_ANALYSIS_MAX_OUTPUT_TOKENS
+  || LOCAL_CONFIG.aiAnalysisMaxOutputTokens
+  || LOCAL_AI_ANALYSIS_CONFIG.maxOutputTokens
+  || 5_000,
+) || 5_000);
 const execFileAsync = promisify(execFile);
 
 function normalizeWeixinMeasureMode(value) {
@@ -221,6 +266,7 @@ function readJsonFileSync(filePath, fallback = {}) {
 
 const latestResultCache = readJsonFileSync(WEIXIN_RESULT_CACHE_PATH, {});
 const pendingReportFollowUps = new Map();
+const pendingAiAnalysisFollowUps = new Map();
 
 async function requestJson(url, { method = 'GET', headers = {}, body } = {}) {
   return fetchJsonWithRetry(url, {
@@ -1134,12 +1180,14 @@ async function updateLatestResultCache(conversationId, result, options = {}) {
     updatedAt: new Date().toISOString(),
     result: {
       mode: result?.mode || previous.result?.mode || '',
-      analysis: {
-        riskLabel: result?.analysis?.riskLabel || '',
-        insight: result?.analysis?.insight || '',
-        metrics: Array.isArray(result?.analysis?.metrics) ? result.analysis.metrics : [],
-        frameworkReports: result?.analysis?.frameworkReports || {},
-      },
+      analysis: result?.analysis && typeof result.analysis === 'object'
+        ? result.analysis
+        : (previous.result?.analysis || {
+            riskLabel: '',
+            insight: '',
+            metrics: [],
+            frameworkReports: {},
+          }),
       analysisError: result?.analysisError || null,
       patientName: normalizePatientName(result?.patientName || previous.result?.patientName || ''),
       metrics: Array.isArray(result?.metrics) ? result.metrics : [],
@@ -1147,7 +1195,13 @@ async function updateLatestResultCache(conversationId, result, options = {}) {
       reportPayload: result?.reportPayload || previous.result?.reportPayload || null,
       report: result?.report || null,
       prettyReport: result?.prettyReport || null,
-      feishuDoc: result?.feishuDoc || null,
+      feishuDoc: result?.feishuDoc
+        ? {
+            ...(previous.result?.feishuDoc || {}),
+            ...result.feishuDoc,
+            aiAnalysis: result.feishuDoc.aiAnalysis || previous.result?.feishuDoc?.aiAnalysis || null,
+          }
+        : (previous.result?.feishuDoc || null),
     },
     sourceImagePath,
     rawAnnotatedImagePath: rawAnnotatedImagePath || previous.rawAnnotatedImagePath || '',
@@ -1265,6 +1319,190 @@ function buildFeishuDocPayload(resultPayload) {
     summary: payload.summary || null,
     metrics: payload.metrics || payload.analysis?.metrics || [],
   };
+}
+
+function isAiAnalysisConfigured() {
+  return Boolean(AI_ANALYSIS_BASE_URL && AI_ANALYSIS_API_KEY && AI_ANALYSIS_MODEL);
+}
+
+function sanitizeAiAnalysisPayload(value, depth = 0) {
+  if (depth > 12) {
+    return '[truncated-depth]';
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeAiAnalysisPayload(item, depth + 1));
+  }
+  if (!value || typeof value !== 'object') {
+    if (typeof value === 'string' && value.length > 2_000) {
+      return `${value.slice(0, 2_000)}……`;
+    }
+    return value;
+  }
+
+  const output = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (/base64|artifact|image|png|svg|buffer|filePath|downloadedImage|sourceImage/i.test(key)) {
+      continue;
+    }
+    output[key] = sanitizeAiAnalysisPayload(entry, depth + 1);
+  }
+  return output;
+}
+
+function buildAiAnalysisSourcePayload(resultPayload) {
+  const payload = resultPayload && typeof resultPayload === 'object' ? resultPayload : {};
+  return sanitizeAiAnalysisPayload({
+    mode: payload.mode || '',
+    patientName: normalizePatientName(payload.patientName || '') || '匿名',
+    generatedAt: new Date().toISOString(),
+    summary: payload.summary || null,
+    metrics: payload.metrics || payload.analysis?.metrics || [],
+    analysis: payload.analysis || null,
+    analysisError: payload.analysisError || null,
+  });
+}
+
+function buildAiAnalysisPrompt(resultPayload) {
+  const sourcePayload = buildAiAnalysisSourcePayload(resultPayload);
+  let reportJson = JSON.stringify(sourcePayload, null, 2);
+  if (reportJson.length > AI_ANALYSIS_MAX_INPUT_CHARS) {
+    reportJson = `${reportJson.slice(0, AI_ANALYSIS_MAX_INPUT_CHARS)}\n\n[由于数据过长，后续 JSON 已截断；请基于已提供的数据谨慎分析。]`;
+  }
+  return [
+    '请基于下面这份头影测量美化报告的结构化数据，写一份面向正畸医生阅读的中文综合分析。',
+    '',
+    '要求：',
+    '1. 只基于给定数据分析，不要编造片外信息，不要声称已重新阅片。',
+    '2. 不要出现外部平台或数据供应方名称。',
+    '3. 内容尽量详细，覆盖骨性矢状向、垂直向、牙性代偿、软组织侧貌、生长型、关键异常值、不同分析法之间的一致与冲突、临床关注点、复核建议。',
+    '4. 对每个重要结论尽量引用具体指标名、测量值、标准范围或偏离方向。',
+    '5. 语气专业、克制，定位为辅助分析，不替代医生诊断。',
+    '6. 输出纯文本，不要 Markdown 表格；可以使用中文序号和短段落。',
+    '',
+    '建议结构：',
+    '一、总体判断',
+    '二、骨性关系分析',
+    '三、垂直向与生长型分析',
+    '四、牙性代偿与咬合倾向',
+    '五、软组织侧貌与美学提示',
+    '六、多分析法一致性与矛盾点',
+    '七、临床关注点与复核建议',
+    '八、综合小结',
+    '',
+    '结构化报告数据：',
+    reportJson,
+  ].join('\n');
+}
+
+async function postAiChatCompletion(body) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(new Error('timeout')), AI_ANALYSIS_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${AI_ANALYSIS_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${AI_ANALYSIS_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const rawText = await response.text().catch(() => '');
+    let payload = {};
+    try {
+      payload = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      payload = { error: rawText.trim() };
+    }
+    if (!response.ok) {
+      const message = payload?.error?.message || payload?.message || payload?.error || `AI analysis request failed (${response.status})`;
+      const error = new Error(String(message));
+      error.status = response.status;
+      throw error;
+    }
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function callAiAnalysisModel(resultPayload) {
+  if (!isAiAnalysisConfigured()) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'ai-analysis-not-configured',
+    };
+  }
+
+  const messages = [
+    {
+      role: 'system',
+      content: '你是资深正畸头影测量报告撰写助手，擅长把多分析法测量数据转成严谨、细致、可复核的中文临床辅助分析。',
+    },
+    {
+      role: 'user',
+      content: buildAiAnalysisPrompt(resultPayload),
+    },
+  ];
+  const baseBody = {
+    model: AI_ANALYSIS_MODEL,
+    messages,
+    temperature: 0.2,
+    stream: false,
+  };
+
+  let payload;
+  try {
+    payload = await postAiChatCompletion({
+      ...baseBody,
+      max_tokens: AI_ANALYSIS_MAX_OUTPUT_TOKENS,
+    });
+  } catch (error) {
+    if (Number(error?.status) !== 400) {
+      throw error;
+    }
+    payload = await postAiChatCompletion({
+      ...baseBody,
+      max_completion_tokens: AI_ANALYSIS_MAX_OUTPUT_TOKENS,
+    });
+  }
+
+  const content = String(
+    payload?.choices?.[0]?.message?.content
+    || payload?.choices?.[0]?.text
+    || '',
+  ).trim();
+  if (!content) {
+    throw new Error('AI 模型未返回分析内容。');
+  }
+  return {
+    ok: true,
+    content,
+    model: AI_ANALYSIS_MODEL,
+  };
+}
+
+async function appendAiAnalysisToFeishuDocForUser({
+  apiKey,
+  documentId,
+  analysisText,
+}) {
+  const payload = await fetchJsonWithRetry(`${PORTAL_BASE_URL}/api/report/feishu-doc/append-analysis`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+    },
+    body: JSON.stringify({
+      documentId,
+      sectionTitle: 'AI 综合分析',
+      analysisText,
+    }),
+    timeoutMs: PORTAL_REPORT_TIMEOUT_MS,
+    label: 'portal feishu doc analysis append request',
+  });
+  return payload.feishuDoc || null;
 }
 
 async function measureImageForUser({ apiKey, media }) {
@@ -1727,6 +1965,90 @@ async function hydrateCachedReportsForUser({
   return getLatestResultCache(conversationId) || cached;
 }
 
+async function markCachedFeishuAiAnalysis(conversationId, feishuDoc) {
+  const key = normalizeConversationKey(conversationId);
+  const current = latestResultCache[key];
+  if (!current?.result) {
+    return null;
+  }
+  const existingDoc = current.result.feishuDoc || {};
+  const nextDoc = {
+    ...existingDoc,
+    ...feishuDoc,
+    aiAnalysis: feishuDoc?.aiAnalysis || existingDoc.aiAnalysis || {
+      ok: true,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+  latestResultCache[key] = {
+    ...current,
+    updatedAt: new Date().toISOString(),
+    result: {
+      ...current.result,
+      feishuDoc: nextDoc,
+    },
+  };
+  await saveResultCache();
+  return latestResultCache[key];
+}
+
+async function triggerDeferredFeishuAiAnalysis({ request, apiKey, conversationId }) {
+  if (!isAiAnalysisConfigured()) {
+    return null;
+  }
+  const conversationKey = normalizeConversationKey(conversationId);
+  if (pendingAiAnalysisFollowUps.has(conversationKey)) {
+    return pendingAiAnalysisFollowUps.get(conversationKey);
+  }
+
+  const job = (async () => {
+    try {
+      const cached = getLatestResultCache(conversationId);
+      const result = cached?.result;
+      const documentId = String(result?.feishuDoc?.documentId || '').trim();
+      const docUrl = String(result?.feishuDoc?.docUrl || '').trim();
+      if (!result || !documentId || result?.feishuDoc?.aiAnalysis?.ok) {
+        return;
+      }
+
+      console.log('[HYFCeph Weixin] generating AI analysis for feishu doc');
+      const aiResult = await callAiAnalysisModel(result);
+      if (!aiResult?.ok || !aiResult.content) {
+        console.warn(`[HYFCeph Weixin] AI analysis skipped: ${aiResult?.reason || 'no content'}`);
+        return;
+      }
+      const feishuDoc = await appendAiAnalysisToFeishuDocForUser({
+        apiKey,
+        documentId,
+        analysisText: aiResult.content,
+      });
+      const updatedDoc = {
+        ...(feishuDoc || {}),
+        documentId,
+        docUrl: feishuDoc?.docUrl || docUrl,
+        aiAnalysis: {
+          ok: true,
+          model: aiResult.model,
+          updatedAt: new Date().toISOString(),
+          lineCount: feishuDoc?.aiAnalysis?.lineCount || undefined,
+        },
+      };
+      await markCachedFeishuAiAnalysis(conversationId, updatedDoc);
+      await sendWeixinFollowUpText(
+        request,
+        `更多综合分析内容已经写入飞书文档：${updatedDoc.docUrl || docUrl}`,
+      );
+    } catch (error) {
+      console.warn(`[HYFCeph Weixin] AI feishu analysis follow-up failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      pendingAiAnalysisFollowUps.delete(conversationKey);
+    }
+  })();
+
+  pendingAiAnalysisFollowUps.set(conversationKey, job);
+  return job;
+}
+
 async function triggerDeferredReportFollowUp({ request, apiKey, conversationId }) {
   const conversationKey = normalizeConversationKey(conversationId);
   if (pendingReportFollowUps.has(conversationKey)) {
@@ -1754,6 +2076,13 @@ async function triggerDeferredReportFollowUp({ request, apiKey, conversationId }
         '这次的报告链接我补发给你：',
         ...lines,
       ].join('\n'));
+      if (hydrated?.result?.feishuDoc?.documentId) {
+        void triggerDeferredFeishuAiAnalysis({
+          request,
+          apiKey,
+          conversationId,
+        });
+      }
     } catch (error) {
       console.warn(`[HYFCeph Weixin] deferred report follow-up failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -1858,6 +2187,13 @@ async function createRestrictedAgent() {
                 conversationId: request.conversationId,
               });
             }
+            if (cached?.result?.feishuDoc?.documentId) {
+              void triggerDeferredFeishuAiAnalysis({
+                request,
+                apiKey: portalUser.auth.apiKey,
+                conversationId: request.conversationId,
+              });
+            }
             return {
               text: buildSummaryText(result),
               media: cached?.annotatedImagePath
@@ -1913,6 +2249,13 @@ async function createRestrictedAgent() {
                 apiKey: portalUser.auth.apiKey,
                 cached,
               });
+              if (hydrated?.result?.feishuDoc?.documentId) {
+                void triggerDeferredFeishuAiAnalysis({
+                  request,
+                  apiKey: portalUser.auth.apiKey,
+                  conversationId: request.conversationId,
+                });
+              }
             } catch (error) {
               console.warn(`[HYFCeph Weixin] on-demand report hydration skipped: ${error instanceof Error ? error.message : String(error)}`);
             }

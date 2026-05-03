@@ -47,6 +47,18 @@ function parseArgs(argv) {
         options.openclawStateDir = next;
         if (inlineValue === undefined) index += 1;
         break;
+      case '--ai-analysis-base-url':
+        options.aiAnalysisBaseUrl = next;
+        if (inlineValue === undefined) index += 1;
+        break;
+      case '--ai-analysis-api-key':
+        options.aiAnalysisApiKey = next;
+        if (inlineValue === undefined) index += 1;
+        break;
+      case '--ai-analysis-model':
+        options.aiAnalysisModel = next;
+        if (inlineValue === undefined) index += 1;
+        break;
       case '--dry-run':
         options.dryRun = true;
         break;
@@ -141,6 +153,24 @@ async function main() {
     || process.env.CLAWDBOT_STATE_DIR
     || '',
   ).trim();
+  const aiAnalysisBaseUrl = String(
+    args.aiAnalysisBaseUrl
+    || process.env.HYFCEPH_AI_ANALYSIS_BASE_URL
+    || process.env.HYFCEPH_AI_BASE_URL
+    || '',
+  ).trim().replace(/\/+$/, '');
+  const aiAnalysisApiKey = String(
+    args.aiAnalysisApiKey
+    || process.env.HYFCEPH_AI_ANALYSIS_API_KEY
+    || process.env.HYFCEPH_AI_API_KEY
+    || '',
+  ).trim();
+  const aiAnalysisModel = String(
+    args.aiAnalysisModel
+    || process.env.HYFCEPH_AI_ANALYSIS_MODEL
+    || process.env.HYFCEPH_AI_MODEL
+    || '',
+  ).trim();
 
   if (!weixinBotSecret && !portalApiKey) {
     throw new Error('缺少管理员 API Key 或微信 bot secret。请通过 --api-key / HYFCEPH_API_KEY，或 --secret / HYFCEPH_WEIXIN_BOT_SECRET 提供。');
@@ -151,6 +181,9 @@ async function main() {
     portalApiKey: portalApiKey || undefined,
     weixinBotSecret,
     openclawStateDir: openclawStateDir || undefined,
+    aiAnalysisBaseUrl: aiAnalysisBaseUrl || undefined,
+    aiAnalysisApiKey: aiAnalysisApiKey || undefined,
+    aiAnalysisModel: aiAnalysisModel || undefined,
     updatedAt: new Date().toISOString(),
   };
 

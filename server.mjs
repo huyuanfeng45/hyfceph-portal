@@ -73,6 +73,8 @@ const FEISHU_METRICS_UNIT_FIELD = process.env.HYFCEPH_FEISHU_METRICS_UNIT_FIELD 
 const FEISHU_METRICS_DESCRIPTION_FIELD = process.env.HYFCEPH_FEISHU_METRICS_DESCRIPTION_FIELD || '说明';
 const FEISHU_METRICS_UPDATED_AT_FIELD = process.env.HYFCEPH_FEISHU_METRICS_UPDATED_AT_FIELD || 'updated_at';
 const FEISHU_METRICS_VIEW_NAMES = ['📌 当前指标', '📈 用户与报告'];
+const FEISHU_DOC_APPEND_MAX_CHARS = Math.max(2_000, Number(process.env.HYFCEPH_FEISHU_DOC_APPEND_MAX_CHARS || 60_000) || 60_000);
+const FEISHU_DOC_PARAGRAPH_MAX_CHARS = Math.max(400, Number(process.env.HYFCEPH_FEISHU_DOC_PARAGRAPH_MAX_CHARS || 1_600) || 1_600);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
@@ -627,6 +629,131 @@ function buildFeishuDocParagraphs({
   return lines;
 }
 
+function splitFeishuDocParagraph(content, maxLength = FEISHU_DOC_PARAGRAPH_MAX_CHARS) {
+  const text = String(content || '').trim();
+  if (!text) {
+    return [];
+  }
+  if (text.length <= maxLength) {
+    return [text];
+  }
+
+  const parts = [];
+  let rest = text;
+  while (rest.length > maxLength) {
+    const window = rest.slice(0, maxLength);
+    const breakAt = Math.max(
+      window.lastIndexOf('。'),
+      window.lastIndexOf('；'),
+      window.lastIndexOf('，'),
+      window.lastIndexOf('、'),
+      window.lastIndexOf(' '),
+    );
+    const index = breakAt > maxLength * 0.45 ? breakAt + 1 : maxLength;
+    parts.push(rest.slice(0, index).trim());
+    rest = rest.slice(index).trim();
+  }
+  if (rest) {
+    parts.push(rest);
+  }
+  return parts;
+}
+
+function normalizeFeishuDocAppendLines(input, maxChars = FEISHU_DOC_APPEND_MAX_CHARS) {
+  const sourceLines = Array.isArray(input)
+    ? input
+    : String(input || '').split(/\r?\n/);
+  const lines = [];
+  let usedChars = 0;
+
+  for (const rawLine of sourceLines) {
+    const normalizedLine = String(rawLine || '').replace(/\s+$/g, '').trim();
+    if (!normalizedLine) {
+      continue;
+    }
+    for (const part of splitFeishuDocParagraph(normalizedLine)) {
+      if (!part) {
+        continue;
+      }
+      const remaining = maxChars - usedChars;
+      if (remaining <= 0) {
+        return lines;
+      }
+      const next = part.length > remaining
+        ? `${part.slice(0, Math.max(0, remaining - 12)).trim()}……`
+        : part;
+      if (next) {
+        lines.push(next);
+        usedChars += next.length;
+      }
+      if (part.length > remaining) {
+        return lines;
+      }
+    }
+  }
+
+  return lines;
+}
+
+async function appendFeishuDocTextParagraphs(documentId, lines) {
+  const normalizedLines = normalizeFeishuDocAppendLines(lines);
+  if (!normalizedLines.length) {
+    return {
+      ok: true,
+      lineCount: 0,
+      docUrl: buildFeishuDocUrl(documentId),
+    };
+  }
+
+  const children = normalizedLines.map((content) => ({
+    block_type: 2,
+    text: {
+      elements: [
+        {
+          text_run: {
+            content,
+          },
+        },
+      ],
+    },
+  }));
+
+  for (let index = 0; index < children.length; index += 40) {
+    await callFeishuBitableApi(
+      'POST',
+      `/docx/v1/documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(documentId)}/children`,
+      { children: children.slice(index, index + 40) },
+    );
+  }
+
+  return {
+    ok: true,
+    lineCount: normalizedLines.length,
+    docUrl: buildFeishuDocUrl(documentId),
+  };
+}
+
+async function appendFeishuDocAnalysis({
+  documentId,
+  analysisText,
+  sectionTitle = 'AI 综合分析',
+}) {
+  const title = String(sectionTitle || '').trim() || 'AI 综合分析';
+  const timestamp = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date());
+  return await appendFeishuDocTextParagraphs(documentId, [
+    title,
+    `写入时间：${timestamp}`,
+    ...normalizeFeishuDocAppendLines(analysisText),
+  ]);
+}
+
 async function createFeishuDocReport({
   resultPayload,
   patientName = '',
@@ -662,26 +789,7 @@ async function createFeishuDocReport({
       prettyReportUrl,
       standardReportUrl,
     });
-    const children = paragraphs.map((content) => ({
-      block_type: 2,
-      text: {
-        elements: [
-          {
-            text_run: {
-              content,
-            },
-          },
-        ],
-      },
-    }));
-
-    if (children.length) {
-      await callFeishuBitableApi(
-        'POST',
-        `/docx/v1/documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(documentId)}/children`,
-        { children },
-      );
-    }
+    await appendFeishuDocTextParagraphs(documentId, paragraphs);
 
     return {
       ok: true,
@@ -5006,6 +5114,56 @@ async function handleGenerateFeishuDoc(request, response) {
   }
 }
 
+async function handleAppendFeishuDocAnalysis(request, response) {
+  const payload = await readRequestJson(request);
+  const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
+  const documentId = String(payload.documentId || '').trim();
+  const analysisText = String(payload.analysisText || '').trim();
+  const sectionTitle = String(payload.sectionTitle || 'AI 综合分析').trim();
+
+  if (!apiKey) {
+    return sendJson(response, 400, { error: '缺少 API Key。' });
+  }
+  if (!documentId) {
+    return sendJson(response, 400, { error: '缺少飞书文档 ID。' });
+  }
+  if (!analysisText) {
+    return sendJson(response, 400, { error: '缺少分析内容。' });
+  }
+  if (!isFeishuBitableConfigured()) {
+    return sendJson(response, 503, { error: '飞书文档服务未配置。' });
+  }
+
+  const { user } = await requireActiveApiKeyUser(apiKey);
+  if (!user) {
+    return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
+  }
+
+  try {
+    const appended = await appendFeishuDocAnalysis({
+      documentId,
+      analysisText,
+      sectionTitle,
+    });
+    return sendJson(response, 200, {
+      ok: true,
+      feishuDoc: {
+        ok: true,
+        documentId,
+        docUrl: buildFeishuDocUrl(documentId),
+        aiAnalysis: {
+          ok: true,
+          lineCount: appended.lineCount,
+          updatedAt: nowIso(),
+        },
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return sendJson(response, 502, { error: message || '飞书文档追加分析失败。' });
+  }
+}
+
 async function handleMeasureOverlap(request, response) {
   const payload = await readRequestJson(request);
   const apiKey = String(payload.apiKey || request.headers['x-api-key'] || '').trim();
@@ -5365,6 +5523,9 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'POST' && url.pathname === '/api/report/feishu-doc') {
       return await handleGenerateFeishuDoc(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/report/feishu-doc/append-analysis') {
+      return await handleAppendFeishuDocAnalysis(request, response);
     }
     if (request.method === 'POST' && url.pathname === '/api/measure/overlap') {
       return await handleMeasureOverlap(request, response);
