@@ -1309,6 +1309,105 @@ textarea {
   overflow-x: auto;
 }
 
+.admin-notification-panel {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0 20px;
+  padding: 18px;
+  border: 1px solid rgba(88, 76, 183, 0.10);
+  border-radius: 14px;
+  background: rgba(91, 61, 240, 0.04);
+}
+
+.admin-notification-field {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-notification-field span {
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.admin-notification-field textarea {
+  width: 100%;
+  min-height: 104px;
+  resize: vertical;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(88, 76, 183, 0.12);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.6;
+}
+
+.admin-notification-field textarea:focus {
+  outline: none;
+  border-color: rgba(91, 61, 240, 0.4);
+  box-shadow: 0 0 0 4px rgba(91, 61, 240, 0.08);
+  background: #fff;
+}
+
+.admin-notification-actions {
+  display: flex;
+  justify-content: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.admin-notification-result {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(88, 76, 183, 0.10);
+}
+
+.admin-notification-summary {
+  display: grid;
+  gap: 4px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.admin-notification-summary strong,
+.admin-notification-result-grid strong {
+  color: var(--ink);
+}
+
+.admin-notification-result-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.admin-notification-result-grid section {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.admin-notification-result-grid ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.admin-notification-result-grid li span {
+  display: block;
+  color: var(--danger);
+}
+
 .admin-subsection {
   display: grid;
   gap: 14px;
@@ -1396,6 +1495,10 @@ textarea {
   flex-wrap: wrap;
 }
 
+.admin-actions {
+  flex-wrap: wrap;
+}
+
 .admin-table {
   width: 100%;
   min-width: 860px;
@@ -1475,6 +1578,10 @@ textarea {
 
   .admin-filter-summary {
     justify-self: stretch;
+  }
+
+  .admin-notification-result-grid {
+    grid-template-columns: 1fr;
   }
 
   .admin-filter-meta,

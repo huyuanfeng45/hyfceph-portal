@@ -102,6 +102,8 @@ const WEIXIN_QR_TIMEOUT_MS = Number(process.env.HYFCEPH_WEIXIN_QR_TIMEOUT_MS || 
 const WEIXIN_QR_POLL_TIMEOUT_MS = Number(process.env.HYFCEPH_WEIXIN_QR_POLL_TIMEOUT_MS || '35000');
 const WEIXIN_BOT_SECRET = process.env.HYFCEPH_WEIXIN_BOT_SECRET
   || createHmac('sha256', SESSION_SECRET).update('hyfceph-weixin-bot').digest('hex');
+const WEIXIN_NOTIFICATION_TIMEOUT_MS = Math.max(3000, Number(process.env.HYFCEPH_WEIXIN_NOTIFICATION_TIMEOUT_MS || '15000') || 15000);
+const WEIXIN_NOTIFICATION_MAX_CHARS = Math.max(20, Number(process.env.HYFCEPH_WEIXIN_NOTIFICATION_MAX_CHARS || '1000') || 1000);
 
 let blobSdkPromise = null;
 let resvgPromise = null;
@@ -1182,6 +1184,106 @@ function buildWeixinBotConfigFromBinding(user, binding, fallbackBot = null) {
     weixinUserId: binding.weixinUserId,
     apiKeyActive: isApiKeyActive(user),
   };
+}
+
+function buildWeixinNotificationTarget(user, store) {
+  const binding = normalizeWeixinBindingRecord(user?.weixinBinding);
+  const config = buildWeixinBotConfigFromBinding(user, binding, normalizeWeixinBotRecord(store?.weixinBot));
+  return {
+    user,
+    binding,
+    config,
+  };
+}
+
+function randomWechatUinHeader() {
+  const uint32 = randomBytes(4).readUInt32BE(0);
+  return Buffer.from(String(uint32), 'utf8').toString('base64');
+}
+
+function weixinApiBaseUrl(baseUrl) {
+  const normalized = String(baseUrl || WEIXIN_FIXED_BASE_URL).trim().replace(/\/+$/, '');
+  return normalized || WEIXIN_FIXED_BASE_URL;
+}
+
+function publicWeixinNotificationResult(result) {
+  const user = result.user || {};
+  const config = result.config || null;
+  const binding = result.binding || null;
+  const weixinUserId = config?.weixinUserId || binding?.weixinUserId || '';
+  return {
+    ok: Boolean(result.ok),
+    userId: user.id || null,
+    userName: user.name || '-',
+    organization: user.organization || '-',
+    phone: user.phone || user.username || null,
+    role: user.role === 'admin' ? 'admin' : 'user',
+    status: result.status || null,
+    displayUserId: maskWeixinUserId(weixinUserId),
+    botAccountId: config?.accountId || binding?.botAccountId || null,
+    error: result.error || null,
+  };
+}
+
+async function sendWeixinAdminTextNotification(config, message) {
+  if (!config?.weixinUserId) {
+    throw new Error('该用户尚未绑定微信。');
+  }
+  if (!config?.accountId || !config?.token) {
+    throw new Error('该用户的微信 bot 配置不可用。');
+  }
+
+  const body = JSON.stringify({
+    msg: {
+      from_user_id: '',
+      to_user_id: config.weixinUserId,
+      client_id: `hyfceph-admin-${Date.now()}-${randomBytes(4).toString('hex')}`,
+      message_type: 2,
+      message_state: 2,
+      item_list: [
+        {
+          type: 1,
+          text_item: { text: message },
+        },
+      ],
+    },
+    base_info: {
+      channel_version: 'hyfceph-portal',
+    },
+  });
+  const url = new URL('ilink/bot/sendmessage', `${weixinApiBaseUrl(config.baseUrl)}/`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), WEIXIN_NOTIFICATION_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        AuthorizationType: 'ilink_bot_token',
+        'Content-Length': String(Buffer.byteLength(body, 'utf8')),
+        'X-WECHAT-UIN': randomWechatUinHeader(),
+        Authorization: `Bearer ${config.token}`,
+      },
+      body,
+      signal: controller.signal,
+    });
+    const responseText = await response.text();
+    if (!response.ok) {
+      throw new Error(`微信接口返回 ${response.status}: ${responseText.slice(0, 300)}`);
+    }
+    return {
+      status: response.status,
+      responseText,
+    };
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`微信通知发送超时（${Math.round(WEIXIN_NOTIFICATION_TIMEOUT_MS / 1000)} 秒）。`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function collectWeixinBotConfigs(store) {
@@ -5323,6 +5425,82 @@ async function handleAdminUsers(request, response) {
   });
 }
 
+async function handleAdminWeixinNotification(request, response) {
+  const adminUser = await requireAdmin(request, response);
+  if (!adminUser) return;
+
+  const payload = await readRequestJson(request);
+  const message = String(payload.message || '').trim();
+  if (!message) {
+    return sendJson(response, 400, { error: '请填写要发送的通知内容。' });
+  }
+  if (message.length > WEIXIN_NOTIFICATION_MAX_CHARS) {
+    return sendJson(response, 400, { error: `通知内容不能超过 ${WEIXIN_NOTIFICATION_MAX_CHARS} 个字符。` });
+  }
+
+  const userId = String(payload.userId || '').trim();
+  const target = String(payload.target || '').trim();
+  if (!userId && target !== 'all') {
+    return sendJson(response, 400, { error: '请选择接收用户，或选择群发给所有人。' });
+  }
+
+  const store = await readStore();
+  const selectedUsers = userId
+    ? store.users.filter((user) => user.id === userId)
+    : [...store.users].sort((left, right) => {
+        if (left.role === 'admin' && right.role !== 'admin') return -1;
+        if (left.role !== 'admin' && right.role === 'admin') return 1;
+        return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+      });
+
+  if (userId && selectedUsers.length === 0) {
+    return sendJson(response, 404, { error: '用户不存在。' });
+  }
+
+  const results = [];
+  for (const user of selectedUsers) {
+    const targetRecord = buildWeixinNotificationTarget(user, store);
+    if (!targetRecord.config) {
+      results.push(publicWeixinNotificationResult({
+        ...targetRecord,
+        ok: false,
+        error: targetRecord.binding ? '微信 bot 配置不可用。' : '该用户尚未绑定微信。',
+      }));
+      continue;
+    }
+
+    try {
+      const sent = await sendWeixinAdminTextNotification(targetRecord.config, message);
+      results.push(publicWeixinNotificationResult({
+        ...targetRecord,
+        ok: true,
+        status: sent.status,
+      }));
+    } catch (error) {
+      results.push(publicWeixinNotificationResult({
+        ...targetRecord,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+
+  const success = results.filter((item) => item.ok);
+  const failed = results.filter((item) => !item.ok);
+  return sendJson(response, 200, {
+    message: failed.length
+      ? `通知发送完成：成功 ${success.length} 人，失败 ${failed.length} 人。`
+      : `通知发送完成：成功 ${success.length} 人，失败 0 人。`,
+    mode: userId ? 'single' : 'broadcast',
+    targetCount: selectedUsers.length,
+    attemptedCount: results.filter((item) => item.status).length,
+    successCount: success.length,
+    failedCount: failed.length,
+    success,
+    failed,
+  });
+}
+
 async function handleAdminUpdateApiKey(request, response, userId) {
   const adminUser = await requireAdmin(request, response);
   if (!adminUser) return;
@@ -5538,6 +5716,9 @@ export async function handleNodeRequest(request, response) {
     }
     if (request.method === 'GET' && url.pathname === '/api/admin/users') {
       return await handleAdminUsers(request, response);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/admin/weixin-notifications') {
+      return await handleAdminWeixinNotification(request, response);
     }
     if (request.method === 'PATCH' && url.pathname.startsWith('/api/admin/users/') && url.pathname.endsWith('/api-key')) {
       const userId = url.pathname.split('/')[4];

@@ -396,6 +396,22 @@
                       <button id="refresh-admin-button" class="ghost-button" type="button">刷新列表</button>
                     </div>
 
+                    <div class="admin-notification-panel">
+                      <div>
+                        <div class="section-kicker">Notice</div>
+                        <div class="api-card-title admin-subtitle">群发通知</div>
+                        <div class="api-tip">群发会发送给所有已注册用户，包括管理员自己。未绑定微信或配置不可用的用户会显示在失败列表。</div>
+                      </div>
+                      <label class="admin-notification-field">
+                        <span>通知内容</span>
+                        <textarea id="admin-broadcast-message" rows="3" placeholder="请输入要发送给所有人的通知内容"></textarea>
+                      </label>
+                      <div class="admin-notification-actions">
+                        <button id="admin-broadcast-button" class="primary-button" type="button">群发给所有人</button>
+                      </div>
+                      <div id="admin-notification-result" class="admin-notification-result hidden"></div>
+                    </div>
+
                     <div class="admin-table-wrap">
                       <table class="admin-table">
                         <thead>

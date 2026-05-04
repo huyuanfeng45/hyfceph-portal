@@ -61,6 +61,9 @@ const clearOperatorSyncButton = document.querySelector('#clear-operator-sync-but
 const refreshAdminButton = document.querySelector('#refresh-admin-button');
 const adminPanel = document.querySelector('#admin-panel');
 const adminUsersBody = document.querySelector('#admin-users-body');
+const adminBroadcastMessage = document.querySelector('#admin-broadcast-message');
+const adminBroadcastButton = document.querySelector('#admin-broadcast-button');
+const adminNotificationResult = document.querySelector('#admin-notification-result');
 const adminInviteCodesBody = document.querySelector('#admin-invite-codes-body');
 const adminInviteSearchInput = document.querySelector('#admin-invite-search-input');
 const adminInviteStatusFilter = document.querySelector('#admin-invite-status-filter');
@@ -436,6 +439,71 @@ function readFileAsBase64(file) {
   });
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatNotificationName(item) {
+  return [item.userName || '-', item.organization || '']
+    .filter(Boolean)
+    .join(' / ');
+}
+
+function renderAdminNotificationResult(result) {
+  if (!adminNotificationResult || !result) return;
+  const success = Array.isArray(result.success) ? result.success : [];
+  const failed = Array.isArray(result.failed) ? result.failed : [];
+  const successList = success.length
+    ? success.map((item) => `<li>${escapeHtml(formatNotificationName(item))}</li>`).join('')
+    : '<li>无</li>';
+  const failedList = failed.length
+    ? failed.map((item) => `<li>${escapeHtml(formatNotificationName(item))}<span>${escapeHtml(item.error || '发送失败')}</span></li>`).join('')
+    : '<li>无</li>';
+
+  adminNotificationResult.innerHTML = `
+    <div class="admin-notification-summary">
+      <strong>发送完成</strong>
+      <span>目标 ${result.targetCount ?? 0} 人，已请求 ${result.attemptedCount ?? 0} 条，成功 ${result.successCount ?? 0} 人，失败 ${result.failedCount ?? 0} 人。</span>
+    </div>
+    <div class="admin-notification-result-grid">
+      <section>
+        <strong>成功</strong>
+        <ul>${successList}</ul>
+      </section>
+      <section>
+        <strong>失败</strong>
+        <ul>${failedList}</ul>
+      </section>
+    </div>
+  `;
+  adminNotificationResult.classList.remove('hidden');
+}
+
+async function sendAdminWeixinNotification(payload, triggerButton = null) {
+  clearFlash();
+  const button = triggerButton;
+  if (button) button.disabled = true;
+  try {
+    const result = await requestJson('/api/admin/weixin-notifications', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    renderAdminNotificationResult(result);
+    showFlash(result.message || `通知发送完成：成功 ${result.successCount || 0} 人，失败 ${result.failedCount || 0} 人。`);
+    return result;
+  } catch (error) {
+    showFlash(error.message, 'error');
+    throw error;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 function renderAdminUsers(users) {
   if (!users.length) {
     adminUsersBody.innerHTML = '<tr><td colspan="6" class="empty-cell">暂无数据</td></tr>';
@@ -458,14 +526,14 @@ function renderAdminUsers(users) {
     const expiryControl = user.apiKey
       ? `<input class="admin-expiry-input" type="datetime-local" value="${toDatetimeLocal(user.apiKeyExpiresAt)}" data-user-id="${user.id}" />`
       : '<span class="empty-cell">-</span>';
-    const actionButtons = user.role === 'admin'
+    const messageButton = `<button class="ghost-button js-send-user-message" type="button" data-user-id="${user.id}" ${user.weixinBinding ? '' : 'disabled'}>${user.weixinBinding ? '发送消息' : '未绑定微信'}</button>`;
+    const keyActions = user.role === 'admin'
       ? '<span class="empty-cell">管理员账号不可删除 Key</span>'
       : user.apiKey
-        ? `<div class="admin-actions">
-            <button class="ghost-button js-save-expiry" type="button" data-user-id="${user.id}">保存有效期</button>
-            <button class="ghost-button js-delete-key" type="button" data-user-id="${user.id}">删除 Key</button>
-          </div>`
+        ? `<button class="ghost-button js-save-expiry" type="button" data-user-id="${user.id}">保存有效期</button>
+           <button class="ghost-button js-delete-key" type="button" data-user-id="${user.id}">删除 Key</button>`
         : '<span class="empty-cell">暂无可操作 Key</span>';
+    const actionButtons = `<div class="admin-actions">${messageButton}${keyActions}</div>`;
 
     return `
       <tr>
@@ -517,6 +585,25 @@ function renderAdminUsers(users) {
         showFlash('API Key 已删除。');
       } catch (error) {
         showFlash(error.message, 'error');
+      }
+    });
+  });
+
+  adminUsersBody.querySelectorAll('.js-send-user-message').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const userId = button.dataset.userId;
+      const user = users.find((item) => item.id === userId);
+      const message = window.prompt(`发送给 ${user?.name || '该用户'} 的消息：`);
+      if (!message || !message.trim()) {
+        return;
+      }
+      try {
+        await sendAdminWeixinNotification({
+          userId,
+          message: message.trim(),
+        }, button);
+      } catch {
+        // 错误已经展示在顶部提示里。
       }
     });
   });
@@ -1269,6 +1356,26 @@ refreshAdminButton.addEventListener('click', async () => {
     showFlash('列表已刷新。');
   } catch (error) {
     showFlash(error.message, 'error');
+  }
+});
+
+adminBroadcastButton?.addEventListener('click', async () => {
+  const message = adminBroadcastMessage?.value?.trim() || '';
+  if (!message) {
+    showFlash('请先填写群发通知内容。', 'error');
+    return;
+  }
+  const shouldContinue = window.confirm('这条通知会发送给所有已注册用户，包括管理员自己。是否继续？');
+  if (!shouldContinue) {
+    return;
+  }
+  try {
+    await sendAdminWeixinNotification({
+      target: 'all',
+      message,
+    }, adminBroadcastButton);
+  } catch {
+    // 错误已经展示在顶部提示里。
   }
 });
 
