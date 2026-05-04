@@ -136,6 +136,12 @@ const AI_ANALYSIS_MAX_OUTPUT_TOKENS = Math.max(800, Number(
   || LOCAL_AI_ANALYSIS_CONFIG.maxOutputTokens
   || 5_000,
 ) || 5_000);
+const AI_ANALYSIS_RETRY_ATTEMPTS = Math.max(1, Number(
+  process.env.HYFCEPH_AI_ANALYSIS_RETRY_ATTEMPTS
+  || LOCAL_CONFIG.aiAnalysisRetryAttempts
+  || LOCAL_AI_ANALYSIS_CONFIG.retryAttempts
+  || 3,
+) || 3);
 const execFileAsync = promisify(execFile);
 
 function normalizeWeixinMeasureMode(value) {
@@ -1142,6 +1148,20 @@ async function prepareWeixinReplyImage(imagePath, prefix) {
 async function updateLatestResultCache(conversationId, result, options = {}) {
   const key = normalizeConversationKey(conversationId);
   const previous = latestResultCache[key] || {};
+  const previousFeishuDoc = previous.result?.feishuDoc || null;
+  const nextFeishuDoc = result?.feishuDoc || null;
+  const previousDocumentId = String(previousFeishuDoc?.documentId || '').trim();
+  const nextDocumentId = String(nextFeishuDoc?.documentId || '').trim();
+  const previousDocUrl = String(previousFeishuDoc?.docUrl || '').trim();
+  const nextDocUrl = String(nextFeishuDoc?.docUrl || '').trim();
+  const isSameFeishuDoc = Boolean(
+    nextFeishuDoc
+    && previousFeishuDoc
+    && (
+      (previousDocumentId && nextDocumentId && previousDocumentId === nextDocumentId)
+      || (previousDocUrl && nextDocUrl && previousDocUrl === nextDocUrl)
+    ),
+  );
   const sourceImagePath = await persistOriginalImageFile(
     options.sourceImagePath || '',
     `${key}-source`,
@@ -1195,13 +1215,13 @@ async function updateLatestResultCache(conversationId, result, options = {}) {
       reportPayload: result?.reportPayload || previous.result?.reportPayload || null,
       report: result?.report || null,
       prettyReport: result?.prettyReport || null,
-      feishuDoc: result?.feishuDoc
+      feishuDoc: nextFeishuDoc
         ? {
-            ...(previous.result?.feishuDoc || {}),
-            ...result.feishuDoc,
-            aiAnalysis: result.feishuDoc.aiAnalysis || previous.result?.feishuDoc?.aiAnalysis || null,
+            ...(isSameFeishuDoc ? previousFeishuDoc : {}),
+            ...nextFeishuDoc,
+            aiAnalysis: nextFeishuDoc.aiAnalysis || (isSameFeishuDoc ? previousFeishuDoc?.aiAnalysis : null) || null,
           }
-        : (previous.result?.feishuDoc || null),
+        : (previousFeishuDoc || null),
     },
     sourceImagePath,
     rawAnnotatedImagePath: rawAnnotatedImagePath || previous.rawAnnotatedImagePath || '',
@@ -1426,6 +1446,33 @@ async function postAiChatCompletion(body) {
   }
 }
 
+function isRetriableAiAnalysisError(error) {
+  const status = Number(error?.status || 0);
+  const message = String(error?.message || error || '').toLowerCase();
+  if ([408, 425, 429, 500, 502, 503, 504].includes(status)) {
+    return true;
+  }
+  return /stream error|internal_error|internal error|fetch failed|socket|econnreset|other side closed|empty reply|timeout|timed out|connect|network/.test(message);
+}
+
+async function postAiChatCompletionWithRetry(body) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= AI_ANALYSIS_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await postAiChatCompletion(body);
+    } catch (error) {
+      lastError = error;
+      const retriable = isRetriableAiAnalysisError(error);
+      console.warn(`[HYFCeph Weixin] AI analysis request failed (${attempt}/${AI_ANALYSIS_RETRY_ATTEMPTS}): ${error instanceof Error ? error.message : String(error)}`);
+      if (!retriable || attempt >= AI_ANALYSIS_RETRY_ATTEMPTS) {
+        break;
+      }
+      await sleep(retryDelayMs(attempt));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError || 'AI analysis request failed'));
+}
+
 async function callAiAnalysisModel(resultPayload) {
   if (!isAiAnalysisConfigured()) {
     return {
@@ -1454,7 +1501,7 @@ async function callAiAnalysisModel(resultPayload) {
 
   let payload;
   try {
-    payload = await postAiChatCompletion({
+    payload = await postAiChatCompletionWithRetry({
       ...baseBody,
       max_tokens: AI_ANALYSIS_MAX_OUTPUT_TOKENS,
     });
@@ -1462,7 +1509,7 @@ async function callAiAnalysisModel(resultPayload) {
     if (Number(error?.status) !== 400) {
       throw error;
     }
-    payload = await postAiChatCompletion({
+    payload = await postAiChatCompletionWithRetry({
       ...baseBody,
       max_completion_tokens: AI_ANALYSIS_MAX_OUTPUT_TOKENS,
     });
