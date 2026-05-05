@@ -116,7 +116,7 @@ const AI_ANALYSIS_MODEL = String(
   || LOCAL_CONFIG.aiAnalysisModel
   || LOCAL_CONFIG.aiModel
   || LOCAL_AI_ANALYSIS_CONFIG.model
-  || 'gpt-5.5',
+  || 'gpt-5.4',
 ).trim();
 const AI_ANALYSIS_FAST_MODE = /^(1|true|yes|on)$/i.test(String(
   process.env.HYFCEPH_AI_ANALYSIS_FAST_MODE
