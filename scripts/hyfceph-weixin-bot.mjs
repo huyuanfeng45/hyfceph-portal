@@ -118,30 +118,54 @@ const AI_ANALYSIS_MODEL = String(
   || LOCAL_AI_ANALYSIS_CONFIG.model
   || 'gpt-5.5',
 ).trim();
+const AI_ANALYSIS_FAST_MODE = /^(1|true|yes|on)$/i.test(String(
+  process.env.HYFCEPH_AI_ANALYSIS_FAST_MODE
+  || LOCAL_CONFIG.aiAnalysisFastMode
+  || LOCAL_AI_ANALYSIS_CONFIG.fastMode
+  || 'true',
+));
 const AI_ANALYSIS_TIMEOUT_MS = Number(
   process.env.HYFCEPH_AI_ANALYSIS_TIMEOUT_MS
   || LOCAL_CONFIG.aiAnalysisTimeoutMs
   || LOCAL_AI_ANALYSIS_CONFIG.timeoutMs
-  || 240_000,
+  || (AI_ANALYSIS_FAST_MODE ? 45_000 : 120_000),
 );
 const AI_ANALYSIS_MAX_INPUT_CHARS = Math.max(10_000, Number(
   process.env.HYFCEPH_AI_ANALYSIS_MAX_INPUT_CHARS
   || LOCAL_CONFIG.aiAnalysisMaxInputChars
   || LOCAL_AI_ANALYSIS_CONFIG.maxInputChars
-  || 140_000,
-) || 140_000);
-const AI_ANALYSIS_MAX_OUTPUT_TOKENS = Math.max(800, Number(
+  || (AI_ANALYSIS_FAST_MODE ? 22_000 : 45_000),
+) || (AI_ANALYSIS_FAST_MODE ? 22_000 : 45_000));
+const AI_ANALYSIS_MAX_OUTPUT_TOKENS = Math.max(600, Number(
   process.env.HYFCEPH_AI_ANALYSIS_MAX_OUTPUT_TOKENS
   || LOCAL_CONFIG.aiAnalysisMaxOutputTokens
   || LOCAL_AI_ANALYSIS_CONFIG.maxOutputTokens
-  || 5_000,
-) || 5_000);
+  || (AI_ANALYSIS_FAST_MODE ? 1_400 : 2_600),
+) || (AI_ANALYSIS_FAST_MODE ? 1_400 : 2_600));
 const AI_ANALYSIS_RETRY_ATTEMPTS = Math.max(1, Number(
   process.env.HYFCEPH_AI_ANALYSIS_RETRY_ATTEMPTS
   || LOCAL_CONFIG.aiAnalysisRetryAttempts
   || LOCAL_AI_ANALYSIS_CONFIG.retryAttempts
-  || 3,
-) || 3);
+  || (AI_ANALYSIS_FAST_MODE ? 1 : 2),
+) || (AI_ANALYSIS_FAST_MODE ? 1 : 2));
+const AI_ANALYSIS_FRAMEWORK_LIMIT = Math.max(2, Number(
+  process.env.HYFCEPH_AI_ANALYSIS_FRAMEWORK_LIMIT
+  || LOCAL_CONFIG.aiAnalysisFrameworkLimit
+  || LOCAL_AI_ANALYSIS_CONFIG.frameworkLimit
+  || (AI_ANALYSIS_FAST_MODE ? 6 : 12),
+) || (AI_ANALYSIS_FAST_MODE ? 6 : 12));
+const AI_ANALYSIS_FRAMEWORK_ITEM_LIMIT = Math.max(4, Number(
+  process.env.HYFCEPH_AI_ANALYSIS_FRAMEWORK_ITEM_LIMIT
+  || LOCAL_CONFIG.aiAnalysisFrameworkItemLimit
+  || LOCAL_AI_ANALYSIS_CONFIG.frameworkItemLimit
+  || (AI_ANALYSIS_FAST_MODE ? 5 : 8),
+) || (AI_ANALYSIS_FAST_MODE ? 5 : 8));
+const AI_ANALYSIS_FRAMEWORK_NORMAL_ITEM_LIMIT = Math.max(0, Number(
+  process.env.HYFCEPH_AI_ANALYSIS_FRAMEWORK_NORMAL_ITEM_LIMIT
+  || LOCAL_CONFIG.aiAnalysisFrameworkNormalItemLimit
+  || LOCAL_AI_ANALYSIS_CONFIG.frameworkNormalItemLimit
+  || (AI_ANALYSIS_FAST_MODE ? 0 : 2),
+) || (AI_ANALYSIS_FAST_MODE ? 0 : 2));
 const execFileAsync = promisify(execFile);
 
 function normalizeWeixinMeasureMode(value) {
@@ -1369,16 +1393,218 @@ function sanitizeAiAnalysisPayload(value, depth = 0) {
   return output;
 }
 
+function compactAiText(value, maxLength = 360) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) {
+    return '';
+  }
+  return text.length > maxLength ? `${text.slice(0, maxLength).trim()}……` : text;
+}
+
+function omitEmptyAiFields(record) {
+  const output = {};
+  for (const [key, value] of Object.entries(record || {})) {
+    if (value === null || value === undefined || value === '') {
+      continue;
+    }
+    if (Array.isArray(value) && !value.length) {
+      continue;
+    }
+    if (typeof value === 'object' && !Array.isArray(value) && !Object.keys(value).length) {
+      continue;
+    }
+    output[key] = value;
+  }
+  return output;
+}
+
+function aiItemPriority(item) {
+  if (!item || typeof item !== 'object') {
+    return 0;
+  }
+  const tone = String(item.tone || '').toLowerCase();
+  const status = String(item.status || '').toLowerCase();
+  const text = [
+    item.prompt,
+    item.clinicalMeaning,
+    item.label,
+    item.reference,
+  ].map((value) => String(value || '')).join(' ');
+  let score = 0;
+  if (/danger|error|high|severe|异常|重度/.test(tone)) score += 8;
+  if (/warn|warning|medium|中度|偏/.test(tone)) score += 5;
+  if (status && !/supported|normal|success/.test(status)) score += 3;
+  if (/偏大|偏小|增大|减小|前突|后缩|唇倾|舌倾|高角|低角|开[牙合合]|深覆|反[牙合合]|拥挤|异常|陡|代偿|风险/.test(text)) score += 4;
+  if (/正常|适中|无异常/.test(text) && score < 5) score -= 1;
+  return score;
+}
+
+function selectAiFrameworkItems(items) {
+  const source = (Array.isArray(items) ? items : [])
+    .map(compactAiMeasurementItem)
+    .filter(Boolean);
+  const abnormal = source
+    .filter((item) => aiItemPriority(item) > 0)
+    .sort((left, right) => aiItemPriority(right) - aiItemPriority(left));
+  const normal = source.filter((item) => aiItemPriority(item) <= 0);
+  const selected = [
+    ...abnormal.slice(0, AI_ANALYSIS_FRAMEWORK_ITEM_LIMIT),
+    ...normal.slice(0, Math.max(0, AI_ANALYSIS_FRAMEWORK_NORMAL_ITEM_LIMIT)),
+  ];
+  const deduped = new Map();
+  for (const item of selected) {
+    const key = `${item.code || ''}:${item.label || ''}:${item.value || ''}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, item);
+    }
+  }
+  return [...deduped.values()].slice(0, AI_ANALYSIS_FRAMEWORK_ITEM_LIMIT);
+}
+
+function compactAiMeasurementItem(item) {
+  if (!item || typeof item !== 'object') {
+    return null;
+  }
+  return omitEmptyAiFields({
+    code: compactAiText(item.code, 120),
+    label: compactAiText(item.label || item.name || item.code, 120),
+    category: compactAiText(item.category || item.type, 80),
+    value: item.valueText || (Number.isFinite(item.value) ? `${item.value}${item.unit || ''}` : ''),
+    reference: compactAiText(item.reference || item.standardText || item.standard || item.norm, 160),
+    status: compactAiText(item.status, 80),
+    tone: compactAiText(item.tone, 80),
+    prompt: compactAiText(item.prompt || item.judgment || item.comment, 220),
+    clinicalMeaning: compactAiText(item.clinicalMeaning || item.meaning || item.interpretation, 260),
+  });
+}
+
+function compactAiMetrics(metrics) {
+  return (Array.isArray(metrics) ? metrics : [])
+    .map(compactAiMeasurementItem)
+    .filter(Boolean);
+}
+
+function compactAiFrameworkReport(report) {
+  if (!report || typeof report !== 'object') {
+    return null;
+  }
+  const allItems = (Array.isArray(report.items) ? report.items : [])
+    .map(compactAiMeasurementItem)
+    .filter(Boolean);
+  const selectedItems = selectAiFrameworkItems(report.items);
+  const abnormalCount = allItems.filter((item) => aiItemPriority(item) > 0).length;
+  return omitEmptyAiFields({
+    code: compactAiText(report.code, 120),
+    label: compactAiText(report.label || report.name || report.code, 120),
+    note: compactAiText(report.note, 300),
+    status: compactAiText(report.status, 80),
+    supportedItemCount: Number.isFinite(Number(report.supportedItemCount)) ? Number(report.supportedItemCount) : undefined,
+    unsupportedItemCount: Number.isFinite(Number(report.unsupportedItemCount)) ? Number(report.unsupportedItemCount) : undefined,
+    itemSummary: omitEmptyAiFields({
+      total: allItems.length,
+      abnormal: abnormalCount,
+      selected: selectedItems.length,
+      selectionRule: '优先保留异常/偏离/有临床意义项目，少量保留正常代表项',
+    }),
+    items: selectedItems,
+  });
+}
+
+function summarizeAiFrameworkReport(code, report) {
+  const compact = compactAiFrameworkReport(report);
+  if (!compact) {
+    return null;
+  }
+  return omitEmptyAiFields({
+    code: compactAiText(compact.code || code, 120),
+    label: compactAiText(compact.label || code, 120),
+    status: compact.status,
+    total: compact.itemSummary?.total,
+    abnormal: compact.itemSummary?.abnormal,
+    selected: compact.itemSummary?.selected,
+  });
+}
+
+function aiFrameworkPriority(report) {
+  if (!report || typeof report !== 'object') {
+    return 0;
+  }
+  const items = Array.isArray(report.items) ? report.items : [];
+  const itemScore = items.reduce((sum, item) => sum + Math.max(0, aiItemPriority(compactAiMeasurementItem(item))), 0);
+  const abnormalCount = items.filter((item) => aiItemPriority(compactAiMeasurementItem(item)) > 0).length;
+  return itemScore + abnormalCount * 3 + Math.min(items.length, 20) * 0.05;
+}
+
+function selectAiFrameworkEntries(frameworkReports) {
+  const reports = frameworkReports && typeof frameworkReports === 'object' ? frameworkReports : {};
+  return Object.entries(reports)
+    .map(([code, report]) => ({
+      code,
+      report,
+      priority: aiFrameworkPriority(report),
+    }))
+    .sort((left, right) => right.priority - left.priority);
+}
+
+function compactAiFrameworkReports(frameworkReports) {
+  const output = {};
+  for (const { code, report } of selectAiFrameworkEntries(frameworkReports).slice(0, AI_ANALYSIS_FRAMEWORK_LIMIT)) {
+    const compact = compactAiFrameworkReport(report);
+    if (compact) {
+      output[code] = compact;
+    }
+  }
+  return output;
+}
+
+function summarizeAiFrameworkReports(frameworkReports) {
+  return selectAiFrameworkEntries(frameworkReports)
+    .map(({ code, report }) => summarizeAiFrameworkReport(code, report))
+    .filter(Boolean);
+}
+
+function compactAiAnalysisSide(side) {
+  if (!side || typeof side !== 'object') {
+    return null;
+  }
+  return omitEmptyAiFields({
+    riskLabel: compactAiText(side.riskLabel, 180),
+    insight: compactAiText(side.insight, 420),
+    metrics: compactAiMetrics(side.metrics),
+    frameworkOverview: summarizeAiFrameworkReports(side.frameworkReports),
+    frameworkReports: compactAiFrameworkReports(side.frameworkReports),
+  });
+}
+
+function compactAiAnalysis(analysis) {
+  if (!analysis || typeof analysis !== 'object') {
+    return null;
+  }
+  return omitEmptyAiFields({
+    type: compactAiText(analysis.type, 80),
+    riskLabel: compactAiText(analysis.riskLabel, 180),
+    insight: compactAiText(analysis.insight, 420),
+    frameworkChoices: Array.isArray(analysis.frameworkChoices)
+      ? analysis.frameworkChoices.map((item) => compactAiText(item, 120)).filter(Boolean)
+      : [],
+    metrics: compactAiMetrics(analysis.metrics),
+    frameworkOverview: summarizeAiFrameworkReports(analysis.frameworkReports),
+    frameworkReports: compactAiFrameworkReports(analysis.frameworkReports),
+    base: compactAiAnalysisSide(analysis.base),
+    compare: compactAiAnalysisSide(analysis.compare),
+  });
+}
+
 function buildAiAnalysisSourcePayload(resultPayload) {
   const payload = resultPayload && typeof resultPayload === 'object' ? resultPayload : {};
-  return sanitizeAiAnalysisPayload({
+  return omitEmptyAiFields({
     mode: payload.mode || '',
     patientName: normalizePatientName(payload.patientName || '') || '匿名',
     generatedAt: new Date().toISOString(),
-    summary: payload.summary || null,
-    metrics: payload.metrics || payload.analysis?.metrics || [],
-    analysis: payload.analysis || null,
-    analysisError: payload.analysisError || null,
+    summary: sanitizeAiAnalysisPayload(payload.summary || null),
+    metrics: compactAiMetrics(payload.metrics || payload.analysis?.metrics || []),
+    analysis: compactAiAnalysis(payload.analysis),
+    analysisError: compactAiText(payload.analysisError, 500),
   });
 }
 
@@ -1389,31 +1615,47 @@ function buildAiAnalysisPrompt(resultPayload) {
     reportJson = `${reportJson.slice(0, AI_ANALYSIS_MAX_INPUT_CHARS)}\n\n[由于数据过长，后续 JSON 已截断；请基于已提供的数据谨慎分析。]`;
   }
   return [
-    '请基于下面这份头影测量美化报告的结构化数据，写一份面向正畸医生阅读的中文综合分析。',
+    AI_ANALYSIS_FAST_MODE
+      ? '请基于下面这份头影测量结构化数据，快速写一份面向正畸医生阅读的中文综合分析。'
+      : '请基于下面这份头影测量美化报告的结构化数据，写一份面向正畸医生阅读的中文综合分析。',
     '',
     '要求：',
     '1. 只基于给定数据分析，不要编造片外信息，不要声称已重新阅片。',
     '2. 不要出现外部平台或数据供应方名称。',
-    '3. 内容尽量详细，覆盖骨性矢状向、垂直向、牙性代偿、软组织侧貌、生长型、关键异常值、不同分析法之间的一致与冲突、临床关注点、复核建议。',
+    AI_ANALYSIS_FAST_MODE
+      ? '3. 优先分析异常值、偏离项和互相印证的指标；正常项一句带过。总长度控制在 1200-1800 个中文字符。'
+      : '3. 内容尽量详细，覆盖骨性矢状向、垂直向、牙性代偿、软组织侧貌、生长型、关键异常值、不同分析法之间的一致与冲突、临床关注点、复核建议。',
     '4. 对每个重要结论尽量引用具体指标名、测量值、标准范围或偏离方向。',
     '5. 语气专业、克制，定位为辅助分析，不替代医生诊断。',
-    '6. 必须单独讨论拔牙或不拔牙的倾向性建议：说明支持拔牙、支持不拔牙或需要进一步资料判断的理由，并明确还需结合拥挤度、Bolton 分析、牙周条件、面型美学、CBCT/根形、患者诉求等临床资料最终决定。',
-    '7. 必须单独讨论固定矫正注意事项：围绕支抗控制、转矩控制、垂直向控制、前牙内收或唇倾风险、咬合打开/关闭、牙周与根吸收风险、复诊监测重点等给出建议。',
-    '8. 必须单独讨论隐形矫正注意事项：围绕附件设计、IPR/扩弓/远移适应性、前牙转矩表达、垂直向控制、橡皮筋/支抗钉配合、依从性、阶段复核和中途重启风险等给出建议。',
-    '9. 输出纯文本，不要 Markdown 表格；可以使用中文序号和短段落。',
+    '6. 必须单独讨论拔牙或不拔牙倾向，但要明确最终需结合拥挤度、Bolton、牙周、面型、CBCT/根形和患者诉求。',
+    '7. 必须单独讨论固定矫正注意事项，重点写支抗、转矩、垂直向、前牙移动、牙周和根吸收监测。',
+    '8. 必须单独讨论隐形矫正注意事项，重点写附件/IPR/扩弓或远移、转矩表达、垂直向控制、橡皮筋/支抗钉和依从性。',
+    '9. 输出纯文本，不要 Markdown 表格；使用中文序号和短段落。',
     '',
     '建议结构：',
-    '一、总体判断',
-    '二、骨性关系分析',
-    '三、垂直向与生长型分析',
-    '四、牙性代偿与咬合倾向',
-    '五、软组织侧貌与美学提示',
-    '六、多分析法一致性与矛盾点',
-    '七、临床关注点与复核建议',
-    '八、拔牙或不拔牙的倾向性建议',
-    '九、固定矫正中的注意事项',
-    '十、隐形矫正中的注意事项',
-    '十一、综合小结',
+    ...(AI_ANALYSIS_FAST_MODE
+      ? [
+          '一、总体判断',
+          '二、关键指标证据',
+          '三、临床风险与复核点',
+          '四、拔牙或不拔牙倾向',
+          '五、固定矫正注意事项',
+          '六、隐形矫正注意事项',
+          '七、综合小结',
+        ]
+      : [
+          '一、总体判断',
+          '二、骨性关系分析',
+          '三、垂直向与生长型分析',
+          '四、牙性代偿与咬合倾向',
+          '五、软组织侧貌与美学提示',
+          '六、多分析法一致性与矛盾点',
+          '七、临床关注点与复核建议',
+          '八、拔牙或不拔牙的倾向性建议',
+          '九、固定矫正中的注意事项',
+          '十、隐形矫正中的注意事项',
+          '十一、综合小结',
+        ]),
     '',
     '结构化报告数据：',
     reportJson,
@@ -1455,10 +1697,24 @@ async function postAiChatCompletion(body) {
 function isRetriableAiAnalysisError(error) {
   const status = Number(error?.status || 0);
   const message = String(error?.message || error || '').toLowerCase();
+  if (/cooling down|quota|insufficient|unauthorized|invalid api key|permission denied|forbidden/.test(message)) {
+    return false;
+  }
   if ([408, 425, 429, 500, 502, 503, 504].includes(status)) {
     return true;
   }
   return /stream error|internal_error|internal error|fetch failed|socket|econnreset|other side closed|empty reply|timeout|timed out|connect|network/.test(message);
+}
+
+function formatAiAnalysisUserError(error) {
+  const message = String(error?.message || error || '');
+  if (/cooling down|quota|insufficient/i.test(message)) {
+    return '模型服务繁忙，请稍后再试。';
+  }
+  if (/timeout|timed out|AbortError/i.test(message)) {
+    return '模型生成超时，请稍后再试。';
+  }
+  return '模型暂时没有返回可用结果，请稍后再试。';
 }
 
 async function postAiChatCompletionWithRetry(body) {
@@ -1498,6 +1754,9 @@ async function callAiAnalysisModel(resultPayload) {
       content: buildAiAnalysisPrompt(resultPayload),
     },
   ];
+  const promptChars = messages.reduce((sum, message) => sum + String(message.content || '').length, 0);
+  const startedAt = Date.now();
+  console.log(`[HYFCeph Weixin] AI analysis request start model=${AI_ANALYSIS_MODEL} fast=${AI_ANALYSIS_FAST_MODE ? 'yes' : 'no'} promptChars=${promptChars} maxTokens=${AI_ANALYSIS_MAX_OUTPUT_TOKENS} timeoutMs=${AI_ANALYSIS_TIMEOUT_MS}`);
   const baseBody = {
     model: AI_ANALYSIS_MODEL,
     messages,
@@ -1529,6 +1788,7 @@ async function callAiAnalysisModel(resultPayload) {
   if (!content) {
     throw new Error('AI 模型未返回分析内容。');
   }
+  console.log(`[HYFCeph Weixin] AI analysis request done elapsedMs=${Date.now() - startedAt} outputChars=${content.length}`);
   return {
     ok: true,
     content,
@@ -2065,6 +2325,10 @@ async function triggerDeferredFeishuAiAnalysis({ request, apiKey, conversationId
       }
 
       console.log('[HYFCeph Weixin] generating AI analysis for feishu doc');
+      void sendWeixinFollowUpText(
+        request,
+        'AI 综合分析正在后台生成，完成后会自动写入飞书文档。',
+      ).catch(() => {});
       const aiResult = await callAiAnalysisModel(result);
       if (!aiResult?.ok || !aiResult.content) {
         console.warn(`[HYFCeph Weixin] AI analysis skipped: ${aiResult?.reason || 'no content'}`);
@@ -2093,6 +2357,10 @@ async function triggerDeferredFeishuAiAnalysis({ request, apiKey, conversationId
       );
     } catch (error) {
       console.warn(`[HYFCeph Weixin] AI feishu analysis follow-up failed: ${error instanceof Error ? error.message : String(error)}`);
+      void sendWeixinFollowUpText(
+        request,
+        `AI 综合分析暂时没有生成成功：${formatAiAnalysisUserError(error)}`,
+      ).catch(() => {});
     } finally {
       pendingAiAnalysisFollowUps.delete(conversationKey);
     }
