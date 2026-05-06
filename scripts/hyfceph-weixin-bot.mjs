@@ -166,6 +166,14 @@ const AI_ANALYSIS_FRAMEWORK_NORMAL_ITEM_LIMIT = Math.max(0, Number(
   || LOCAL_AI_ANALYSIS_CONFIG.frameworkNormalItemLimit
   || (AI_ANALYSIS_FAST_MODE ? 0 : 2),
 ) || (AI_ANALYSIS_FAST_MODE ? 0 : 2));
+const AI_ANALYSIS_ALLOWED_FRAMEWORKS = [
+  { label: '华西分析法', keys: ['huaxi', 'huaxitype', '华西', '华西分析法'] },
+  { label: 'Jarabak分析法', keys: ['jarabak', 'jarabaktype', 'jarabak分析法'] },
+  { label: 'TWEED分析法', keys: ['tweed', 'tweedtype', 'tweed分析法'] },
+  { label: 'Ricketts分析法', keys: ['ricketts', 'rickettstype', 'ricketts分析法'] },
+  { label: 'Downs分析法', keys: ['downs', 'downstype', 'downs分析法'] },
+  { label: 'Steiner分析法', keys: ['steiner', 'steinertype', 'steiner分析法'] },
+];
 const execFileAsync = promisify(execFile);
 
 function normalizeWeixinMeasureMode(value) {
@@ -1525,6 +1533,54 @@ function summarizeAiFrameworkReport(code, report) {
   });
 }
 
+function normalizeAiFrameworkKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_\-:：/\\()[\]{}（）【】]/g, '');
+}
+
+function aiFrameworkAllowedIndex(code, report) {
+  const candidates = [
+    code,
+    report?.code,
+    report?.label,
+    report?.name,
+  ].map(normalizeAiFrameworkKey).filter(Boolean);
+  if (!candidates.length) {
+    return -1;
+  }
+  return AI_ANALYSIS_ALLOWED_FRAMEWORKS.findIndex((framework) => (
+    framework.keys
+      .map(normalizeAiFrameworkKey)
+      .some((key) => candidates.some((candidate) => candidate === key || candidate.includes(key)))
+  ));
+}
+
+function compactAiFrameworkChoices(frameworkChoices) {
+  const choices = Array.isArray(frameworkChoices) ? frameworkChoices : [];
+  return AI_ANALYSIS_ALLOWED_FRAMEWORKS
+    .filter((framework, index) => choices.some((choice) => (
+      aiFrameworkAllowedIndex(choice, { code: choice, label: choice }) === index
+    )))
+    .map((framework) => framework.label);
+}
+
+function compactAiSummary(summary) {
+  if (!summary || typeof summary !== 'object') {
+    return sanitizeAiAnalysisPayload(summary || null);
+  }
+  const compact = sanitizeAiAnalysisPayload(summary);
+  if (!compact || typeof compact !== 'object' || Array.isArray(compact)) {
+    return compact;
+  }
+  return omitEmptyAiFields({
+    ...compact,
+    frameworkChoices: compactAiFrameworkChoices(compact.frameworkChoices),
+    supportedFrameworks: compactAiFrameworkChoices(compact.supportedFrameworks),
+  });
+}
+
 function aiFrameworkPriority(report) {
   if (!report || typeof report !== 'object') {
     return 0;
@@ -1538,17 +1594,25 @@ function aiFrameworkPriority(report) {
 function selectAiFrameworkEntries(frameworkReports) {
   const reports = frameworkReports && typeof frameworkReports === 'object' ? frameworkReports : {};
   return Object.entries(reports)
-    .map(([code, report]) => ({
-      code,
-      report,
-      priority: aiFrameworkPriority(report),
-    }))
-    .sort((left, right) => right.priority - left.priority);
+    .map(([code, report]) => {
+      const allowedIndex = aiFrameworkAllowedIndex(code, report);
+      return {
+        code,
+        report,
+        allowedIndex,
+        priority: aiFrameworkPriority(report),
+      };
+    })
+    .filter((entry) => entry.allowedIndex >= 0)
+    .sort((left, right) => (
+      left.allowedIndex - right.allowedIndex
+      || right.priority - left.priority
+    ));
 }
 
 function compactAiFrameworkReports(frameworkReports) {
   const output = {};
-  for (const { code, report } of selectAiFrameworkEntries(frameworkReports).slice(0, AI_ANALYSIS_FRAMEWORK_LIMIT)) {
+  for (const { code, report } of selectAiFrameworkEntries(frameworkReports).slice(0, Math.max(AI_ANALYSIS_FRAMEWORK_LIMIT, AI_ANALYSIS_ALLOWED_FRAMEWORKS.length))) {
     const compact = compactAiFrameworkReport(report);
     if (compact) {
       output[code] = compact;
@@ -1585,7 +1649,7 @@ function compactAiAnalysis(analysis) {
     riskLabel: compactAiText(analysis.riskLabel, 180),
     insight: compactAiText(analysis.insight, 420),
     frameworkChoices: Array.isArray(analysis.frameworkChoices)
-      ? analysis.frameworkChoices.map((item) => compactAiText(item, 120)).filter(Boolean)
+      ? compactAiFrameworkChoices(analysis.frameworkChoices)
       : [],
     metrics: compactAiMetrics(analysis.metrics),
     frameworkOverview: summarizeAiFrameworkReports(analysis.frameworkReports),
@@ -1601,7 +1665,8 @@ function buildAiAnalysisSourcePayload(resultPayload) {
     mode: payload.mode || '',
     patientName: normalizePatientName(payload.patientName || '') || '匿名',
     generatedAt: new Date().toISOString(),
-    summary: sanitizeAiAnalysisPayload(payload.summary || null),
+    analysisFrameworkScope: AI_ANALYSIS_ALLOWED_FRAMEWORKS.map((framework) => framework.label),
+    summary: compactAiSummary(payload.summary || null),
     metrics: compactAiMetrics(payload.metrics || payload.analysis?.metrics || []),
     analysis: compactAiAnalysis(payload.analysis),
     analysisError: compactAiText(payload.analysisError, 500),
@@ -1622,15 +1687,16 @@ function buildAiAnalysisPrompt(resultPayload) {
     '要求：',
     '1. 只基于给定数据分析，不要编造片外信息，不要声称已重新阅片。',
     '2. 不要出现外部平台或数据供应方名称。',
+    '3. 本次只使用华西分析法、Jarabak分析法、TWEED分析法、Ricketts分析法、Downs分析法、Steiner分析法的数据进行综合分析；不要引用其它分析法。',
     AI_ANALYSIS_FAST_MODE
-      ? '3. 优先分析异常值、偏离项和互相印证的指标；正常项一句带过。总长度控制在 1200-1800 个中文字符。'
-      : '3. 内容尽量详细，覆盖骨性矢状向、垂直向、牙性代偿、软组织侧貌、生长型、关键异常值、不同分析法之间的一致与冲突、临床关注点、复核建议。',
-    '4. 对每个重要结论尽量引用具体指标名、测量值、标准范围或偏离方向。',
-    '5. 语气专业、克制，定位为辅助分析，不替代医生诊断。',
-    '6. 必须单独讨论拔牙或不拔牙倾向，但要明确最终需结合拥挤度、Bolton、牙周、面型、CBCT/根形和患者诉求。',
-    '7. 必须单独讨论固定矫正注意事项，重点写支抗、转矩、垂直向、前牙移动、牙周和根吸收监测。',
-    '8. 必须单独讨论隐形矫正注意事项，重点写附件/IPR/扩弓或远移、转矩表达、垂直向控制、橡皮筋/支抗钉和依从性。',
-    '9. 输出纯文本，不要 Markdown 表格；使用中文序号和短段落。',
+      ? '4. 优先分析异常值、偏离项和互相印证的指标；正常项一句带过。总长度控制在 1200-1800 个中文字符。'
+      : '4. 内容尽量详细，覆盖骨性矢状向、垂直向、牙性代偿、软组织侧貌、生长型、关键异常值、不同分析法之间的一致与冲突、临床关注点、复核建议。',
+    '5. 对每个重要结论尽量引用具体指标名、测量值、标准范围或偏离方向。',
+    '6. 语气专业、克制，定位为辅助分析，不替代医生诊断。',
+    '7. 必须单独讨论拔牙或不拔牙倾向，但要明确最终需结合拥挤度、Bolton、牙周、面型、CBCT/根形和患者诉求。',
+    '8. 必须单独讨论固定矫正注意事项，重点写支抗、转矩、垂直向、前牙移动、牙周和根吸收监测。',
+    '9. 必须单独讨论隐形矫正注意事项，重点写附件/IPR/扩弓或远移、转矩表达、垂直向控制、橡皮筋/支抗钉和依从性。',
+    '10. 输出纯文本，不要 Markdown 表格；使用中文序号和短段落。',
     '',
     '建议结构：',
     ...(AI_ANALYSIS_FAST_MODE
