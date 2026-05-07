@@ -10,6 +10,7 @@ import process from 'node:process';
 import { promisify } from 'node:util';
 import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
+import { buildOverlapRender } from './hyfceph-overlap-renderer.mjs';
 import { qrcode } from './vendor/qrcode.mjs';
 import { sendMessageWeixin, start as startWeixinBot } from './vendor/weixin-agent-sdk-hyf.mjs';
 
@@ -68,7 +69,7 @@ const WEIXIN_BOT_SECRET = String(
 const WEIXIN_MEASURE_MODE = normalizeWeixinMeasureMode(
   process.env.HYFCEPH_WEIXIN_MEASURE_MODE
   || LOCAL_CONFIG.measureMode
-  || 'portal-first',
+  || 'local-only',
 );
 
 if (!WEIXIN_BOT_SECRET && !PORTAL_API_KEY) {
@@ -181,7 +182,7 @@ function normalizeWeixinMeasureMode(value) {
   if (mode === 'portal-only' || mode === 'local-first' || mode === 'local-only') {
     return mode;
   }
-  return 'portal-first';
+  return 'local-only';
 }
 const PYTHON_QR_OVERLAY_SCRIPT = `
 import json
@@ -1952,6 +1953,7 @@ async function measureImageForUser({ apiKey, media }) {
       metrics: output.analysis?.metrics || [],
       taskId: output.taskId || null,
       resultUrl: output.resultUrl || null,
+      resultPayload: output.resultPayload || null,
       artifacts: {
         annotatedPngBase64: annotatedPngBuffer ? annotatedPngBuffer.toString('base64') : null,
         annotatedPngMimeType: annotatedPngBuffer ? 'image/png' : null,
@@ -2024,7 +2026,35 @@ async function measureSingleImageForUser({ apiKey, media }) {
   }
 }
 
-async function measureOverlapForUser({ apiKey, baseMedia, compareMedia, alignMode = 'SN' }) {
+async function measureOverlapLocally({ apiKey, baseMedia, compareMedia, alignMode = 'SN' }) {
+  const baseFileName = baseMedia.fileName || path.basename(baseMedia.filePath);
+  const compareFileName = compareMedia.fileName || path.basename(compareMedia.filePath);
+  console.log(`[HYFCeph Weixin] measuring overlap locally base=${baseFileName} compare=${compareFileName} align=${alignMode}`);
+  const [baseOutput, compareOutput] = await Promise.all([
+    measureImageForUser({ apiKey, media: baseMedia }),
+    measureImageForUser({ apiKey, media: compareMedia }),
+  ]);
+  const overlap = buildOverlapRender({ baseOutput, compareOutput, alignMode });
+  const rewrittenSvgText = rewriteOverlapSvgForWechat(overlap.svgText);
+  const annotatedPngPath = await convertSvgTextToPngForWechat(rewrittenSvgText, 'hyfceph-overlap-local');
+  const annotatedPngBuffer = annotatedPngPath
+    ? await fs.readFile(annotatedPngPath).catch(() => null)
+    : null;
+  return {
+    mode: 'overlap',
+    analysis: overlap.analysis || null,
+    summary: overlap.summary || null,
+    metrics: overlap.metrics || [],
+    artifacts: {
+      annotatedSvgBase64: Buffer.from(rewrittenSvgText, 'utf8').toString('base64'),
+      annotatedSvgMimeType: 'image/svg+xml',
+      annotatedPngBase64: annotatedPngBuffer ? annotatedPngBuffer.toString('base64') : null,
+      annotatedPngMimeType: annotatedPngBuffer ? 'image/png' : null,
+    },
+  };
+}
+
+async function measureOverlapViaPortal({ apiKey, baseMedia, compareMedia, alignMode = 'SN' }) {
   const [baseBuffer, compareBuffer] = await Promise.all([
     fs.readFile(baseMedia.filePath),
     fs.readFile(compareMedia.filePath),
@@ -2055,6 +2085,33 @@ async function measureOverlapForUser({ apiKey, baseMedia, compareMedia, alignMod
     label: 'portal overlap measurement request',
   });
   return payload.result;
+}
+
+async function measureOverlapForUser({ apiKey, baseMedia, compareMedia, alignMode = 'SN' }) {
+  const tryPortal = async () => measureOverlapViaPortal({ apiKey, baseMedia, compareMedia, alignMode });
+  const tryLocal = async () => measureOverlapLocally({ apiKey, baseMedia, compareMedia, alignMode });
+
+  if (WEIXIN_MEASURE_MODE === 'local-only') {
+    return await tryLocal();
+  }
+  if (WEIXIN_MEASURE_MODE === 'local-first') {
+    try {
+      return await tryLocal();
+    } catch (error) {
+      console.warn(`[HYFCeph Weixin] local overlap measurement failed, falling back to portal: ${error instanceof Error ? error.message : String(error)}`);
+      return await tryPortal();
+    }
+  }
+
+  try {
+    return await tryPortal();
+  } catch (error) {
+    if (WEIXIN_MEASURE_MODE === 'portal-only') {
+      throw error;
+    }
+    console.warn(`[HYFCeph Weixin] portal overlap measurement failed, falling back to local runner: ${error instanceof Error ? error.message : String(error)}`);
+    return await tryLocal();
+  }
 }
 
 function inferReportType(resultPayload) {

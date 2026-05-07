@@ -172,14 +172,14 @@ npm run store:migrate -- --from file --file ./old-users.json --to feishu-bitable
 
 ## WeChat bot worker
 
-Run the WeChat Clawbot bridge as a persistent Node worker. In server-first mode the bot sends images to the portal, and the portal uses the server-side SmartCheck session first; the direct runner remains a fallback.
+Run the WeChat Clawbot bridge as a persistent Node worker. By default the bot measures images with the local SmartCheck/browser runner and only uses the portal for report links, Feishu docs, and user/config APIs.
 
 For a cloud or server worker:
 
 ```bash
 HYFCEPH_API_KEY='your-admin-api-key' \
 HYFCEPH_WEIXIN_PORTAL_BASE_URL='https://your-vercel-domain.vercel.app' \
-HYFCEPH_WEIXIN_MEASURE_MODE='portal-first' \
+HYFCEPH_WEIXIN_MEASURE_MODE='local-only' \
 npm run weixin:bot
 ```
 
@@ -190,7 +190,7 @@ Manual foreground run for a Mac fallback:
 ```bash
 HYFCEPH_API_KEY='your-admin-api-key' \
 HYFCEPH_WEIXIN_PORTAL_BASE_URL='https://hyfceph.52ortho.com' \
-HYFCEPH_WEIXIN_MEASURE_MODE='portal-first' \
+HYFCEPH_WEIXIN_MEASURE_MODE='local-only' \
 npm run weixin:bot
 ```
 
