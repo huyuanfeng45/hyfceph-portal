@@ -119,6 +119,7 @@ const AI_ANALYSIS_MODEL = String(
   || LOCAL_AI_ANALYSIS_CONFIG.model
   || 'gpt-5.4',
 ).trim();
+const AI_ANALYSIS_IS_DEEPSEEK = /deepseek/i.test(`${AI_ANALYSIS_BASE_URL} ${AI_ANALYSIS_MODEL}`);
 const AI_ANALYSIS_FAST_MODE = /^(1|true|yes|on)$/i.test(String(
   process.env.HYFCEPH_AI_ANALYSIS_FAST_MODE
   || LOCAL_CONFIG.aiAnalysisFastMode
@@ -129,7 +130,7 @@ const AI_ANALYSIS_TIMEOUT_MS = Number(
   process.env.HYFCEPH_AI_ANALYSIS_TIMEOUT_MS
   || LOCAL_CONFIG.aiAnalysisTimeoutMs
   || LOCAL_AI_ANALYSIS_CONFIG.timeoutMs
-  || (AI_ANALYSIS_FAST_MODE ? 45_000 : 120_000),
+  || (AI_ANALYSIS_IS_DEEPSEEK ? 90_000 : (AI_ANALYSIS_FAST_MODE ? 45_000 : 120_000)),
 );
 const AI_ANALYSIS_MAX_INPUT_CHARS = Math.max(10_000, Number(
   process.env.HYFCEPH_AI_ANALYSIS_MAX_INPUT_CHARS
@@ -141,14 +142,14 @@ const AI_ANALYSIS_MAX_OUTPUT_TOKENS = Math.max(600, Number(
   process.env.HYFCEPH_AI_ANALYSIS_MAX_OUTPUT_TOKENS
   || LOCAL_CONFIG.aiAnalysisMaxOutputTokens
   || LOCAL_AI_ANALYSIS_CONFIG.maxOutputTokens
-  || (AI_ANALYSIS_FAST_MODE ? 1_400 : 2_600),
-) || (AI_ANALYSIS_FAST_MODE ? 1_400 : 2_600));
+  || (AI_ANALYSIS_IS_DEEPSEEK ? 3_200 : (AI_ANALYSIS_FAST_MODE ? 1_400 : 2_600)),
+) || (AI_ANALYSIS_IS_DEEPSEEK ? 3_200 : (AI_ANALYSIS_FAST_MODE ? 1_400 : 2_600)));
 const AI_ANALYSIS_RETRY_ATTEMPTS = Math.max(1, Number(
   process.env.HYFCEPH_AI_ANALYSIS_RETRY_ATTEMPTS
   || LOCAL_CONFIG.aiAnalysisRetryAttempts
   || LOCAL_AI_ANALYSIS_CONFIG.retryAttempts
-  || (AI_ANALYSIS_FAST_MODE ? 1 : 2),
-) || (AI_ANALYSIS_FAST_MODE ? 1 : 2));
+  || (AI_ANALYSIS_IS_DEEPSEEK ? 2 : (AI_ANALYSIS_FAST_MODE ? 1 : 2)),
+) || (AI_ANALYSIS_IS_DEEPSEEK ? 2 : (AI_ANALYSIS_FAST_MODE ? 1 : 2)));
 const AI_ANALYSIS_FRAMEWORK_LIMIT = Math.max(2, Number(
   process.env.HYFCEPH_AI_ANALYSIS_FRAMEWORK_LIMIT
   || LOCAL_CONFIG.aiAnalysisFrameworkLimit
@@ -1802,6 +1803,24 @@ async function postAiChatCompletionWithRetry(body) {
   throw lastError instanceof Error ? lastError : new Error(String(lastError || 'AI analysis request failed'));
 }
 
+function extractAiCompletionContent(payload) {
+  return String(
+    payload?.choices?.[0]?.message?.content
+    || payload?.choices?.[0]?.text
+    || '',
+  ).trim();
+}
+
+function describeEmptyAiCompletion(payload) {
+  const choice = payload?.choices?.[0] || {};
+  const message = choice?.message || {};
+  return [
+    `finish_reason=${choice?.finish_reason || '-'}`,
+    `reasoningChars=${String(message?.reasoning_content || '').length}`,
+    `contentChars=${String(message?.content || choice?.text || '').length}`,
+  ].join(' ');
+}
+
 async function callAiAnalysisModel(resultPayload) {
   if (!isAiAnalysisConfigured()) {
     return {
@@ -1847,13 +1866,24 @@ async function callAiAnalysisModel(resultPayload) {
     });
   }
 
-  const content = String(
-    payload?.choices?.[0]?.message?.content
-    || payload?.choices?.[0]?.text
-    || '',
-  ).trim();
+  let content = extractAiCompletionContent(payload);
+  if (!content && AI_ANALYSIS_IS_DEEPSEEK) {
+    console.warn(`[HYFCeph Weixin] AI analysis returned empty content; retrying with larger DeepSeek budget (${describeEmptyAiCompletion(payload)})`);
+    const retryMessages = messages.map((message, index) => index === messages.length - 1
+      ? {
+          ...message,
+          content: `${message.content}\n\n重要：请直接输出最终 AI 综合分析正文，不要只输出推理过程；如果篇幅有限，优先保证正文完整。`,
+        }
+      : message);
+    payload = await postAiChatCompletionWithRetry({
+      ...baseBody,
+      messages: retryMessages,
+      max_tokens: Math.max(AI_ANALYSIS_MAX_OUTPUT_TOKENS, 4_096),
+    });
+    content = extractAiCompletionContent(payload);
+  }
   if (!content) {
-    throw new Error('AI 模型未返回分析内容。');
+    throw new Error(`AI 模型未返回分析内容。${describeEmptyAiCompletion(payload)}`);
   }
   console.log(`[HYFCeph Weixin] AI analysis request done elapsedMs=${Date.now() - startedAt} outputChars=${content.length}`);
   return {
