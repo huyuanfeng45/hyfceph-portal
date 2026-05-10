@@ -196,7 +196,7 @@ npm run weixin:bot
 
 You can also use `HYFCEPH_WEIXIN_BOT_SECRET` instead of `HYFCEPH_API_KEY`. For most setups, using the admin API key is simpler.
 
-Optional AI follow-up: when `HYFCEPH_AI_ANALYSIS_BASE_URL`, `HYFCEPH_AI_ANALYSIS_API_KEY`, and `HYFCEPH_AI_ANALYSIS_MODEL` are configured on the bot worker, the bot will analyze the generated report, append the analysis to the existing Feishu doc, then send a short WeChat follow-up.
+Optional AI follow-up: when `HYFCEPH_AI_ANALYSIS_BASE_URL`, `HYFCEPH_AI_ANALYSIS_API_KEY`, and `HYFCEPH_AI_ANALYSIS_MODEL` are configured on the bot worker, the bot first asks the user for clinical supplements such as missing teeth, dentition stage, extraction intent, chief complaint, and treatment limits. After the user replies or skips, the bot combines those notes with the measurement data, appends the AI analysis to the existing Feishu doc, then sends a short WeChat follow-up.
 
 Install as a macOS LaunchAgent:
 

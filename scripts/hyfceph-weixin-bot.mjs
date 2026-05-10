@@ -874,6 +874,36 @@ function isResetConversationText(text) {
   return /^(重置|重新开始|重新对话|新对话|清空|清除缓存|重新来过)$/i.test(String(text || '').trim());
 }
 
+function isAiSupplementSkipText(text) {
+  return /^(无|没有|暂无|无补充|没有补充|都没有|不清楚|未知|跳过|略过|直接生成|直接分析|先生成|先分析)$/i.test(String(text || '').trim());
+}
+
+function normalizeAiSupplementText(text) {
+  const rawText = String(text || '').trim().replace(/\s+/g, ' ');
+  if (!rawText || isAiSupplementSkipText(rawText)) {
+    return '用户未提供额外临床补充信息。';
+  }
+  return rawText.slice(0, 2000);
+}
+
+function buildAiSupplementQuestionText(result) {
+  const patientName = normalizePatientName(result?.patientName || '') || '匿名';
+  return [
+    `飞书文档已经生成。AI 综合分析前，请先补充一下 ${patientName} 的临床信息：`,
+    '',
+    '1. 是否有缺牙、先天缺失、已拔牙、多生牙或埋伏牙？',
+    '2. 当前是恒牙列、替牙期，还是乳牙列？如果是儿童，年龄大概多少？',
+    '3. 是否已经明确要拔牙，或明确不拔牙？',
+    '4. 主要诉求是什么？例如前突、拥挤、反颌、开合、偏颌、露龈笑等。',
+    '5. 是否有牙周、关节、CBCT、根形、种植钉、二类牵引等特殊限制或计划？',
+    '',
+    '你可以按下面格式回复：',
+    '缺牙：无；牙列阶段：恒牙列；拔牙意向：未定；主诉：前突和拥挤；其他：无。',
+    '',
+    '如果没有补充，直接回复“无补充”或“跳过”。',
+  ].join('\n');
+}
+
 function normalizePendingMeasurement(pendingMeasurement) {
   if (!pendingMeasurement || typeof pendingMeasurement !== 'object') {
     return null;
@@ -903,6 +933,21 @@ function normalizePendingMeasurement(pendingMeasurement) {
 
 function hasPendingMeasurement(conversationId) {
   return Boolean(normalizePendingMeasurement(getLatestResultCache(conversationId)?.pendingMeasurement)?.images?.length);
+}
+
+function getPendingAiSupplement(conversationId) {
+  const cached = getLatestResultCache(conversationId);
+  const result = cached?.result;
+  const pending = cached?.pendingAiSupplement;
+  const documentId = String(result?.feishuDoc?.documentId || '').trim();
+  if (!result || !pending || !documentId || result?.feishuDoc?.aiAnalysis?.ok) {
+    return null;
+  }
+  return String(pending.documentId || '').trim() === documentId ? pending : null;
+}
+
+function hasPendingAiSupplement(conversationId) {
+  return Boolean(getPendingAiSupplement(conversationId));
 }
 
 async function setPendingMeasurement(conversationId, media) {
@@ -1249,6 +1294,7 @@ async function updateLatestResultCache(conversationId, result, options = {}) {
       reportPayload: result?.reportPayload || previous.result?.reportPayload || null,
       report: result?.report || null,
       prettyReport: result?.prettyReport || null,
+      aiSupplement: result?.aiSupplement || null,
       feishuDoc: nextFeishuDoc
         ? {
             ...(isSameFeishuDoc ? previousFeishuDoc : {}),
@@ -1671,6 +1717,7 @@ function buildAiAnalysisSourcePayload(resultPayload) {
     summary: compactAiSummary(payload.summary || null),
     metrics: compactAiMetrics(payload.metrics || payload.analysis?.metrics || []),
     analysis: compactAiAnalysis(payload.analysis),
+    clinicalSupplement: sanitizeAiAnalysisPayload(payload.aiSupplement || null),
     analysisError: compactAiText(payload.analysisError, 500),
   });
 }
@@ -1698,7 +1745,8 @@ function buildAiAnalysisPrompt(resultPayload) {
     '7. 必须单独讨论拔牙或不拔牙倾向，但要明确最终需结合拥挤度、Bolton、牙周、面型、CBCT/根形和患者诉求。',
     '8. 必须单独讨论固定矫正注意事项，重点写支抗、转矩、垂直向、前牙移动、牙周和根吸收监测。',
     '9. 必须单独讨论隐形矫正注意事项，重点写附件/IPR/扩弓或远移、转矩表达、垂直向控制、橡皮筋/支抗钉和依从性。',
-    '10. 输出纯文本，不要 Markdown 表格；使用中文序号和短段落。',
+    '10. 如果 clinicalSupplement 中有用户补充的缺牙、替牙期、拔牙意向、主诉或限制条件，必须结合这些信息分析；未明确的信息不要自行假设。',
+    '11. 输出纯文本，不要 Markdown 表格；使用中文序号和短段落。',
     '',
     '建议结构：',
     ...(AI_ANALYSIS_FAST_MODE
@@ -2458,8 +2506,82 @@ async function markCachedFeishuAiAnalysis(conversationId, feishuDoc) {
   return latestResultCache[key];
 }
 
-async function triggerDeferredFeishuAiAnalysis({ request, apiKey, conversationId }) {
+async function markPendingAiSupplement(conversationId, result) {
+  const key = normalizeConversationKey(conversationId);
+  const current = latestResultCache[key];
+  const documentId = String(result?.feishuDoc?.documentId || '').trim();
+  if (!current?.result || !documentId) {
+    return null;
+  }
+  const previous = getPendingAiSupplement(conversationId);
+  const pendingAiSupplement = previous || {
+    documentId,
+    docUrl: String(result?.feishuDoc?.docUrl || '').trim(),
+    patientName: normalizePatientName(result?.patientName || '') || '匿名',
+    requestedAt: new Date().toISOString(),
+  };
+  latestResultCache[key] = {
+    ...current,
+    updatedAt: new Date().toISOString(),
+    pendingAiSupplement,
+  };
+  await saveResultCache();
+  return {
+    pendingAiSupplement,
+    isNew: !previous,
+  };
+}
+
+async function saveAiSupplementAnswer(conversationId, answerText) {
+  const key = normalizeConversationKey(conversationId);
+  const current = latestResultCache[key];
+  if (!current?.result) {
+    return null;
+  }
+  const aiSupplement = {
+    source: 'weixin',
+    rawText: String(answerText || '').trim().slice(0, 4000),
+    normalizedText: normalizeAiSupplementText(answerText),
+    answeredAt: new Date().toISOString(),
+  };
+  latestResultCache[key] = {
+    ...current,
+    updatedAt: new Date().toISOString(),
+    pendingAiSupplement: null,
+    result: {
+      ...current.result,
+      aiSupplement,
+    },
+  };
+  await saveResultCache();
+  return latestResultCache[key];
+}
+
+async function requestAiSupplementBeforeAnalysis({ request, conversationId }) {
+  const cached = getLatestResultCache(conversationId);
+  const result = cached?.result;
+  const documentId = String(result?.feishuDoc?.documentId || '').trim();
+  if (!result || !documentId || result?.feishuDoc?.aiAnalysis?.ok || result?.aiSupplement?.answeredAt) {
+    return false;
+  }
+  const marked = await markPendingAiSupplement(conversationId, result);
+  if (marked?.isNew) {
+    await sendWeixinFollowUpText(request, buildAiSupplementQuestionText(result));
+  }
+  return true;
+}
+
+async function triggerDeferredFeishuAiAnalysis({
+  request,
+  apiKey,
+  conversationId,
+  force = false,
+  notifyStart = true,
+}) {
   if (!isAiAnalysisConfigured()) {
+    return null;
+  }
+  if (!force && await requestAiSupplementBeforeAnalysis({ request, conversationId })) {
     return null;
   }
   const conversationKey = normalizeConversationKey(conversationId);
@@ -2476,12 +2598,18 @@ async function triggerDeferredFeishuAiAnalysis({ request, apiKey, conversationId
       if (!result || !documentId || result?.feishuDoc?.aiAnalysis?.ok) {
         return;
       }
+      if (!force && !result?.aiSupplement?.answeredAt) {
+        await requestAiSupplementBeforeAnalysis({ request, conversationId });
+        return;
+      }
 
       console.log('[HYFCeph Weixin] generating AI analysis for feishu doc');
-      void sendWeixinFollowUpText(
-        request,
-        'AI 综合分析正在后台生成，完成后会自动写入飞书文档。',
-      ).catch(() => {});
+      if (notifyStart) {
+        void sendWeixinFollowUpText(
+          request,
+          'AI 综合分析正在后台生成，完成后会自动写入飞书文档。',
+        ).catch(() => {});
+      }
       const aiResult = await callAiAnalysisModel(result);
       if (!aiResult?.ok || !aiResult.content) {
         console.warn(`[HYFCeph Weixin] AI analysis skipped: ${aiResult?.reason || 'no content'}`);
@@ -2683,6 +2811,48 @@ async function createRestrictedAgent() {
               text: `HYFCeph 处理失败：${toUserFacingPortalError(error)}`,
             };
           }
+        }
+
+        if (hasPendingAiSupplement(request.conversationId)) {
+          const cached = getLatestResultCache(request.conversationId);
+          if (!text) {
+            return {
+              text: buildAiSupplementQuestionText(cached?.result),
+            };
+          }
+          if (isMeasurementCommandText(text) && !isAiSupplementSkipText(text)) {
+            return {
+              text: [
+                'AI 综合分析还在等待病例补充信息。',
+                '请先按问题补充；如果没有补充，直接回复“无补充”或“跳过”。',
+                '',
+                buildAiSupplementQuestionText(cached?.result),
+              ].join('\n'),
+            };
+          }
+
+          let portalUser;
+          try {
+            portalUser = await resolvePortalUser(request.conversationId);
+          } catch (error) {
+            return {
+              text: error instanceof Error
+                ? `${error.message}\n请先回到门户注册并完成微信绑定。`
+                : '这个微信尚未绑定 HYFCeph 账号，请先回到门户完成绑定。',
+            };
+          }
+
+          await saveAiSupplementAnswer(request.conversationId, text);
+          void triggerDeferredFeishuAiAnalysis({
+            request,
+            apiKey: portalUser.auth.apiKey,
+            conversationId: request.conversationId,
+            force: true,
+            notifyStart: false,
+          });
+          return {
+            text: '收到补充信息。AI 综合分析正在后台生成，完成后会自动写入刚才的飞书文档。',
+          };
         }
 
         if (/^(帮助|help|怎么用|如何使用)$/i.test(text)) {
