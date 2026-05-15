@@ -1674,6 +1674,25 @@ async function sendWeixinMediaFile(params) {
 		opts
 	});
 }
+function isRetriableMediaSendError(err) {
+	const message = String(err instanceof Error ? err.message : err || "").toLowerCase();
+	return /cdn upload server error|status 5\d\d|fetch failed|socket|econnreset|empty reply|timeout|timed out|network/.test(message);
+}
+async function sendWeixinMediaFileWithRetry(params) {
+	const maxAttempts = 2;
+	let lastError;
+	for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+		try {
+			return await sendWeixinMediaFile(params);
+		} catch (err) {
+			lastError = err;
+			if (!isRetriableMediaSendError(err) || attempt >= maxAttempts) throw err;
+			logger.error(`[weixin] sendWeixinMediaFile failed attempt=${attempt}/${maxAttempts}, retrying with fresh upload params: ${String(err)}`);
+			await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+		}
+	}
+	throw lastError instanceof Error ? lastError : new Error("sendWeixinMediaFile failed");
+}
 //#endregion
 //#region src/messaging/debug-mode.ts
 /**
@@ -1871,7 +1890,7 @@ async function processOneMessage(full, deps) {
 			if (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://")) filePath = await downloadRemoteImageToTemp(mediaUrl, path.join(MEDIA_TEMP_DIR, "outbound"));
 			else filePath = path.isAbsolute(mediaUrl) ? mediaUrl : path.resolve(mediaUrl);
 			try {
-				await sendWeixinMediaFile({
+				await sendWeixinMediaFileWithRetry({
 					filePath,
 					to,
 					text: response.text ? markdownToPlainText(response.text) : "",
@@ -1887,7 +1906,7 @@ async function processOneMessage(full, deps) {
 				const fallbackText = [
 					response.text ? markdownToPlainText(response.text) : "",
 					"",
-					"标点图上传微信 CDN 失败，测量结果已保存。你可以稍后回复“标点图”重试获取图片。"
+					"图片上传微信 CDN 失败，测量结果已保存。你可以稍后回复“标点图”或“白底轮廓图”重试获取图片。"
 				].filter(Boolean).join("\n");
 				if (fallbackText) await sendMessageWeixin({
 					to,

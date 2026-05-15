@@ -2813,21 +2813,13 @@ async function createRestrictedAgent() {
           }
         }
 
-        if (hasPendingAiSupplement(request.conversationId)) {
+        const shouldCaptureAiSupplement = hasPendingAiSupplement(request.conversationId)
+          && (!text || !isMeasurementCommandText(text) || isAiSupplementSkipText(text));
+        if (shouldCaptureAiSupplement) {
           const cached = getLatestResultCache(request.conversationId);
           if (!text) {
             return {
               text: buildAiSupplementQuestionText(cached?.result),
-            };
-          }
-          if (isMeasurementCommandText(text) && !isAiSupplementSkipText(text)) {
-            return {
-              text: [
-                'AI 综合分析还在等待病例补充信息。',
-                '请先按问题补充；如果没有补充，直接回复“无补充”或“跳过”。',
-                '',
-                buildAiSupplementQuestionText(cached?.result),
-              ].join('\n'),
             };
           }
 
