@@ -164,7 +164,7 @@
                   </button>
                   <button class="dashboard-menu-item hidden" type="button" data-dashboard-view="sync" data-admin-only="true">
                     <span>🛰️ SmartCheck 会话</span>
-                    <small>主会话与备用通道</small>
+                    <small>服务端会话状态</small>
                   </button>
                   <button class="dashboard-menu-item hidden" type="button" data-dashboard-view="admin" data-admin-only="true">
                     <span>🛠️ 管理员面板</span>
@@ -334,7 +334,7 @@
                       <div>
                         <div class="section-kicker">Measure</div>
                         <div class="api-card-title">🩻 图片测量</div>
-                        <div class="api-tip">直接上传侧位片即可。服务端优先使用 SmartCheck 会话完成定点和测量，浏览器扩展同步会话保留为备用。</div>
+                        <div class="api-tip">直接上传侧位片即可。当前仅保留服务端 SmartCheck 会话路径，浏览器扩展桥接服务已暂停。</div>
                       </div>
                     </div>
 
@@ -346,7 +346,7 @@
                     <div class="api-actions">
                       <button id="measure-image-button" class="primary-button" type="button">上传图片并测量</button>
                     </div>
-                    <p class="api-note">如果服务暂时不可用，先检查服务端 SmartCheck token；浏览器扩展同步会话仍可作为备用。</p>
+                    <p class="api-note">如果服务暂时不可用，请检查服务端 SmartCheck token；浏览器扩展同步不再作为备用方案。</p>
 
                     <section id="measure-result" class="measure-result hidden">
                       <div class="dashboard-row">
@@ -366,7 +366,7 @@
                       <div>
                         <div class="section-kicker">Bridge</div>
                         <div class="api-card-title">🛰️ SmartCheck 会话状态</div>
-                        <div class="api-tip">服务端会话优先使用；Chrome 扩展同步只作为备用通道，配置方式不变。</div>
+                        <div class="api-tip">服务端会话优先使用；Chrome 扩展桥接服务已暂停运行，后续不再作为备用同步通道。</div>
                       </div>
                       <button id="refresh-operator-sync-button" class="ghost-button" type="button">刷新状态</button>
                     </div>
@@ -376,11 +376,11 @@
                       <strong id="operator-sync-status">未连接</strong>
                     </div>
 
-                    <p id="operator-sync-detail" class="api-note">配置服务端 SmartCheck 会话或扩展开始同步后，这里会显示最近一次可用状态。</p>
+                    <p id="operator-sync-detail" class="api-note">配置服务端 SmartCheck 会话后，这里会显示最近一次可用状态；浏览器扩展桥接服务已暂停。</p>
 
                     <div class="api-actions">
-                      <a class="primary-button" href="/bridge-install.html" target="_blank" rel="noreferrer">查看安装说明</a>
-                      <button id="clear-operator-sync-button" class="ghost-button" type="button">清除备用会话</button>
+                      <a class="primary-button" href="/bridge-install.html" target="_blank" rel="noreferrer">查看暂停说明</a>
+                      <button id="clear-operator-sync-button" class="ghost-button" type="button">清除旧会话</button>
                     </div>
                   </section>
                 </section>

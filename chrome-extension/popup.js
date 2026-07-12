@@ -11,6 +11,14 @@ const syncStateEl = document.getElementById('syncState');
 const refreshStateEl = document.getElementById('refreshState');
 const loginStateEl = document.getElementById('loginState');
 const detailEl = document.getElementById('detail');
+const inputEls = [
+  portalBaseUrlInput,
+  operatorApiKeyInput,
+  upstreamUsernameInput,
+  upstreamPasswordInput,
+  autoRefreshEnabledInput,
+  autoRefreshMinutesInput,
+];
 
 function sendMessage(message) {
   return new Promise((resolve, reject) => {
@@ -30,6 +38,15 @@ function setDetail(text) {
 }
 
 function renderStatus(payload) {
+  if (payload?.servicePaused) {
+    pageStateEl.textContent = '已暂停';
+    syncStateEl.textContent = '已暂停';
+    refreshStateEl.textContent = '已关闭';
+    loginStateEl.textContent = '已停用';
+    setDetail(payload.pauseMessage || '浏览器插件桥接服务已暂停运行。');
+    return;
+  }
+
   const activeTab = payload?.activeTab || {};
   const lastStatus = payload?.lastStatus || null;
   const lastSyncedTab = payload?.lastSyncedTab || null;
@@ -77,11 +94,20 @@ async function loadState() {
   upstreamPasswordInput.value = response.upstreamPassword || '';
   autoRefreshEnabledInput.checked = response.autoRefreshEnabled !== false;
   autoRefreshMinutesInput.value = String(response.autoRefreshMinutes || 10);
-  autoRefreshMinutesInput.disabled = !autoRefreshEnabledInput.checked;
+  inputEls.forEach((input) => {
+    input.disabled = Boolean(response.servicePaused);
+  });
+  autoRefreshMinutesInput.disabled = Boolean(response.servicePaused) || !autoRefreshEnabledInput.checked;
+  saveBtn.disabled = Boolean(response.servicePaused);
+  syncBtn.disabled = Boolean(response.servicePaused);
   renderStatus(response);
 }
 
 async function saveConfig() {
+  if (saveBtn.disabled) {
+    setDetail('浏览器插件桥接服务已暂停运行，配置保存已停用。');
+    return;
+  }
   const response = await sendMessage({
     type: 'hyfceph:save-config',
     portalBaseUrl: portalBaseUrlInput.value.trim(),
@@ -98,6 +124,10 @@ async function saveConfig() {
 }
 
 async function forceSync() {
+  if (syncBtn.disabled) {
+    setDetail('浏览器插件桥接服务已暂停运行，立即同步已停用。');
+    return;
+  }
   const response = await sendMessage({ type: 'hyfceph:force-sync' });
   if (!response?.ok) {
     throw new Error(response?.error || '同步失败。');

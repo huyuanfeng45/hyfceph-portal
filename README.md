@@ -5,10 +5,10 @@ HYFCeph Portal provides:
 - user registration and login
 - API key generation and validation
 - admin management for API key expiry and deletion
-- Bark push notifications for new registrations and ceph image submissions
+- Bark push notifications are kept in code but disabled by default
 - image-upload ceph measurement through a server-side SmartCheck session
-- owner-side Chrome extension session sync as a fallback path
-- current-case bridge measurement as a compatibility path
+- owner-side Chrome extension session sync kept only as historical fallback code, disabled by default
+- current-case bridge measurement kept only as compatibility code, disabled by default
 
 ## Local run
 
@@ -37,10 +37,9 @@ The default public image path now works like this:
 
 1. Public user uploads a ceph image with their API key.
 2. The portal first uses the server-side SmartCheck session token.
-3. If the server-side session is unavailable, the portal can fall back to the Chrome extension synced session.
-4. The server calls SmartCheck and returns PNG plus metrics.
+3. The server calls SmartCheck and returns PNG plus metrics.
 
-Because of that, public users do not install a plugin and do not provide share links or upstream tokens. The Chrome extension is still kept as a backup operator path.
+Because of that, public users do not install a plugin and do not provide share links or upstream tokens. The Chrome extension bridge is paused and kept only as historical backup code.
 
 ## Node deployment
 
@@ -67,7 +66,6 @@ docker run -d \
   --name hyfceph-portal \
   -p 3077:3077 \
   -e HYFCEPH_SESSION_SECRET='replace-with-random-secret' \
-  -e HYFCEPH_BARK_KEY='7ffBf7F85e3WbFyKrJTEcH' \
   -v $(pwd)/data:/app/data \
   hyfceph-portal
 ```
@@ -78,8 +76,11 @@ docker run -d \
 - `HYFCEPH_PORT`
 - `HYFCEPH_ADMIN_USERNAME`
 - `HYFCEPH_ADMIN_PASSWORD`
+- `HYFCEPH_BARK_PUSH_ENABLED` (`false` by default)
 - `HYFCEPH_BARK_KEY`
 - `HYFCEPH_BARK_BASE_URL`
+- `HYFCEPH_BROWSER_EXTENSION_SERVICE_PAUSED` (`true` by default)
+- `HYFCEPH_WEIXIN_BOT_SERVICE_PAUSED` (`true` by default)
 - `HYFCEPH_API_KEY_DAYS`
 - `HYFCEPH_OPERATOR_SESSION_TTL_MINUTES`
 - `HYFCEPH_SESSION_SECRET`
@@ -105,13 +106,13 @@ HYFCEPH_SMARTCHECK_SESSION_MODE=server-first
 HYFCEPH_SMARTCHECK_TOKEN=your_smartcheck_token
 ```
 
-`HYFCEPH_SMARTCHECK_SESSION_MODE=server-first` is the default. If the server token is missing or rejected, an active Chrome extension synced session remains the backup. Use `server-only` only when you deliberately want to disable that fallback.
+`HYFCEPH_SMARTCHECK_SESSION_MODE=server-first` is the default. Browser extension session sync is currently paused by default through `HYFCEPH_BROWSER_EXTENSION_SERVICE_PAUSED=true`.
 
 ## Notes
 
 - Local data is stored in `data/users.json`.
-- The owner-side Chrome extension lives in `chrome-extension/` and remains available as the fallback session bridge.
-- The extension should be configured with the portal URL and an active admin API key.
+- The owner-side Chrome extension lives in `chrome-extension/` for historical backup, but the bridge service is paused by default.
+- Bark push is disabled by default. Set `HYFCEPH_BARK_PUSH_ENABLED=true` and provide `HYFCEPH_BARK_KEY` only if you intentionally restore it.
 - For Vercel, connect a private Blob store and set `HYFCEPH_STORE_BACKEND=blob`.
 - When using Vercel, authentication uses signed cookies instead of in-memory sessions.
 - Public production use should still prefer self-hosted deployment, because the image measurement path shells out to the bundled Node runner.

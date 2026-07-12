@@ -1,5 +1,7 @@
 const DEFAULT_PORTAL_BASE_URL = 'https://hyfceph.52ortho.com/';
-const DEFAULT_AUTO_REFRESH_ENABLED = true;
+const EXTENSION_SERVICE_PAUSED = true;
+const EXTENSION_SERVICE_PAUSED_MESSAGE = '浏览器插件桥接服务已暂停运行，后续不再作为备用同步通道。';
+const DEFAULT_AUTO_REFRESH_ENABLED = false;
 const DEFAULT_AUTO_REFRESH_MINUTES = 10;
 const MIN_AUTO_REFRESH_MINUTES = 1;
 const MAX_AUTO_REFRESH_MINUTES = 240;
@@ -8,7 +10,8 @@ const AUTO_SYNC_DELAY_MS = 1500;
 const TAB_SYNC_MAX_ATTEMPTS = 3;
 const TAB_SYNC_RETRY_MS = 1200;
 const BARK_BASE_URL = 'https://api.day.app';
-const BARK_DEVICE_KEY = '7ffBf7F85e3WbFyKrJTEcH';
+const BARK_DEVICE_KEY = '';
+const BARK_ALERTS_ENABLED = false;
 const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
 const STORAGE_KEYS = {
   portalBaseUrl: 'hyfceph_portal_base_url',
@@ -60,7 +63,7 @@ async function getStoredConfig() {
     operatorApiKey: String(stored[STORAGE_KEYS.operatorApiKey] || '').trim(),
     upstreamUsername: String(stored[STORAGE_KEYS.upstreamUsername] || '').trim(),
     upstreamPassword: String(stored[STORAGE_KEYS.upstreamPassword] || ''),
-    autoRefreshEnabled: stored[STORAGE_KEYS.autoRefreshEnabled] !== false,
+    autoRefreshEnabled: !EXTENSION_SERVICE_PAUSED && stored[STORAGE_KEYS.autoRefreshEnabled] !== false,
     autoRefreshMinutes: normalizeAutoRefreshMinutes(stored[STORAGE_KEYS.autoRefreshMinutes]),
     lastStatus: stored[STORAGE_KEYS.lastStatus] || null,
     lastPayload: stored[STORAGE_KEYS.lastPayload] || null,
@@ -71,6 +74,10 @@ async function getStoredConfig() {
 async function ensureAutoRefreshAlarm(config = null) {
   const nextConfig = config || await getStoredConfig();
   await chrome.alarms.clear(AUTO_REFRESH_ALARM);
+  if (EXTENSION_SERVICE_PAUSED) {
+    await setBridgeBadge({ ok: false, paused: true });
+    return;
+  }
   if (!nextConfig.autoRefreshEnabled) {
     return;
   }
@@ -92,7 +99,7 @@ async function saveStoredConfig({
     operatorApiKey: String(operatorApiKey || '').trim(),
     upstreamUsername: String(upstreamUsername || '').trim(),
     upstreamPassword: String(upstreamPassword || ''),
-    autoRefreshEnabled: Boolean(autoRefreshEnabled),
+    autoRefreshEnabled: !EXTENSION_SERVICE_PAUSED && Boolean(autoRefreshEnabled),
     autoRefreshMinutes: normalizeAutoRefreshMinutes(autoRefreshMinutes),
   };
 
@@ -109,6 +116,11 @@ async function saveStoredConfig({
 }
 
 async function setBridgeBadge(status) {
+  if (status?.paused) {
+    await chrome.action.setBadgeText({ text: 'OFF' });
+    await chrome.action.setBadgeBackgroundColor({ color: '#6b7280' });
+    return;
+  }
   const ok = Boolean(status?.ok);
   const pendingLogin = Boolean(status?.pendingLogin);
   await chrome.action.setBadgeText({ text: ok ? 'ON' : (pendingLogin ? 'LOG' : (status ? 'ERR' : '')) });
@@ -172,7 +184,7 @@ function normalizeAlertText(value) {
 }
 
 async function sendBarkAlert({ title, body, fingerprint }) {
-  if (!BARK_DEVICE_KEY) {
+  if (!BARK_ALERTS_ENABLED || !BARK_DEVICE_KEY) {
     return false;
   }
 
@@ -236,6 +248,19 @@ async function parseJsonResponse(response) {
 }
 
 async function syncOperatorSession(payload, reason = 'capture', sourceTab = null) {
+  if (EXTENSION_SERVICE_PAUSED) {
+    const status = {
+      ok: false,
+      paused: true,
+      reason,
+      message: EXTENSION_SERVICE_PAUSED_MESSAGE,
+      syncedAt: null,
+      operatorSession: null,
+    };
+    await persistStatus(status);
+    return status;
+  }
+
   const config = await getStoredConfig();
   if (!config.operatorApiKey) {
     const status = {
@@ -372,6 +397,14 @@ async function handleAutoLoginStatus(payload = {}, sourceTab = null) {
 }
 
 async function getActiveTabSummary() {
+  if (EXTENSION_SERVICE_PAUSED) {
+    return {
+      supported: false,
+      label: EXTENSION_SERVICE_PAUSED_MESSAGE,
+      tabId: null,
+    };
+  }
+
   const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const tab = tabs[0];
   if (!tab || !tab.id) {
@@ -449,6 +482,18 @@ async function requestTabSyncById(tabId, {
 }
 
 async function requestTabSync() {
+  if (EXTENSION_SERVICE_PAUSED) {
+    await persistStatus({
+      ok: false,
+      paused: true,
+      reason: 'force-sync',
+      message: EXTENSION_SERVICE_PAUSED_MESSAGE,
+      syncedAt: null,
+      operatorSession: null,
+    });
+    throw new Error(EXTENSION_SERVICE_PAUSED_MESSAGE);
+  }
+
   const activeTab = await getActiveTabSummary();
   if (!activeTab.supported || !activeTab.tabId) {
     await sendBarkAlert({
@@ -466,6 +511,10 @@ async function requestTabSync() {
 }
 
 async function reloadSupportedTabs(reason = 'auto-refresh') {
+  if (EXTENSION_SERVICE_PAUSED) {
+    return { ok: true, refreshedTabs: 0, skipped: true, paused: true };
+  }
+
   const config = await getStoredConfig();
   if (!config.autoRefreshEnabled || !config.operatorApiKey) {
     return { ok: true, refreshedTabs: 0, skipped: true };
@@ -488,6 +537,10 @@ async function reloadSupportedTabs(reason = 'auto-refresh') {
 }
 
 async function handleCompletedSupportedTab(tabId, tabUrl) {
+  if (EXTENSION_SERVICE_PAUSED) {
+    return;
+  }
+
   const config = await getStoredConfig();
   if (!config.operatorApiKey) {
     return;
@@ -549,6 +602,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const activeTab = await getActiveTabSummary();
       return {
         ok: true,
+        servicePaused: EXTENSION_SERVICE_PAUSED,
+        pauseMessage: EXTENSION_SERVICE_PAUSED_MESSAGE,
         portalBaseUrl: config.portalBaseUrl,
         operatorApiKey: config.operatorApiKey,
         upstreamUsername: config.upstreamUsername,
@@ -573,6 +628,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const config = await getStoredConfig();
       return {
         ok: true,
+        servicePaused: EXTENSION_SERVICE_PAUSED,
+        pauseMessage: EXTENSION_SERVICE_PAUSED_MESSAGE,
         portalBaseUrl: config.portalBaseUrl,
         operatorApiKey: config.operatorApiKey,
         upstreamUsername: config.upstreamUsername,

@@ -46,10 +46,17 @@ const PORTAL_BASE_URL = String(
   || LOCAL_CONFIG.portalBaseUrl
   || 'http://127.0.0.1:3077',
 ).trim().replace(/\/+$/, '');
+const BARK_PUSH_ENABLED = /^(1|true|yes|on)$/i.test(String(
+  process.env.HYFCEPH_BARK_PUSH_ENABLED
+  || process.env.HYFCEPH_BARK_ENABLED
+  || LOCAL_CONFIG.barkPushEnabled
+  || LOCAL_CONFIG.barkEnabled
+  || 'false',
+).trim());
 const BARK_DEVICE_KEY = String(
   process.env.HYFCEPH_BARK_KEY
   || LOCAL_CONFIG.barkKey
-  || '7ffBf7F85e3WbFyKrJTEcH',
+  || '',
 ).trim();
 const BARK_BASE_URL = String(
   process.env.HYFCEPH_BARK_BASE_URL
@@ -336,7 +343,7 @@ function shortenConversationId(value) {
 }
 
 async function sendBarkPush(title, body) {
-  if (!BARK_DEVICE_KEY) {
+  if (!BARK_PUSH_ENABLED || !BARK_DEVICE_KEY) {
     return;
   }
   const url = new URL(`${BARK_BASE_URL}/${encodeURIComponent(BARK_DEVICE_KEY)}/${encodeURIComponent(title)}/${encodeURIComponent(body)}`);

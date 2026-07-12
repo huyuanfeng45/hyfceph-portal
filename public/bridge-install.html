@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>HYFCeph Bridge 安装说明</title>
+    <title>HYFCeph Bridge 服务暂停说明</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
@@ -15,22 +15,22 @@
       <section class="hero">
         <div class="hero-copy">
           <div class="eyebrow">HYFCeph Bridge</div>
-          <h1>管理员 Chrome 扩展安装说明</h1>
+          <h1>浏览器插件桥接服务已暂停</h1>
           <p class="hero-text">
-            这套扩展现在作为备用通道保留。服务端 SmartCheck 会话不可用时，它会把你浏览器里当前可用的远程会话同步到 HYFCeph 门户。
+            浏览器插件桥接服务已暂停运行，后续不再作为备用同步通道。官网仅保留历史说明，当前不建议继续安装或配置此扩展。
           </p>
           <div class="hero-cards">
             <article class="feature-card accent-sky">
               <h2>给谁安装</h2>
-              <p>只给管理员自己安装。公开用户不需要扩展，不需要分享链接，也不需要上游账号。</p>
+              <p>现在不需要给任何用户安装。公开用户不需要扩展，不需要分享链接，也不需要上游账号。</p>
             </article>
             <article class="feature-card accent-amber">
               <h2>需要什么</h2>
-              <p>Chrome 浏览器、门户管理员 API Key，以及部署包里的 <code>chrome-extension/</code> 文件夹。</p>
+              <p>不再需要 Chrome 扩展、管理员 API Key 或本机桥接服务来维持备用同步。</p>
             </article>
             <article class="feature-card accent-ink">
               <h2>安装后作用</h2>
-              <p>扩展会在你打开侧位片网页时自动同步可用会话，作为服务端 SmartCheck 会话的备用方案。</p>
+              <p>扩展已停用：不会自动刷新网页、不会同步会话，也不会发送 Bark 通知。</p>
             </article>
           </div>
         </div>
@@ -40,7 +40,7 @@
             <div class="brand-mark">H</div>
             <div>
               <div class="panel-title">安装步骤</div>
-              <div class="panel-subtitle">只需管理员操作一次</div>
+              <div class="panel-subtitle">当前已暂停</div>
             </div>
           </div>
 
@@ -48,49 +48,49 @@
             <div class="dashboard-card">
               <div class="dashboard-row">
                 <span class="label">1. 解压部署包</span>
-                <strong>找到 <code>hyfceph-portal/chrome-extension/</code></strong>
+                <strong>无需继续安装</strong>
               </div>
-              <p class="api-note">如果你手里是单独的扩展包，也可以直接解压扩展压缩包，然后使用其中的 <code>chrome-extension/</code> 目录。</p>
+              <p class="api-note">浏览器插件桥接服务已暂停运行，后续不再作为备用同步通道。</p>
             </div>
 
             <div class="dashboard-card">
               <div class="dashboard-row">
-                <span class="label">2. 打开扩展管理页</span>
-                <strong><code>chrome://extensions/</code></strong>
+                <span class="label">2. 已关闭自动同步</span>
+                <strong>不再上传会话</strong>
               </div>
-              <p class="api-note">打开右上角“开发者模式”。</p>
+              <p class="api-note">服务端会拒绝插件写入的会话数据，旧的本机桥接进程也已停用。</p>
             </div>
 
             <div class="dashboard-card">
               <div class="dashboard-row">
-                <span class="label">3. 加载扩展</span>
-                <strong>选择 <code>chrome-extension/</code> 文件夹</strong>
+                <span class="label">3. 已关闭 Bark</span>
+                <strong>不再推送通知</strong>
               </div>
-              <p class="api-note">点击“加载已解压的扩展程序”，选择整个扩展目录，而不是单个文件。</p>
+              <p class="api-note">插件、门户服务端和本机 bot 的 Bark 推送均默认停用。</p>
             </div>
 
             <div class="dashboard-card">
               <div class="dashboard-row">
-                <span class="label">4. 生成管理员 API Key</span>
-                <strong>在门户控制台里生成</strong>
+                <span class="label">4. 恢复条件</span>
+                <strong>需要重新评估后再开启</strong>
               </div>
-              <p class="api-note">必须使用管理员账号自己的 API Key，不要填普通用户的 Key。</p>
+              <p class="api-note">如果未来要恢复，需要重新启用本机启动项、插件代码和服务端暂停开关。</p>
             </div>
 
             <div class="dashboard-card">
               <div class="dashboard-row">
-                <span class="label">5. 配置扩展</span>
-                <strong>填门户地址和管理员 API Key</strong>
+                <span class="label">5. 当前建议</span>
+                <strong>保留服务端路径</strong>
               </div>
-              <p class="api-note">门户地址通常就是你部署后的正式域名，例如当前站点域名。</p>
+              <p class="api-note">若仍需测量能力，请仅检查服务端 SmartCheck token，不再依赖浏览器扩展备用会话。</p>
             </div>
 
             <div class="dashboard-card">
               <div class="dashboard-row">
-                <span class="label">6. 同步一次</span>
-                <strong>打开侧位片网页，再点“立即同步”</strong>
+                <span class="label">6. 历史文件</span>
+                <strong>仅作为备份保留</strong>
               </div>
-              <p class="api-note">同步成功后，门户管理员面板里的“SmartCheck 会话状态”会显示浏览器备用会话在线。</p>
+              <p class="api-note"><code>chrome-extension/</code> 目录仍留在代码仓库里，方便以后追溯或人工恢复。</p>
             </div>
           </section>
         </aside>

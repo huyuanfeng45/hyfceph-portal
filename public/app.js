@@ -416,9 +416,15 @@ function renderMeasureResult(result) {
 }
 
 function renderOperatorSyncStatus(operatorSession, payload = {}) {
+  const browserPaused = Boolean(payload?.browserExtensionServicePaused || payload?.paused);
   if (!operatorSession) {
-    operatorSyncStatus.textContent = '未连接';
-    operatorSyncDetail.textContent = '配置服务端 SmartCheck 会话或启动浏览器扩展同步后，这里会显示可用状态。';
+    operatorSyncStatus.textContent = browserPaused ? '插件已暂停' : '未连接';
+    operatorSyncDetail.textContent = browserPaused
+      ? (payload?.message || '浏览器插件桥接服务已暂停运行，后续不再作为备用同步通道。')
+      : '配置服务端 SmartCheck 会话后，这里会显示可用状态。';
+    if (clearOperatorSyncButton) {
+      clearOperatorSyncButton.disabled = false;
+    }
     return;
   }
 
@@ -427,8 +433,11 @@ function renderOperatorSyncStatus(operatorSession, payload = {}) {
     ? (isServerSession ? '服务端在线' : '浏览器在线')
     : '已过期';
   const details = [
-    isServerSession ? '优先使用服务端 SmartCheck 会话' : '当前使用浏览器扩展备用会话',
-    payload?.browserOperatorSession?.active && isServerSession ? '浏览器扩展备用会话在线' : '',
+    isServerSession
+      ? '优先使用服务端 SmartCheck 会话'
+      : (browserPaused ? '浏览器扩展备用通道已暂停' : '当前使用浏览器扩展备用会话'),
+    browserPaused && isServerSession ? '浏览器扩展备用通道已暂停' : '',
+    payload?.browserOperatorSession?.active && isServerSession && !browserPaused ? '浏览器扩展备用会话在线' : '',
     operatorSession.userName ? `用户 ${operatorSession.userName}` : '',
     operatorSession.accountType ? `类型 ${operatorSession.accountType}` : '',
     operatorSession.syncedAt ? `同步于 ${formatDateTime(operatorSession.syncedAt)}` : '',
@@ -1469,7 +1478,7 @@ refreshOperatorSyncButton.addEventListener('click', async () => {
 
 clearOperatorSyncButton.addEventListener('click', async () => {
   clearFlash();
-  const shouldContinue = window.confirm('清除后，只会删除浏览器扩展备用会话；服务端 SmartCheck 会话不受影响。是否继续？');
+  const shouldContinue = window.confirm('清除后，只会删除历史浏览器插件会话；服务端 SmartCheck 会话不受影响。是否继续？');
   if (!shouldContinue) {
     return;
   }
@@ -1479,7 +1488,7 @@ clearOperatorSyncButton.addEventListener('click', async () => {
       body: JSON.stringify({}),
     });
     await loadOperatorSyncStatus();
-    showFlash('浏览器备用会话已清除。');
+    showFlash('浏览器插件旧会话已清除。');
   } catch (error) {
     showFlash(error.message, 'error');
   }

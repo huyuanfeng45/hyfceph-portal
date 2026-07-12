@@ -1,4 +1,6 @@
 const SYNC_INTERVAL_MS = 15000;
+const CONTENT_SERVICE_PAUSED = true;
+const CONTENT_SERVICE_PAUSED_MESSAGE = '浏览器插件桥接服务已暂停运行，后续不再作为备用同步通道。';
 const AUTO_LOGIN_CHECK_DELAY_MS = 400;
 const AUTO_LOGIN_COOLDOWN_MS = 60 * 1000;
 const AUTO_LOGIN_MAX_ATTEMPTS = 3;
@@ -659,51 +661,70 @@ function wrapHistory(methodName) {
   };
 }
 
-wrapHistory('pushState');
-wrapHistory('replaceState');
-
-window.addEventListener('hashchange', () => scheduleTick('hashchange'));
-window.addEventListener('popstate', () => scheduleTick('popstate'));
-window.addEventListener('focus', () => scheduleTick('focus'));
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) {
-    scheduleTick('visibilitychange');
-  }
-});
-
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== 'hyfceph:force-sync') {
-    return false;
-  }
-
-  void tick('popup-force-sync', true).then((result) => {
-    sendResponse({
-      ok: Boolean(result?.ok),
-      pendingLogin: Boolean(result?.pendingLogin),
-      status: result?.status || null,
-      error: result?.error || null,
-    });
-  }).catch((error) => {
+if (CONTENT_SERVICE_PAUSED) {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type !== 'hyfceph:force-sync') {
+      return false;
+    }
     sendResponse({
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      pendingLogin: false,
+      status: {
+        ok: false,
+        paused: true,
+        message: CONTENT_SERVICE_PAUSED_MESSAGE,
+      },
+      error: CONTENT_SERVICE_PAUSED_MESSAGE,
     });
+    return true;
   });
-  return true;
-});
+} else {
+  wrapHistory('pushState');
+  wrapHistory('replaceState');
 
-observer = new MutationObserver(() => {
-  scheduleTick('mutation', AUTO_LOGIN_CHECK_DELAY_MS);
-});
-
-if (document.documentElement) {
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
+  window.addEventListener('hashchange', () => scheduleTick('hashchange'));
+  window.addEventListener('popstate', () => scheduleTick('popstate'));
+  window.addEventListener('focus', () => scheduleTick('focus'));
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      scheduleTick('visibilitychange');
+    }
   });
+
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type !== 'hyfceph:force-sync') {
+      return false;
+    }
+
+    void tick('popup-force-sync', true).then((result) => {
+      sendResponse({
+        ok: Boolean(result?.ok),
+        pendingLogin: Boolean(result?.pendingLogin),
+        status: result?.status || null,
+        error: result?.error || null,
+      });
+    }).catch((error) => {
+      sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return true;
+  });
+
+  observer = new MutationObserver(() => {
+    scheduleTick('mutation', AUTO_LOGIN_CHECK_DELAY_MS);
+  });
+
+  if (document.documentElement) {
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+  }
+
+  window.setInterval(() => {
+    void tick('interval');
+  }, SYNC_INTERVAL_MS);
+  scheduleTick('boot', 800);
 }
-
-window.setInterval(() => {
-  void tick('interval');
-}, SYNC_INTERVAL_MS);
-scheduleTick('boot', 800);

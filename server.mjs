@@ -42,7 +42,12 @@ const SERVER_SMARTCHECK_SYNC_REGION_ID = String(process.env.HYFCEPH_SMARTCHECK_S
 const SERVER_SMARTCHECK_TOKEN_TTL_MINUTES = Number(process.env.HYFCEPH_SMARTCHECK_TOKEN_TTL_MINUTES || '10080');
 const ADMIN_USERNAME = process.env.HYFCEPH_ADMIN_USERNAME || 'huyuanfeng45';
 const ADMIN_PASSWORD = process.env.HYFCEPH_ADMIN_PASSWORD || '85301298';
-const BARK_DEVICE_KEY = process.env.HYFCEPH_BARK_KEY || '7ffBf7F85e3WbFyKrJTEcH';
+const BARK_PUSH_ENABLED = /^(1|true|yes|on)$/i.test(String(
+  process.env.HYFCEPH_BARK_PUSH_ENABLED
+  || process.env.HYFCEPH_BARK_ENABLED
+  || 'false',
+).trim());
+const BARK_DEVICE_KEY = process.env.HYFCEPH_BARK_KEY || '';
 const BARK_BASE_URL = (process.env.HYFCEPH_BARK_BASE_URL || 'https://api.day.app').replace(/\/+$/, '');
 const STORE_BACKEND = process.env.HYFCEPH_STORE_BACKEND || (process.env.BLOB_READ_WRITE_TOKEN ? 'blob' : 'file');
 const STORE_BLOB_PATH = process.env.HYFCEPH_STORE_BLOB_PATH || 'hyfceph/users.json';
@@ -106,6 +111,12 @@ const WEIXIN_NOTIFICATION_TIMEOUT_MS = Math.max(3000, Number(process.env.HYFCEPH
 const WEIXIN_NOTIFICATION_MAX_CHARS = Math.max(20, Number(process.env.HYFCEPH_WEIXIN_NOTIFICATION_MAX_CHARS || '1000') || 1000);
 const WEIXIN_BOT_SERVICE_PAUSED = !/^(0|false|no|off)$/i.test(String(process.env.HYFCEPH_WEIXIN_BOT_SERVICE_PAUSED || 'true').trim());
 const WEIXIN_BOT_SERVICE_PAUSED_MESSAGE = '此微信 Bot 服务受平台限制，已暂停运行，后续不再更新。';
+const BROWSER_EXTENSION_SERVICE_PAUSED = !/^(0|false|no|off)$/i.test(String(
+  process.env.HYFCEPH_BROWSER_EXTENSION_SERVICE_PAUSED
+  || process.env.HYFCEPH_BRIDGE_SERVICE_PAUSED
+  || 'true',
+).trim());
+const BROWSER_EXTENSION_SERVICE_PAUSED_MESSAGE = '浏览器插件桥接服务已暂停运行，后续不再作为备用同步通道。';
 
 let blobSdkPromise = null;
 let resvgPromise = null;
@@ -1854,6 +1865,9 @@ function buildServerSmartcheckOperatorSession() {
 }
 
 function getActiveStoredOperatorSession(store) {
+  if (BROWSER_EXTENSION_SERVICE_PAUSED) {
+    return null;
+  }
   const operatorSession = normalizeOperatorSession(store?.operatorSession);
   return isOperatorSessionActive(operatorSession) ? operatorSession : null;
 }
@@ -1900,6 +1914,7 @@ function publicMeasurementSessionStatus(store) {
   return {
     sessionMode: normalizeSmartcheckSessionMode(SMARTCHECK_SESSION_MODE),
     serverSmartcheckConfigured: Boolean(buildServerSmartcheckOperatorSession()),
+    browserExtensionServicePaused: BROWSER_EXTENSION_SERVICE_PAUSED,
     primaryOperatorSession: publicOperatorSession(primary || null),
     browserOperatorSession: publicOperatorSession(getActiveStoredOperatorSession(store)),
   };
@@ -3807,7 +3822,7 @@ async function runServerSideOverlapMeasurement({
 }
 
 async function sendBarkPush(title, body) {
-  if (!BARK_DEVICE_KEY) {
+  if (!BARK_PUSH_ENABLED || !BARK_DEVICE_KEY) {
     return;
   }
   const url = new URL(`${BARK_BASE_URL}/${encodeURIComponent(BARK_DEVICE_KEY)}/${encodeURIComponent(title)}/${encodeURIComponent(body)}`);
@@ -4055,6 +4070,14 @@ function sendWeixinBotServicePaused(response) {
     ok: false,
     paused: true,
     error: WEIXIN_BOT_SERVICE_PAUSED_MESSAGE,
+  });
+}
+
+function sendBrowserExtensionServicePaused(response) {
+  return sendJson(response, 503, {
+    ok: false,
+    paused: true,
+    error: BROWSER_EXTENSION_SERVICE_PAUSED_MESSAGE,
   });
 }
 
@@ -4629,6 +4652,9 @@ async function handleBridgeCurrentCaseGet(request, response) {
   if (!user || !isApiKeyActive(user)) {
     return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
   }
+  if (BROWSER_EXTENSION_SERVICE_PAUSED) {
+    return sendBrowserExtensionServicePaused(response);
+  }
 
   if (!isBridgeStateActive(user.currentCaseBridge)) {
     if (user.currentCaseBridge) {
@@ -4659,6 +4685,9 @@ async function handleBridgeCurrentCasePost(request, response) {
   const user = findUserByApiKey(store, apiKey);
   if (!user || !isApiKeyActive(user)) {
     return sendJson(response, 401, { error: 'API Key 无效或已过期。' });
+  }
+  if (BROWSER_EXTENSION_SERVICE_PAUSED) {
+    return sendBrowserExtensionServicePaused(response);
   }
 
   const currentCase = normalizeBridgeState({
@@ -4729,10 +4758,13 @@ async function handleAdminOperatorSessionGet(request, response) {
 
   return sendJson(response, 200, {
     ok: true,
+    paused: BROWSER_EXTENSION_SERVICE_PAUSED,
+    message: BROWSER_EXTENSION_SERVICE_PAUSED ? BROWSER_EXTENSION_SERVICE_PAUSED_MESSAGE : null,
     operatorSession: measurementStatus.primaryOperatorSession,
     browserOperatorSession: measurementStatus.browserOperatorSession,
     sessionMode: measurementStatus.sessionMode,
     serverSmartcheckConfigured: measurementStatus.serverSmartcheckConfigured,
+    browserExtensionServicePaused: measurementStatus.browserExtensionServicePaused,
   });
 }
 
@@ -4740,6 +4772,9 @@ async function handleAdminOperatorSessionPost(request, response) {
   const { store, user } = await resolveAdminOperatorAccess(request);
   if (!user) {
     return sendJson(response, 401, { error: '管理员认证已失效。' });
+  }
+  if (BROWSER_EXTENSION_SERVICE_PAUSED) {
+    return sendBrowserExtensionServicePaused(response);
   }
 
   const payload = await readRequestJson(request);
@@ -5613,7 +5648,8 @@ export async function handleNodeRequest(request, response) {
       return sendJson(response, 200, {
         ok: true,
         service: 'HYFCeph Portal',
-        barkConfigured: Boolean(BARK_DEVICE_KEY),
+        barkConfigured: BARK_PUSH_ENABLED && Boolean(BARK_DEVICE_KEY),
+        barkPushEnabled: BARK_PUSH_ENABLED,
         storeBackend: STORE_BACKEND,
         feishuStoreConfigured: isFeishuBitableConfigured(),
         operatorSessionActive: Boolean(measurementStatus.primaryOperatorSession?.active),
@@ -5621,6 +5657,7 @@ export async function handleNodeRequest(request, response) {
         operatorSessionMode: measurementStatus.sessionMode,
         serverSmartcheckConfigured: measurementStatus.serverSmartcheckConfigured,
         browserOperatorSessionActive: Boolean(measurementStatus.browserOperatorSession?.active),
+        browserExtensionServicePaused: measurementStatus.browserExtensionServicePaused,
         pdfOssConfigured: isPdfOssConfigured(),
         pdfOssCustomDomain: PDF_OSS_CUSTOM_DOMAIN ? `https://${PDF_OSS_CUSTOM_DOMAIN}` : null,
         weixinBotConfigured: Boolean(store.weixinBot?.token && store.weixinBot?.accountId),
