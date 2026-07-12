@@ -104,6 +104,8 @@ const WEIXIN_BOT_SECRET = process.env.HYFCEPH_WEIXIN_BOT_SECRET
   || createHmac('sha256', SESSION_SECRET).update('hyfceph-weixin-bot').digest('hex');
 const WEIXIN_NOTIFICATION_TIMEOUT_MS = Math.max(3000, Number(process.env.HYFCEPH_WEIXIN_NOTIFICATION_TIMEOUT_MS || '15000') || 15000);
 const WEIXIN_NOTIFICATION_MAX_CHARS = Math.max(20, Number(process.env.HYFCEPH_WEIXIN_NOTIFICATION_MAX_CHARS || '1000') || 1000);
+const WEIXIN_BOT_SERVICE_PAUSED = !/^(0|false|no|off)$/i.test(String(process.env.HYFCEPH_WEIXIN_BOT_SERVICE_PAUSED || 'true').trim());
+const WEIXIN_BOT_SERVICE_PAUSED_MESSAGE = '此微信 Bot 服务受平台限制，已暂停运行，后续不再更新。';
 
 let blobSdkPromise = null;
 let resvgPromise = null;
@@ -4048,6 +4050,14 @@ async function handleCurrentUser(request, response) {
   return sendJson(response, 200, { user: publicUser(user, store) });
 }
 
+function sendWeixinBotServicePaused(response) {
+  return sendJson(response, 503, {
+    ok: false,
+    paused: true,
+    error: WEIXIN_BOT_SERVICE_PAUSED_MESSAGE,
+  });
+}
+
 async function handleWeixinBindingReadinessGet(request, response) {
   const currentUser = await getSessionUser(request);
   if (!currentUser) {
@@ -4068,6 +4078,10 @@ async function handleWeixinBindingReadinessGet(request, response) {
 }
 
 async function handleWeixinBindingStart(request, response) {
+  if (WEIXIN_BOT_SERVICE_PAUSED) {
+    return sendWeixinBotServicePaused(response);
+  }
+
   const currentUser = await getSessionUser(request);
   if (!currentUser) {
     return sendJson(response, 401, { error: '请先登录。' });
@@ -4311,6 +4325,9 @@ async function handleWeixinBotConfigGet(request, response) {
   if (!await requireWeixinBotAccess(request, response)) {
     return;
   }
+  if (WEIXIN_BOT_SERVICE_PAUSED) {
+    return sendWeixinBotServicePaused(response);
+  }
 
   const store = await readStore();
   return sendJson(response, 200, {
@@ -4322,6 +4339,9 @@ async function handleWeixinBotConfigGet(request, response) {
 async function handleWeixinBotConfigsGet(request, response) {
   if (!await requireWeixinBotAccess(request, response)) {
     return;
+  }
+  if (WEIXIN_BOT_SERVICE_PAUSED) {
+    return sendWeixinBotServicePaused(response);
   }
 
   const store = await readStore();
@@ -4350,6 +4370,9 @@ async function handleWeixinBotConfigsGet(request, response) {
 async function handleWeixinBotOperatorSessionGet(request, response) {
   if (!await requireWeixinBotAccess(request, response)) {
     return;
+  }
+  if (WEIXIN_BOT_SERVICE_PAUSED) {
+    return sendWeixinBotServicePaused(response);
   }
 
   const store = await readStore();
@@ -4394,6 +4417,9 @@ async function handleWeixinBotOperatorSessionGet(request, response) {
 async function handleWeixinBotResolveUser(request, response) {
   if (!await requireWeixinBotAccess(request, response)) {
     return;
+  }
+  if (WEIXIN_BOT_SERVICE_PAUSED) {
+    return sendWeixinBotServicePaused(response);
   }
 
   const payload = await readRequestJson(request);
@@ -5428,6 +5454,9 @@ async function handleAdminUsers(request, response) {
 async function handleAdminWeixinNotification(request, response) {
   const adminUser = await requireAdmin(request, response);
   if (!adminUser) return;
+  if (WEIXIN_BOT_SERVICE_PAUSED) {
+    return sendWeixinBotServicePaused(response);
+  }
 
   const payload = await readRequestJson(request);
   const message = String(payload.message || '').trim();

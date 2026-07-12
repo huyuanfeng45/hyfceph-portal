@@ -9,6 +9,9 @@ const state = {
   dashboardView: 'weixin',
 };
 
+const WEIXIN_BOT_SERVICE_PAUSED = true;
+const WEIXIN_BOT_SERVICE_NOTICE = '此微信 Bot 服务受平台限制，已暂停运行，后续不再更新。';
+
 const flash = document.querySelector('#flash');
 const tabs = Array.from(document.querySelectorAll('.tab'));
 const panels = Array.from(document.querySelectorAll('.tab-panel'));
@@ -213,6 +216,30 @@ function renderWeixinBinding() {
   const binding = state.user?.weixinBinding || null;
   const session = state.weixinBindingSession;
   const readiness = binding?.readiness || null;
+
+  if (WEIXIN_BOT_SERVICE_PAUSED) {
+    weixinBindingStatus.textContent = '服务已暂停';
+    weixinBindingDetail.textContent = binding
+      ? [
+          binding.displayUserId ? `历史绑定微信用户 ${binding.displayUserId}` : '当前账号存在历史微信绑定记录',
+          binding.boundAt ? `绑定于 ${formatDateTime(binding.boundAt)}` : '',
+          WEIXIN_BOT_SERVICE_NOTICE,
+        ].filter(Boolean).join('，')
+      : `${WEIXIN_BOT_SERVICE_NOTICE} 不再建议生成新的绑定二维码。`;
+    weixinBindingDeleteButton.disabled = !binding;
+    weixinBindingStartButton.disabled = true;
+    weixinBindingStartButton.textContent = '服务已暂停';
+    weixinBindingReadinessBadge.classList.add('hidden');
+    weixinBindingReadinessBadge.classList.remove('pending', 'ready');
+    weixinBindingReadinessBadge.textContent = '';
+    weixinBindingReadyHint.textContent = '微信侧位片自动返送、扫码绑定和群发通知能力已停止维护。';
+    weixinBindingReadyHint.classList.remove('hidden');
+    weixinBindingQrWrap.classList.add('hidden');
+    weixinBindingQrImage.removeAttribute('src');
+    weixinBindingQrCaption.textContent = '二维码绑定入口已停止维护。';
+    weixinBindingSessionCode.textContent = '';
+    return;
+  }
 
   if (binding) {
     weixinBindingStatus.textContent = readiness?.code === 'ready'
@@ -486,6 +513,11 @@ function renderAdminNotificationResult(result) {
 
 async function sendAdminWeixinNotification(payload, triggerButton = null) {
   clearFlash();
+  if (WEIXIN_BOT_SERVICE_PAUSED) {
+    showFlash(WEIXIN_BOT_SERVICE_NOTICE, 'error');
+    if (triggerButton) triggerButton.disabled = true;
+    return null;
+  }
   const button = triggerButton;
   if (button) button.disabled = true;
   try {
@@ -500,7 +532,7 @@ async function sendAdminWeixinNotification(payload, triggerButton = null) {
     showFlash(error.message, 'error');
     throw error;
   } finally {
-    if (button) button.disabled = false;
+    if (button) button.disabled = WEIXIN_BOT_SERVICE_PAUSED;
   }
 }
 
@@ -1287,14 +1319,18 @@ copySkillLinkButton?.addEventListener('click', async () => {
 
   try {
     await navigator.clipboard.writeText(value);
-    showFlash('Skill 直链已复制。把它粘贴到 OpenClaw 对话框中发送即可安装。');
+    showFlash('停更说明已复制。');
   } catch {
-    showFlash('复制失败，请手动复制直链。', 'error');
+    showFlash('复制失败，请手动复制停更说明。', 'error');
   }
 });
 
 weixinBindingStartButton?.addEventListener('click', async () => {
   clearFlash();
+  if (WEIXIN_BOT_SERVICE_PAUSED) {
+    showFlash(WEIXIN_BOT_SERVICE_NOTICE, 'error');
+    return;
+  }
   try {
     weixinBindingStartButton.disabled = true;
     const payload = await requestJson('/api/weixin/binding/start', {
@@ -1360,6 +1396,11 @@ refreshAdminButton.addEventListener('click', async () => {
 });
 
 adminBroadcastButton?.addEventListener('click', async () => {
+  if (WEIXIN_BOT_SERVICE_PAUSED) {
+    showFlash(WEIXIN_BOT_SERVICE_NOTICE, 'error');
+    adminBroadcastButton.disabled = true;
+    return;
+  }
   const message = adminBroadcastMessage?.value?.trim() || '';
   if (!message) {
     showFlash('请先填写群发通知内容。', 'error');

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>HYFCeph Auth Center</title>
+    <title>HYFCeph Auth Center - 微信 Bot 服务暂停</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700;800&display=swap" rel="stylesheet" />
@@ -37,17 +37,17 @@
           <h1 class="auth-title">注册、登录与 API Key 控制台</h1>
           <p class="auth-text">
             认证中心负责用户注册、登录、API Key 生成，以及管理员会话与用户管理。
-            首页负责展示产品说明和技能安装，实际使用前请先在这里完成认证。
+            此微信 Bot 服务受平台限制，已暂停运行，后续不再更新；此页面主要保留账号和历史配置查询。
           </p>
 
           <div class="auth-highlights">
             <article class="auth-highlight">
               <strong>普通用户</strong>
-              <span>生成个人 API Key，然后回到 OpenClaw 触发 HYFCeph 技能。</span>
+              <span>可登录查看账号和历史 API Key 信息；微信 Bot 测量入口已暂停。</span>
             </article>
             <article class="auth-highlight">
               <strong>管理员</strong>
-              <span>在这里维护 SmartCheck 会话状态、用户列表、Key 有效期和删除操作。</span>
+              <span>可查看历史用户和配置；微信 Bot 接管、返送和群发通知不再更新。</span>
             </article>
             <article class="auth-highlight">
               <strong>统一风格</strong>
@@ -61,14 +61,14 @@
             <div class="brand-mark panel-mark">H</div>
             <div>
               <div class="panel-title">HYFCeph</div>
-              <div class="panel-subtitle">注册、登录与 API Key 控制台</div>
+              <div class="panel-subtitle">账号和历史配置查询入口</div>
             </div>
           </div>
 
           <div class="panel-banner">
             <div class="panel-banner-title">统一入口</div>
             <div class="panel-banner-text">
-              普通用户注册后即可生成个人 API Key。管理员登录后会看到完整会话与用户管理视图。
+              此微信 Bot 服务受平台限制，已暂停运行，后续不再更新。认证中心仅保留账号、API Key 和历史配置查询。
             </div>
           </div>
 
@@ -135,7 +135,7 @@
                       <span id="user-phone">-</span>
                     </div>
                   </div>
-                  <div class="dashboard-topbar-note">登录后通过上方菜单切换功能区域，微信绑定二维码会优先显示在中央。</div>
+                  <div class="dashboard-topbar-note">微信 Bot 服务已暂停，绑定和返送能力不再更新；此处保留账号和历史配置查询。</div>
                 </div>
 
                 <div class="dashboard-topbar-actions">
@@ -147,8 +147,8 @@
               <nav class="dashboard-menu dashboard-menu-top" aria-label="控制台菜单">
                 <div class="dashboard-menu-scroll">
                   <button class="dashboard-menu-item active" type="button" data-dashboard-view="weixin">
-                    <span>💬 微信绑定</span>
-                    <small>二维码与扫码状态</small>
+                    <span>💬 微信 Bot</span>
+                    <small>服务暂停公告</small>
                   </button>
                   <button class="dashboard-menu-item" type="button" data-dashboard-view="api">
                     <span>🔑 API Key</span>
@@ -183,8 +183,8 @@
                     <div class="dashboard-view-header dashboard-view-header-centered">
                       <div>
                         <div class="section-kicker">WeChat</div>
-                        <div class="api-card-title">💬 绑定微信 Clawbot</div>
-                        <div class="api-tip">扫码后，就可以在微信里直接把侧位片发给 HYFCeph。我们把二维码放在中间，方便直接操作。</div>
+                        <div class="api-card-title">💬 微信 Bot 服务已暂停</div>
+                        <div class="api-tip">此微信 Bot 服务受平台限制，已暂停运行，后续不再更新。扫码绑定、微信内发送侧位片和结果返送能力不再维护。</div>
                       </div>
                     </div>
 
@@ -197,21 +197,21 @@
                     </div>
 
                     <p id="weixin-binding-detail" class="api-note weixin-binding-detail-centered">
-                      先在这里生成二维码，再用微信扫描完成绑定。绑定成功后，这个微信账号就能直接使用 HYFCeph。
+                      此微信 Bot 服务受平台限制，已暂停运行，后续不再更新。历史绑定信息仅用于查询，不再建议生成新的绑定二维码。
                     </p>
                     <p id="weixin-binding-ready-hint" class="api-note weixin-binding-ready-hint hidden"></p>
 
                     <section id="weixin-binding-qr-wrap" class="weixin-binding-qr hidden">
                       <img id="weixin-binding-qr-image" class="weixin-binding-qr-image" alt="微信 Clawbot 绑定二维码" />
                       <div class="weixin-binding-qr-meta">
-                        <strong>请使用微信扫码完成绑定</strong>
-                        <span id="weixin-binding-qr-caption">二维码生成后，会在这里自动轮询绑定状态。</span>
+                        <strong>微信 Bot 服务已暂停</strong>
+                        <span id="weixin-binding-qr-caption">二维码绑定入口已停止维护。</span>
                         <code id="weixin-binding-session-code"></code>
                       </div>
                     </section>
 
                     <div class="api-actions weixin-binding-actions">
-                      <button id="weixin-binding-start-button" class="primary-button" type="button">生成绑定二维码</button>
+                      <button id="weixin-binding-start-button" class="primary-button" type="button" disabled>服务已暂停</button>
                       <button id="weixin-binding-refresh-button" class="ghost-button" type="button">刷新状态</button>
                       <button id="weixin-binding-delete-button" class="ghost-button" type="button">解绑微信</button>
                     </div>
@@ -400,14 +400,14 @@
                       <div>
                         <div class="section-kicker">Notice</div>
                         <div class="api-card-title admin-subtitle">群发通知</div>
-                        <div class="api-tip">群发会发送给所有已注册用户，包括管理员自己。未绑定微信或配置不可用的用户会显示在失败列表。</div>
+                        <div class="api-tip">微信 Bot 服务已暂停，群发通知不再作为可用功能。历史入口仅保留用于说明。</div>
                       </div>
                       <label class="admin-notification-field">
                         <span>通知内容</span>
                         <textarea id="admin-broadcast-message" rows="3" placeholder="请输入要发送给所有人的通知内容"></textarea>
                       </label>
                       <div class="admin-notification-actions">
-                        <button id="admin-broadcast-button" class="primary-button" type="button">群发给所有人</button>
+                        <button id="admin-broadcast-button" class="primary-button" type="button" disabled>微信 Bot 已暂停</button>
                       </div>
                       <div id="admin-notification-result" class="admin-notification-result hidden"></div>
                     </div>

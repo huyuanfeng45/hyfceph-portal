@@ -288,8 +288,36 @@ body.dashboard-mode {
 .secondary-button:disabled,
 .ghost-button:disabled {
   opacity: 0.65;
-  cursor: wait;
+  cursor: not-allowed;
   transform: none;
+}
+
+.service-notice {
+  position: relative;
+  z-index: 1;
+  width: min(820px, 100%);
+  margin: 24px auto 0;
+  padding: 16px 18px;
+  border-radius: 16px;
+  border: 1px solid rgba(187, 63, 46, 0.22);
+  background: linear-gradient(180deg, rgba(187, 63, 46, 0.08), rgba(187, 63, 46, 0.035));
+  color: #7f2b20;
+  box-shadow: 0 16px 42px rgba(187, 63, 46, 0.08);
+}
+
+.service-notice strong,
+.service-notice span {
+  display: block;
+}
+
+.service-notice strong {
+  font-size: 14px;
+  letter-spacing: 0.08em;
+}
+
+.service-notice span {
+  margin-top: 6px;
+  line-height: 1.7;
 }
 
 .hero-actions,
